@@ -2,8 +2,8 @@
   (:require [kotoba.compiler.frontend :as frontend]
             [kotoba.compiler.ir :as ir]
             [kotoba.compiler.backend.wasm :as wasm]
-            [kotoba.compiler.backend.native :as native]
             [kotoba.compiler.backend.x86-64 :as x86-64]
+            [kotoba.compiler.backend.aarch64 :as aarch64]
             [kotoba.compiler.artifact :as artifact]
             [kotoba.compiler.verifier :as verifier]))
 
@@ -17,20 +17,20 @@
         value (:oracle-value kir)]
     (if (= target :wasm32-kotoba-v1)
       {:format :wasm/v1 :target target :hir hir :kir kir :bytes (wasm/emit kir)}
-      (let [runtime? (= target :x86_64-kotoba-v1)
-            emitted (when runtime? (x86-64/emit-program kir))
-            code (if runtime? (:code emitted) (native/emit-aarch64 value))
+      (let [emitted ((case target
+                       :x86_64-kotoba-v1 x86-64/emit-program
+                       :aarch64-kotoba-v1 aarch64/emit-program) kir)
+            code (:code emitted)
             program (select-keys kir [:format :entry :signature :effects :functions])
             artifact (artifact/seal
-                      (cond-> {:format :kotoba.kexe/v1 :target target :value value
-                               :kir-sha256 (artifact/sha256 program)
-                               :lowering (if runtime? :runtime-sysv-v1
-                                            :closed-program-specialization)
-                               :effects #{}
-                               :limits {:memory-bytes 0
-                                        :fuel (if runtime? (count code) 1)
-                                        :stack-bytes (if runtime? 4096 0)}
-                               :code (mapv #(bit-and (int %) 0xff) code)}
-                        runtime? (assoc :program program :exports (:exports emitted))))]
+                      {:format :kotoba.kexe/v1 :target target :value value
+                       :kir-sha256 (artifact/sha256 program)
+                       :lowering (case target
+                                   :x86_64-kotoba-v1 :runtime-sysv-v1
+                                   :aarch64-kotoba-v1 :runtime-aapcs64-v1)
+                       :effects #{}
+                       :limits {:memory-bytes 0 :fuel (count code) :stack-bytes 4096}
+                       :code (mapv #(bit-and (int %) 0xff) code)
+                       :program program :exports (:exports emitted)})]
         (verifier/verify-artifact! artifact)
         {:format :kexe/v1 :target target :hir hir :kir kir :artifact artifact}))))

@@ -29,7 +29,7 @@ bin/kotoba -M verify app.kexe
 scripts/conformance.sh
 ```
 
-On x86-64 Linux, `scripts/conformance.sh` additionally compiles the small
+On x86-64 Linux and AArch64 macOS/Linux, `scripts/conformance.sh` additionally compiles the small
 auditable loader in `tools/kexe_loader.c`, maps verified code RW, transitions it
 to RX with `mprotect`, and executes `score(-7, 2)`. No RWX mapping is created.
 

@@ -29,7 +29,8 @@
       (is (re-matches #"[0-9a-f]{64}" (:sha256 artifact)))
       (is (re-matches #"[0-9a-f]{64}" (:kir-sha256 artifact)))
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"integrity mismatch"
-                            (verifier/verify-artifact! (update artifact :code assoc 0 0)))))))
+                            (verifier/verify-artifact!
+                             (update-in artifact [:code 0] bit-xor 1)))))))
 
 (deftest structured-program-conforms-across-backends
   (let [results (mapv #(compiler/compile-source structured-source %) compiler/targets)]

@@ -8,5 +8,14 @@
         total (+ m bonus)]
     (abs total)))
 
+(defn calc [x y]
+  (+ (quot x y) (- x y)))
+
+(defn relations [x y]
+  (+ (if (= x y) 1 0)
+     (if (> x y) 2 0)
+     (if (<= x y) 4 0)
+     (if (>= x y) 8 0)))
+
 (defn main []
   (score -20 -2))

@@ -43,3 +43,9 @@ The verifier re-lowers the sealed KIR and requires byte-for-byte code and export
 table equality. The Linux conformance loader enforces RW -> RX transition and
 executes runtime arguments. This seal is an integrity binding, not publisher
 authentication; signed package admission remains a separate required layer.
+
+AArch64 now uses the equivalent `:runtime-aapcs64-v1` contract. Parameters are
+captured from x0..x6 into bounded caller-saved temporaries, all user calls are
+purely inlined, stack temporaries preserve 16-byte alignment, and every branch
+target is emitted on a four-byte instruction boundary. The same sealed-export
+and re-lowering checks apply to both native targets.
