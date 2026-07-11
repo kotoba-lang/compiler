@@ -1,6 +1,7 @@
 (ns kotoba.compiler.test-runner
   (:require [clojure.test :as t]
             [kotoba.compiler.atomic-output-test]
+            [kotoba.compiler.cli-test]
             [kotoba.compiler.core-test]
             [kotoba.compiler.bounded-edn-test]
             [kotoba.compiler.frontend-fuzz-test]
@@ -15,6 +16,7 @@
 
 (defn -main [& _]
   (let [{:keys [fail error]} (t/run-tests 'kotoba.compiler.atomic-output-test
+                                          'kotoba.compiler.cli-test
                                           'kotoba.compiler.core-test
                                           'kotoba.compiler.bounded-edn-test
                                           'kotoba.compiler.frontend-fuzz-test

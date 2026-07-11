@@ -8,19 +8,32 @@ mkdir -p "$TMP"
 
 printf '%s\n' '{} {}' >"$TMP/trailing-policy.edn"
 printf '%s\n' '(defn main [] 0)' >"$TMP/bounded-source.kotoba"
-if "$ROOT/bin/kotoba" -M check "$TMP/bounded-source.kotoba" \
-     --policy "$TMP/trailing-policy.edn" >"$TMP/trailing.out" 2>"$TMP/trailing.err"; then
+TRAILING_STATUS=0
+"$ROOT/bin/kotoba" -M check "$TMP/bounded-source.kotoba" \
+  --policy "$TMP/trailing-policy.edn" >"$TMP/trailing.out" 2>"$TMP/trailing.err" \
+  || TRAILING_STATUS=$?
+if [ "$TRAILING_STATUS" -eq 0 ]; then
   echo "trailing EDN control-plane form was accepted" >&2
   exit 1
 fi
+[ "$TRAILING_STATUS" -eq 65 ] || { echo "decode rejection exit expected 65, got $TRAILING_STATUS" >&2; exit 1; }
 grep -q 'EDN input contains trailing forms' "$TMP/trailing.err"
+grep -q ':format :kotoba.cli-error/v1' "$TMP/trailing.err"
+[ "$(wc -l <"$TMP/trailing.err" | tr -d ' ')" = 1 ]
+if grep -Eq 'Execution error|Full report|kotoba\.compiler.*\.clj' "$TMP/trailing.err"; then
+  echo "CLI rejection leaked a host stack trace" >&2
+  exit 1
+fi
 
 dd if=/dev/zero of="$TMP/oversized-source.kotoba" bs=1048577 count=1 2>/dev/null
-if "$ROOT/bin/kotoba" -M check "$TMP/oversized-source.kotoba" \
-     >"$TMP/oversized.out" 2>"$TMP/oversized.err"; then
+OVERSIZED_STATUS=0
+"$ROOT/bin/kotoba" -M check "$TMP/oversized-source.kotoba" \
+  >"$TMP/oversized.out" 2>"$TMP/oversized.err" || OVERSIZED_STATUS=$?
+if [ "$OVERSIZED_STATUS" -eq 0 ]; then
   echo "oversized source file was accepted" >&2
   exit 1
 fi
+[ "$OVERSIZED_STATUS" -eq 65 ] || { echo "source rejection exit expected 65, got $OVERSIZED_STATUS" >&2; exit 1; }
 grep -q 'input exceeds byte limit' "$TMP/oversized.err"
 
 "$ROOT/bin/kotoba" -M check "$ROOT/examples/capability.kotoba" \

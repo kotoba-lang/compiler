@@ -60,6 +60,12 @@ publish partial artifacts and destination symlinks are not followed. Private
 key temporaries and final files carry POSIX mode `0600`; key generation fails
 closed where owner-only permissions cannot be established.
 
+The public command boundary normalizes expected failures into one
+`kotoba.cli-error/v1` EDN line with a stable phase-derived exit code. Only an
+allowlist of safe diagnostic fields crosses that boundary; source forms, local
+paths, causes, stack traces, and unexpected host exception messages are
+redacted. Unexpected throwables become a generic exit-70 internal failure.
+
 ## Current maturity
 
 The compiler is `experimental alpha`, not production-safe. KIR v3 retains

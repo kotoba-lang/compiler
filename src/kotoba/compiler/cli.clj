@@ -15,7 +15,33 @@
 
 (defn- option [args flag] (second (drop-while #(not= flag %) args)))
 
-(defn -main [& args]
+(def ^:dynamic *exit* (fn [status] (System/exit status)))
+
+(def ^:private detail-keys
+  #{:phase :target :artifact-target :host-target :entry :arity :limit :status
+    :reason :runtime-sha256 :not-before :expires :now})
+
+(defn error-report [error]
+  (let [data (ex-data error)
+        phase (or (:phase data) :internal)
+        details (select-keys data detail-keys)]
+    (cond-> {:format :kotoba.cli-error/v1
+             :ok false
+             :error phase
+             :message (if (= phase :internal) "internal compiler error" (ex-message error))}
+      (seq details) (assoc :details details))))
+
+(defn exit-code [phase]
+  (case phase
+    :usage 64
+    (:decode :read :subset :admission :ir :verify) 65
+    (:signature :trust :runtime-identity) 77
+    :output 74
+    :execute 69
+    :receipt 76
+    70))
+
+(defn- dispatch! [& args]
   (case (first args)
     "keygen"
     (let [output (or (option args "--output") "kotoba-signing-key.edn")
@@ -95,7 +121,7 @@
                         :status (:status evidence) :result evidence
                         :result-output result-path :output receipt-path
                         :receipt-sha256 (:receipt-sha256 value)}))
-      (when-not (= :ok (:status evidence)) (System/exit 120)))
+      (when-not (= :ok (:status evidence)) (*exit* 120)))
     "receipt"
     (let [envelope (bounded-edn/read-file (option args "--signed"))
           trust (bounded-edn/read-file (option args "--trust"))
@@ -164,9 +190,21 @@
           _ (verifier/verify-artifact! artifact)
           export (get (:exports artifact) symbol)]
       (when-not export
-        (throw (ex-info "unknown native export" {:symbol symbol :available (keys (:exports artifact))})))
+        (throw (ex-info "unknown native export" {:phase :verify :entry symbol})))
       (atomic-output/write-bytes!
        output (byte-array (map unchecked-byte (:code artifact))))
       (println (pr-str (merge {:ok true :output output :symbol symbol} export))))
-    (do (binding [*out* *err*] (println "usage: kotoba -M check <file> [--policy policy.edn] | kotoba -M compile <file> --target wasm32|x86_64|aarch64 --output <file> | kotoba -M verify <file>"))
-        (System/exit 2))))
+    (throw (ex-info "unknown or missing kotoba command" {:phase :usage}))))
+
+(defn -main [& args]
+  (try
+    (apply dispatch! args)
+    (catch clojure.lang.ExceptionInfo error
+      (let [report (error-report error)]
+        (binding [*out* *err*] (println (pr-str report)))
+        (*exit* (exit-code (:error report)))))
+    (catch Throwable _
+      (binding [*out* *err*]
+        (println (pr-str {:format :kotoba.cli-error/v1 :ok false
+                          :error :internal :message "internal compiler error"})))
+      (*exit* 70))))

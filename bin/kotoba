@@ -19,13 +19,15 @@ case "${1-}" in
       'usage: kotoba -M compile <file> --target wasm32|x86_64|aarch64 [--policy policy.edn] --output <file>' \
       '       kotoba -M check <file> [--policy policy.edn]' \
       '       kotoba -M keygen --output key.edn' \
-      '       kotoba -M trust-key key.edn --output trust.edn' \
+      '       kotoba -M public-key key.edn --output verification-key.edn' \
+      '       kotoba -M trust-key verification-key.edn --output trust.edn' \
+      '       kotoba -M trust-runtime result.edn --trust trust.edn --output pinned-trust.edn' \
       '       kotoba -M sign program.kexe --key key.edn --expires <epoch> --output signed.kexe' \
       '       kotoba -M verify-signed signed.kexe --trust trust.edn [--now <epoch>]' \
       '       kotoba -M run signed.kexe --trust trust.edn --policy policy.edn --input input.edn --executor-key key.edn --output receipt.edn' \
       '       kotoba -M receipt --signed signed.kexe --trust trust.edn --executor-key key.edn --policy policy.edn --input in.edn --result out.edn ...' \
       '       kotoba -M verify-receipt receipt.edn --signed signed.kexe --trust trust.edn --policy policy.edn --input in.edn --result out.edn --now <epoch>' \
-      '       kotoba -M verify-chain receipts.edn' \
+      '       kotoba -M verify-chain receipts.edn --trust trust.edn' \
       '       kotoba -M verify <file>'
     exit 0
     ;;

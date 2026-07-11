@@ -134,6 +134,21 @@ After putting `bin/kotoba` on `PATH`, the public command is simply
 not part of the compiler CLI contract and can be replaced by the self-hosted
 Kotoba driver without changing user commands.
 
+Failures emit exactly one EDN value on stderr and no host stack trace:
+
+```clojure
+{:format :kotoba.cli-error/v1
+ :ok false
+ :error :decode
+ :message "EDN input contains trailing forms"
+ :details {:phase :decode}}
+```
+
+Exit codes are stable by boundary: `64` usage, `65` rejected input/compiler or
+verifier data, `69` execution setup, `74` output I/O, `76` receipt, `77`
+signature/trust/runtime identity, `70` redacted internal failure, and `120` for
+a measured guest trap.
+
 `kotoba -M run` is the admitted native execution path. It verifies the signed
 KEXE envelope and current trust/revocation state, checks local capability
 policy, requires host ISA and entry arity to match, then invokes the supervised

@@ -36,6 +36,9 @@ Security invariants:
 13. Signing-key admission proves the encoded private/public Ed25519 pair is
     consistent, while trust provisioning consumes a validated public-only key
     format and never requires distributing private material.
+14. Public CLI failures expose one bounded machine-readable envelope, not JVM
+    stack traces, host paths, rejected source forms, or unexpected exception
+    messages; stable exit classes support fail-closed agent automation.
 
 Arithmetic is specified independently of the JVM compiler host: i64
 add/subtract/multiply wrap modulo 2^64, while invalid signed division traps. A
