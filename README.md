@@ -55,7 +55,9 @@ full function-call graph, including cycles and lexical bindings. Admission is
 deny-by-default and covers every exported function, returns a least-privilege
 policy, and reports unused grants. Wasm lowers admitted calls to the sole
 `kotoba:cap/call(i64,i64)->i64` import; the host rechecks policy on every call.
-Native effectful emission remains fail-closed until its context-table ABI lands.
+Native targets carry a sealed context-v1 layout. Generated code checks its
+256-bit allow bitmap before calling the single fixed callback slot; the callback
+checks the same bitmap again. x86-64 keeps the context in r9 and AArch64 in x7.
 
 ```bash
 kotoba -M check examples/capability.kotoba \

@@ -38,9 +38,12 @@
     (is (= #{[:cap/call 7]} (get-in wasm [:admission :required])))
     (is (= [0 97 115 109] (mapv #(bit-and (int %) 0xff) (take 4 (:bytes wasm))))))
   (doseq [target [:x86_64-kotoba-v1 :aarch64-kotoba-v1]]
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"native capability trampoline"
-                          (compiler/compile-source effect-source target
-                                                   {:allow #{[:cap/call 7]}})))))
+    (let [artifact (:artifact (compiler/compile-source effect-source target
+                                                       {:allow #{[:cap/call 7]}}))]
+      (is (= #{[:cap/call 7]} (:effects artifact)))
+      (is (= {:version 1 :fuel-offset 8 :allow-bitmap-offset 16
+              :allow-bitmap-bytes 32 :cap-call-offset 48}
+             (:context-abi artifact))))))
 
 (deftest mutual-call-effects-reach-fixpoint
   (let [source "(defn left [x] (if (= x 0) (cap-call 3 x) (right (- x 1))))

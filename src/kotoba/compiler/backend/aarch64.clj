@@ -25,9 +25,9 @@
           (insn 0xd4200000) (insn 0x9ac10c00)))
 
 (def ^:private fuel-charge
-  ;; ldr x16,[x7]; cbnz x16,+8; brk; sub x16,#1; str x16,[x7]
-  (concat (insn 0xf94000f0) (insn 0xb5000050) (insn 0xd4200000)
-          (insn 0xd1000610) (insn 0xf90000f0)))
+  ;; context v1: fuel is qword [x7,#8].
+  (concat (insn 0xf94004f0) (insn 0xb5000050) (insn 0xd4200000)
+          (insn 0xd1000610) (insn 0xf90004f0)))
 
 (defn- normalize-expr [form env]
   (cond
@@ -73,6 +73,29 @@
         restored (mapcat #(restore-to %) (reverse (range (count args))))]
     (vec (concat saved restored [{:call op}]))))
 
+(defn- ldr-context [reg offset]
+  (insn (bit-or 0xf9400000 (bit-shift-left (quot offset 8) 10)
+                (bit-shift-left 7 5) reg)))
+
+(defn- tbnz [reg bit-index byte-offset]
+  (insn (bit-or 0x37000000
+                (bit-shift-left (bit-and bit-index 0x20) 26)
+                (bit-shift-left (bit-and bit-index 0x1f) 19)
+                (bit-shift-left (bit-and (quot byte-offset 4) 0x3fff) 5)
+                reg)))
+
+(defn- emit-cap-call [cap-id value env]
+  (let [word-offset (+ 16 (* 8 (quot cap-id 64)))
+        bit-index (mod cap-id 64)]
+    (vec (concat
+          (ldr-context 16 word-offset) (tbnz 16 bit-index 8) (insn 0xd4200000)
+          (emit-expr value env)
+          (mov-reg 2 0)                           ; x2=value
+          (sub-sp 16) (str-sp 7 0)                ; preserve context
+          (load-constant-reg 1 cap-id) (mov-reg 0 7)
+          (ldr-context 16 48) (insn 0xd63f0200)   ; blr x16
+          (ldr-sp 7 0) (add-sp 16)))))
+
 (defn emit-expr [form env]
   (cond
     (integer? form) (load-constant form)
@@ -85,6 +108,8 @@
               then-code (emit-expr then env) else-code (emit-expr else env)]
           (vec (concat test-code (cbz-x0 (+ 8 (code-size then-code)))
                        then-code (branch (+ 4 (code-size else-code))) else-code)))
+        (= op 'cap-call)
+        (emit-cap-call (first args) (second args) env)
         (and (= op '-) (= 1 (count args)))
         (vec (concat (emit-expr (first args) env) (insn 0xcb0003e0)))
         (contains? '#{+ - * quot} op)

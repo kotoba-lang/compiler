@@ -84,7 +84,7 @@ native_check() {
   META=$("$ROOT/bin/kotoba" -M extract-native "$ARTIFACT" --symbol "$SYMBOL" --output "$TMP/$ISA-$SYMBOL.bin")
   OFFSET=$(printf '%s' "$META" | sed -n 's/.*:offset \([0-9][0-9]*\).*/\1/p')
   ARITY=$#
-  GOT=$("$TMP/kexe-loader" "$TMP/$ISA-$SYMBOL.bin" "$OFFSET" "$ARITY" "$ISA" "$@")
+  GOT=$("$TMP/kexe-loader" "$TMP/$ISA-$SYMBOL.bin" "$OFFSET" "$ARITY" "$ISA" - "$@")
   [ "$GOT" = "$EXPECTED" ] || { echo "native $ISA $SYMBOL expected $EXPECTED, got $GOT" >&2; exit 1; }
 }
 
@@ -96,11 +96,24 @@ native_expect_trap() {
   META=$("$ROOT/bin/kotoba" -M extract-native "$ARTIFACT" --symbol "$SYMBOL" --output "$TMP/$ISA-$SYMBOL-trap.bin")
   OFFSET=$(printf '%s' "$META" | sed -n 's/.*:offset \([0-9][0-9]*\).*/\1/p')
   ARITY=$#
-  if "$TMP/kexe-loader" "$TMP/$ISA-$SYMBOL-trap.bin" "$OFFSET" "$ARITY" "$ISA" "$@" >"$TMP/trap.out" 2>"$TMP/trap.err"; then
+  if "$TMP/kexe-loader" "$TMP/$ISA-$SYMBOL-trap.bin" "$OFFSET" "$ARITY" "$ISA" - "$@" >"$TMP/trap.out" 2>"$TMP/trap.err"; then
     echo "native $ISA $SYMBOL unexpectedly returned instead of trapping" >&2
     exit 1
   fi
   grep -q '^KEXE_TRAP signal$' "$TMP/trap.err"
+}
+
+native_cap_check() {
+  ARTIFACT=$1 ISA=$2 ALLOW=$3 EXPECTED=$4
+  META=$("$ROOT/bin/kotoba" -M extract-native "$ARTIFACT" --symbol helper --output "$TMP/$ISA-cap.bin")
+  OFFSET=$(printf '%s' "$META" | sed -n 's/.*:offset \([0-9][0-9]*\).*/\1/p')
+  GOT=$("$TMP/kexe-loader" "$TMP/$ISA-cap.bin" "$OFFSET" 1 "$ISA" "$ALLOW" 41)
+  [ "$GOT" = "$EXPECTED" ] || { echo "native $ISA capability expected $EXPECTED, got $GOT" >&2; exit 1; }
+  if "$TMP/kexe-loader" "$TMP/$ISA-cap.bin" "$OFFSET" 1 "$ISA" - 41 >"$TMP/cap-deny.out" 2>"$TMP/cap-deny.err"; then
+    echo "native $ISA capability unexpectedly bypassed runtime policy" >&2
+    exit 1
+  fi
+  grep -q '^KEXE_TRAP signal$' "$TMP/cap-deny.err"
 }
 
 if [ "$(uname -s)-$(uname -m)" = "Linux-x86_64" ]; then
@@ -113,6 +126,10 @@ if [ "$(uname -s)-$(uname -m)" = "Linux-x86_64" ]; then
   native_expect_trap "$TMP/x86_64.kexe" x86_64 calc -9223372036854775808 -1
   native_check "$TMP/x86_64-fuel.kexe" x86_64 fact 3628800 10
   native_expect_trap "$TMP/x86_64-fuel.kexe" x86_64 forever 0
+  "$ROOT/bin/kotoba" -M compile "$ROOT/examples/capability.kotoba" --target x86_64 \
+    --policy "$ROOT/examples/capability-policy.edn" --output "$TMP/x86_64-cap.kexe"
+  "$ROOT/bin/kotoba" -M verify "$TMP/x86_64-cap.kexe"
+  native_cap_check "$TMP/x86_64-cap.kexe" x86_64 7 42
   printf '%s\n' 'conformance: native x86_64 runtime vector passed under W^X loader'
 fi
 
@@ -129,6 +146,10 @@ case "$(uname -s)-$(uname -m)" in
     "$ROOT/bin/kotoba" -M verify "$TMP/aarch64-fuel.kexe"
     native_check "$TMP/aarch64-fuel.kexe" aarch64 fact 3628800 10
     native_expect_trap "$TMP/aarch64-fuel.kexe" aarch64 forever 0
+    "$ROOT/bin/kotoba" -M compile "$ROOT/examples/capability.kotoba" --target aarch64 \
+      --policy "$ROOT/examples/capability-policy.edn" --output "$TMP/aarch64-cap.kexe"
+    "$ROOT/bin/kotoba" -M verify "$TMP/aarch64-cap.kexe"
+    native_cap_check "$TMP/aarch64-cap.kexe" aarch64 7 42
     printf '%s\n' 'conformance: native aarch64 runtime vector passed under W^X loader'
     ;;
 esac

@@ -15,6 +15,38 @@ typedef int64_t (*kexe_fn6)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t
 typedef int64_t (*kexe_fn8)(int64_t, int64_t, int64_t, int64_t,
                             int64_t, int64_t, int64_t, int64_t);
 
+struct kexe_context_v1 {
+  uint64_t version;
+  uint64_t fuel;
+  uint64_t allow[4];
+  int64_t (*cap_call)(struct kexe_context_v1 *, uint64_t, int64_t);
+};
+
+static int64_t checked_cap_call(struct kexe_context_v1 *context,
+                                uint64_t cap_id, int64_t value) {
+  if (context == NULL || context->version != 1 || cap_id > 255 ||
+      (context->allow[cap_id / 64] & (UINT64_C(1) << (cap_id % 64))) == 0) {
+    raise(SIGILL);
+    return 0;
+  }
+  return value + 1;
+}
+
+static int parse_allow(const char *text, uint64_t allow[4]) {
+  if (strcmp(text, "-") == 0) return 0;
+  const char *cursor = text;
+  while (*cursor) {
+    char *end = NULL;
+    unsigned long id = strtoul(cursor, &end, 10);
+    if (end == cursor || id > 255 || (*end != ',' && *end != '\0')) return -1;
+    allow[id / 64] |= UINT64_C(1) << (id % 64);
+    if (*end == '\0') return 0;
+    cursor = end + 1;
+    if (*cursor == '\0') return -1;
+  }
+  return -1;
+}
+
 static void fail(const char *message) {
   fprintf(stderr, "kexe-loader: %s: %s\n", message, strerror(errno));
   exit(1);
@@ -55,15 +87,15 @@ static void install_limits(void) {
 }
 
 int main(int argc, char **argv) {
-  if (argc < 5 || argc > 10) {
-    fprintf(stderr, "usage: kexe-loader <raw-code> <offset> <arity> <x86_64|aarch64> [i64 ...]\n");
+  if (argc < 6 || argc > 11) {
+    fprintf(stderr, "usage: kexe-loader <raw-code> <offset> <arity> <x86_64|aarch64> <allow-csv|-> [i64 ...]\n");
     return 2;
   }
   char *end = NULL;
   uint64_t offset = strtoull(argv[2], &end, 10);
   if (!end || *end) return 2;
   unsigned long arity = strtoul(argv[3], &end, 10);
-  if (!end || *end || arity > 5 || argc != (int)(5 + arity)) return 2;
+  if (!end || *end || arity > 5 || argc != (int)(6 + arity)) return 2;
   const char *isa = argv[4];
   if (strcmp(isa, "x86_64") != 0 && strcmp(isa, "aarch64") != 0) return 2;
   install_limits();
@@ -92,19 +124,22 @@ int main(int argc, char **argv) {
 
   int64_t args[6] = {0, 0, 0, 0, 0, 0};
   for (unsigned long i = 0; i < arity; i++) {
-    args[i] = strtoll(argv[5 + i], &end, 10);
+    args[i] = strtoll(argv[6 + i], &end, 10);
     if (!end || *end) return 2;
   }
-  uint64_t fuel = 256;
+  struct kexe_context_v1 context = {
+      .version = 1, .fuel = 256, .allow = {0, 0, 0, 0},
+      .cap_call = checked_cap_call};
+  if (parse_allow(argv[5], context.allow) != 0) return 2;
   int64_t result;
   if (strcmp(isa, "x86_64") == 0) {
     kexe_fn6 fn = (kexe_fn6)((uint8_t *)memory + offset);
     result = fn(args[0], args[1], args[2], args[3], args[4],
-                (int64_t)(uintptr_t)&fuel);
+                (int64_t)(uintptr_t)&context);
   } else {
     kexe_fn8 fn = (kexe_fn8)((uint8_t *)memory + offset);
     result = fn(args[0], args[1], args[2], args[3], args[4], 0, 0,
-                (int64_t)(uintptr_t)&fuel);
+                (int64_t)(uintptr_t)&context);
   }
   printf("%" PRId64 "\n", result);
 

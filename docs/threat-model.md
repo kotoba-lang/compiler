@@ -27,3 +27,9 @@ one-second CPU limit, a 64 MiB address-space limit on Linux, 1 MiB stack limit, 
 two-second wall alarm. Fatal arithmetic and memory signals become a structured
 `KEXE_TRAP` failure. This is defense in depth for testing; it is not yet the
 full aiueos namespace/seccomp/Landlock production sandbox.
+
+Native capability authority is data, not ambient process privilege. Context v1
+contains a fixed 256-bit bitmap and one callback slot. A literal cap ID selects
+one bit; it cannot influence the callback address. Both generated code and the
+callback reject a missing bit. The conformance loader materializes the bitmap
+from an explicit allow list and tests allowed and empty-policy executions.

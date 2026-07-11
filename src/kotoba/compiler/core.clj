@@ -23,9 +23,6 @@
      (throw (ex-info "unsupported target" {:target target :supported targets})))
    (let [hir (frontend/analyze source)
         admission (admission/check hir policy)
-        _ (when (and (seq (:effects hir)) (not= target :wasm32-kotoba-v1))
-            (throw (ex-info "native capability trampoline backend is not implemented"
-                            {:phase :codegen :target target :effects (:effects hir)})))
         kir (ir/lower hir)
         value (:oracle-value kir)]
     (if (= target :wasm32-kotoba-v1)
@@ -45,7 +42,9 @@
                        :fuel-abi (case target
                                    :x86_64-kotoba-v1 {:mode :hidden-context-r9 :initial 256}
                                    :aarch64-kotoba-v1 {:mode :hidden-context-x7 :initial 256})
-                       :effects #{}
+                       :context-abi {:version 1 :fuel-offset 8 :allow-bitmap-offset 16
+                                     :allow-bitmap-bytes 32 :cap-call-offset 48}
+                       :effects (:effects hir)
                        :limits {:memory-bytes 0
                                 :fuel 256
                                 :stack-bytes 4096}

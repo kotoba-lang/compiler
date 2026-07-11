@@ -8,8 +8,8 @@
 (def ^:private param-pushes [[0x57] [0x56] [0x52] [0x51] [0x41 0x50]])
 (def ^:private arg-pops [[0x5f] [0x5e] [0x5a] [0x59] [0x41 0x58]])
 (def ^:private fuel-charge
-  ;; cmp qword [r9],0; jne charged; ud2; charged: dec qword [r9]
-  [0x49 0x83 0x39 0x00 0x75 0x02 0x0f 0x0b 0x49 0xff 0x09])
+  ;; context v1: fuel is qword [r9+8].
+  [0x49 0x83 0x79 0x08 0x00 0x75 0x02 0x0f 0x0b 0x49 0xff 0x49 0x08])
 
 (defn- normalize-expr [form env]
   (cond
@@ -56,6 +56,23 @@
           (vec (concat out pops (when align? [0x50]) [{:call op}]
                        (when align? [0x48 0x83 0xc4 0x08]))))))))
 
+(defn- emit-cap-call [cap-id value env {:keys [temp-depth] :as ctx}]
+  (let [byte-offset (+ 16 (quot cap-id 8))
+        mask (bit-shift-left 1 (mod cap-id 8))
+        ;; Save context across the host ABI call. The fixed guest frame is
+        ;; aligned; an even temp depth needs one additional 8-byte pad after
+        ;; pushing r9.
+        align? (even? temp-depth)]
+    (vec (concat
+          [0x41 0xf6 0x41 byte-offset mask 0x75 0x02 0x0f 0x0b]
+          (emit-expr value env ctx)
+          [0x48 0x89 0xc2 0x41 0x51]             ; rdx=value; push r9
+          (when align? [0x50])
+          [0xbe] (le32 cap-id)                    ; esi=cap-id
+          [0x4c 0x89 0xcf 0x41 0xff 0x51 0x30]   ; rdi=r9; call [r9+48]
+          (when align? [0x48 0x83 0xc4 0x08])
+          [0x41 0x59]))))                         ; pop r9
+
 (defn emit-expr [form env {:keys [param-count pad? temp-depth] :as ctx}]
   (cond
     (integer? form) (into [0x48 0xb8] (le64 form))
@@ -71,6 +88,9 @@
           (vec (concat test-code [0x48 0x85 0xc0]
                        [0x0f 0x84] (le32 (+ (code-size then-code) 5))
                        then-code [0xe9] (le32 (code-size else-code)) else-code)))
+
+        (= op 'cap-call)
+        (emit-cap-call (first args) (second args) env ctx)
 
         (and (= op '-) (= 1 (count args)))
         (vec (concat (emit-expr (first args) env ctx) [0x48 0xf7 0xd8]))

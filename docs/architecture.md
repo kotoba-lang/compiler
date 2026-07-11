@@ -96,5 +96,12 @@ Wasm now implements the first trampoline as one typed import:
 `kotoba:cap/call(i64 cap-id, i64 value) -> i64`. The compiler emits only IDs
 already present in inferred effects and admitted policy. The runtime host still
 intersects its local allow set on every invocation; compile-time admission is
-never treated as runtime authority. Native effectful code remains rejected
-until the equivalent context-table call is independently verifiable.
+never treated as runtime authority.
+
+Native targets implement a sealed context-v1 ABI: version at offset 0, fuel at
+8, a 256-bit allow bitmap at 16, and the sole `cap_call` function pointer at 48.
+Generated code checks the relevant bitmap bit before loading that fixed slot;
+the host callback receives the context and checks version, range, and bitmap
+again. x86-64 preserves r9 around the indirect call; AArch64 preserves x7 and
+uses `BLR` only on the slot loaded from `[x7,#48]`. The verifier regenerates all
+checks and call instructions from sealed KIR.
