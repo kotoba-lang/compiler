@@ -123,3 +123,12 @@ instead of silently inheriting old numbers. These values are regression alarms,
 not a claim of complete path coverage. A fixed libFuzzer seed makes short-run
 comparisons repeatable; the reviewed feature lower bound leaves headroom for
 the smaller fixed-run corpus relative to the longer wall-time workflow.
+
+Frontend fuzzing combines mutations of a valid multi-function source with raw
+reader grammar bytes. Accepted inputs must converge on one KIR for all three
+backends, produce deterministic Wasm, and pass native regeneration verification.
+Rejected inputs must surface a controlled `:read`, `:subset`, `:admission`,
+`:ir`, or `:verify` error. Before invoking tools.reader, a string-aware lexical
+scan caps delimiter depth at 512; source type and 1 MiB size are checked, and
+integer literals are restricted to the signed i64 domain. This prevents parser
+stack pressure and host big-integer values from crossing into the runtime ABI.

@@ -150,5 +150,11 @@ expectations. Linux runs use the fixed libFuzzer seed `424242`; current minimums
 are cov 60, features 100, and corpus 20. The feature threshold intentionally
 allows bounded differences between fixed-run and wall-time workflows.
 
+The managed compiler boundary also runs 600 deterministic frontend mutations:
+300 edits of a valid structured program and 300 raw grammar inputs. Any accepted
+source must produce identical KIR across Wasm, x86-64, and AArch64,
+byte-reproducible Wasm, and verifier-admitted native artifacts. Rejections must
+use a controlled compiler phase rather than leaking host reader exceptions.
+
 See [docs/architecture.md](docs/architecture.md) and
 [docs/threat-model.md](docs/threat-model.md).

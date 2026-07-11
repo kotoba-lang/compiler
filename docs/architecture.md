@@ -27,6 +27,12 @@ The experimental slice intentionally accepts less than the current Kotoba Wasm
 compiler. Migration proceeds by moving frontend rules and conformance vectors
 from `kotoba-lang/kotoba`, never by silently accepting unsupported forms.
 
+Frontend admission is bounded before semantic analysis: source must be a string
+no larger than 1 MiB, lexical delimiter nesting is capped at 512 before reader
+recursion, top-level form count is capped, expression validation is capped at
+256, and literals must fit signed i64. Host reader failures are normalized into
+the compiler's `:read` error phase.
+
 ## Current maturity
 
 The compiler is `experimental alpha`, not production-safe. KIR v3 retains

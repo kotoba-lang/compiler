@@ -11,16 +11,43 @@
 (def arithmetic '#{+ - * quot})
 (def comparisons '#{= < > <= >=})
 
+(defn- check-reader-depth! [source]
+  (loop [index 0 depth 0 in-string? false escaped? false in-comment? false]
+    (when (< index (count source))
+      (let [ch (.charAt ^String source index)]
+        (cond
+          in-comment? (recur (inc index) depth false false (not= ch \newline))
+          (and in-string? escaped?) (recur (inc index) depth true false false)
+          (and in-string? (= ch \\)) (recur (inc index) depth true true false)
+          (= ch \newline) (recur (inc index) depth in-string? false false)
+          (= ch \;) (recur (inc index) depth in-string? false (not in-string?))
+          (= ch \") (recur (inc index) depth (not in-string?) false false)
+          in-string? (recur (inc index) depth true false false)
+          (#{\( \[ \{} ch)
+          (let [next-depth (inc depth)]
+            (when (> next-depth 512)
+              (throw (ex-info "reader nesting exceeds admission limit" {:phase :read})))
+            (recur (inc index) next-depth false false false))
+          (#{\) \] \}} ch) (recur (inc index) (max 0 (dec depth)) false false false)
+          :else (recur (inc index) depth false false false))))))
+
 (defn read-forms [source]
+  (when-not (string? source)
+    (throw (ex-info "source must be a string" {:phase :read})))
   (when (> (count source) (* 1024 1024))
     (throw (ex-info "source exceeds 1 MiB admission limit" {:phase :read})))
   (when (re-find #"#=" source)
     (throw (ex-info "reader evaluation is forbidden" {:phase :read})))
+  (check-reader-depth! source)
   (let [r (rt/string-push-back-reader source)]
     (loop [out []]
       (when (> (count out) 10000)
         (throw (ex-info "too many top-level forms" {:phase :read})))
-      (let [x (reader/read {:read-cond :allow :features #{:kotoba} :eof ::eof} r)]
+      (let [x (try
+                (reader/read {:read-cond :allow :features #{:kotoba} :eof ::eof} r)
+                (catch Exception error
+                  (throw (ex-info "source reader rejected input"
+                                  {:phase :read} error))))]
         (if (= x ::eof) out (recur (conj out x)))))))
 
 (defn- reject! [message form]
@@ -46,7 +73,8 @@
   (when (> depth 256)
     (reject! "expression nesting exceeds admission limit" form))
   (cond
-    (integer? form) form
+    (integer? form) (if (<= Long/MIN_VALUE form Long/MAX_VALUE) form
+                        (reject! "integer literal is outside i64" form))
     (symbol? form) (if (contains? locals form) form
                        (reject! "unbound or dynamic symbol is forbidden" form))
     (seq? form)
