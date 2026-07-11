@@ -33,6 +33,12 @@ struct kexe_context_v1 {
   int64_t (*cap_call)(struct kexe_context_v1 *, uint64_t, int64_t);
 };
 
+struct kexe_shared_v1 {
+  struct kexe_context_v1 context;
+  int64_t result;
+  uint64_t completed;
+};
+
 static volatile sig_atomic_t supervisor_timed_out = 0;
 static volatile sig_atomic_t supervised_pid = -1;
 
@@ -140,6 +146,19 @@ static int supervise(pid_t child) {
   ssize_t written = write(STDERR_FILENO, signal, sizeof(signal) - 1);
   (void)written;
   return 123;
+}
+
+static void write_supervisor_report(const struct kexe_shared_v1 *shared,
+                                    int child_status) {
+  if (child_status == 0 && shared->completed == 1) {
+    printf("{:status :ok :result %" PRId64
+           " :fuel {:initial 256 :remaining %" PRIu64 "}}\n",
+           shared->result, shared->context.fuel);
+  } else {
+    printf("{:status :trap :exit %d :fuel {:initial 256 :remaining %" PRIu64
+           "}}\n",
+           child_status, shared->context.fuel);
+  }
 }
 
 /* Keep post-sandbox output independent of libc stdio's lazy initialization. */
@@ -282,15 +301,23 @@ int main(int argc, char **argv) {
     args[i] = strtoll(argv[6 + i], &end, 10);
     if (!end || *end) return 2;
   }
-  struct kexe_context_v1 context = {
-      .version = 1, .fuel = 256, .allow = {0, 0, 0, 0},
-      .cap_call = checked_cap_call};
-  if (parse_allow(argv[5], context.allow) != 0) return 2;
+  struct kexe_shared_v1 *shared =
+      mmap(NULL, sizeof(*shared), PROT_READ | PROT_WRITE,
+           MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+  if (shared == MAP_FAILED) fail("mmap shared execution state");
+  memset(shared, 0, sizeof(*shared));
+  shared->context.version = 1;
+  shared->context.fuel = 256;
+  shared->context.cap_call = checked_cap_call;
+  if (parse_allow(argv[5], shared->context.allow) != 0) return 2;
+  int structured_report = getenv("KEXE_STRUCTURED_REPORT") != NULL;
 
   pid_t child = fork();
   if (child < 0) fail("fork");
   if (child > 0) {
     int child_status = supervise(child);
+    if (structured_report) write_supervisor_report(shared, child_status);
+    if (munmap(shared, sizeof(*shared)) != 0) fail("supervisor shared munmap");
     if (munmap(memory, mapped) != 0) fail("supervisor munmap");
     return child_status;
   }
@@ -315,14 +342,17 @@ int main(int argc, char **argv) {
   if (strcmp(isa, "x86_64") == 0) {
     kexe_fn6 fn = (kexe_fn6)((uint8_t *)memory + offset);
     result = fn(args[0], args[1], args[2], args[3], args[4],
-                (int64_t)(uintptr_t)&context);
+                (int64_t)(uintptr_t)&shared->context);
   } else {
     kexe_fn8 fn = (kexe_fn8)((uint8_t *)memory + offset);
     result = fn(args[0], args[1], args[2], args[3], args[4], 0, 0,
-                (int64_t)(uintptr_t)&context);
+                (int64_t)(uintptr_t)&shared->context);
   }
-  write_i64(result);
+  shared->result = result;
+  shared->completed = 1;
+  if (!structured_report) write_i64(result);
 
   if (munmap(memory, mapped) != 0) fail("munmap");
+  if (munmap(shared, sizeof(*shared)) != 0) fail("shared munmap");
   _exit(0);
 }

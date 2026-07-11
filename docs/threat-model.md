@@ -52,3 +52,7 @@ seccomp. The parent waits for that exact child and enforces an independent
 three-second wall deadline. A stuck child is killed and reported as
 `KEXE_TRAP {:kind :supervisor :reason :wall-timeout}`; CI tests this boundary
 on both supported host architectures.
+The fuel context is backed by a dedicated parent-created shared mapping. The
+child can only monotonically consume its counter through regenerated code; the
+supervisor reads the final counter and result slot after `waitpid`, producing
+the evidence later bound into an executor-signed receipt.

@@ -161,9 +161,21 @@ native_timeout_probe() {
   grep -q '^KEXE_TRAP {:kind :supervisor :reason :wall-timeout}$' "$TMP/timeout-probe.err"
 }
 
+native_report_check() {
+  ARTIFACT=$1 ISA=$2
+  META=$("$ROOT/bin/kotoba" -M extract-native "$ARTIFACT" --symbol main --output "$TMP/$ISA-report.bin")
+  OFFSET=$(printf '%s' "$META" | sed -n 's/.*:offset \([0-9][0-9]*\).*/\1/p')
+  REPORT=$(KEXE_STRUCTURED_REPORT=1 "$TMP/kexe-loader" "$TMP/$ISA-report.bin" "$OFFSET" 0 "$ISA" -)
+  [ "$REPORT" = '{:status :ok :result 42 :fuel {:initial 256 :remaining 253}}' ] || {
+    echo "native $ISA supervisor report mismatch: $REPORT" >&2
+    exit 1
+  }
+}
+
 if [ "$(uname -s)-$(uname -m)" = "Linux-x86_64" ]; then
   cc -std=c11 -O2 -Wall -Wextra -Werror "$ROOT/tools/kexe_loader.c" -o "$TMP/kexe-loader"
   native_timeout_probe "$TMP/x86_64.kexe" x86_64
+  native_report_check "$TMP/x86_64.kexe" x86_64
   native_sandbox_probe "$TMP/x86_64.kexe" x86_64
   native_check "$TMP/x86_64.kexe" x86_64 score 12 -7 2
   native_check "$TMP/x86_64.kexe" x86_64 calc 21 20 4
@@ -184,6 +196,7 @@ case "$(uname -s)-$(uname -m)" in
   Darwin-arm64|Linux-aarch64)
     cc -std=c11 -O2 -Wall -Wextra -Werror "$ROOT/tools/kexe_loader.c" -o "$TMP/kexe-loader"
     native_timeout_probe "$TMP/aarch64.kexe" aarch64
+    native_report_check "$TMP/aarch64.kexe" aarch64
     native_check "$TMP/aarch64.kexe" aarch64 score 12 -7 2
     native_check "$TMP/aarch64.kexe" aarch64 calc 21 20 4
     native_check "$TMP/aarch64.kexe" aarch64 relations 10 7 3
