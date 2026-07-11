@@ -1,0 +1,10 @@
+(ns examples.capability)
+
+(defn audit [value]
+  (cap-call 7 value))
+
+(defn helper [value]
+  (audit value))
+
+(defn main []
+  42)

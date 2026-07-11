@@ -1,5 +1,6 @@
 (ns kotoba.compiler.frontend
-  (:require [clojure.tools.reader :as reader]
+  (:require [clojure.set :as set]
+            [clojure.tools.reader :as reader]
             [clojure.tools.reader.reader-types :as rt]))
 
 (def forbidden-heads
@@ -64,6 +65,12 @@
         (do (when-not (= 3 (count args)) (reject! "if requires test, then, else" form))
             (doseq [arg args] (validate-expr arg locals functions (inc depth))))
 
+        (= op 'cap-call)
+        (let [[cap-id value :as call-args] args]
+          (when-not (and (= 2 (count call-args)) (integer? cap-id) (<= 0 cap-id 255))
+            (reject! "cap-call requires a literal capability id in [0,255] and one value" form))
+          (validate-expr value locals functions (inc depth)))
+
         (contains? arithmetic op)
         (do (when (or (empty? args) (and (= op 'quot) (not= 2 (count args))))
               (reject! "invalid arithmetic arity" form))
@@ -82,6 +89,35 @@
         :else (reject! "operation has no admitted lowering" form))
       form)
     :else (reject! "value type is outside the safe profile" form)))
+
+(defn- direct-facts [form function-names]
+  (let [effects (volatile! #{}) calls (volatile! #{})]
+    (letfn [(walk [x]
+              (cond
+                (seq? x)
+                (let [[op & args] x]
+                  (cond
+                    (= op 'cap-call)
+                    (do (vswap! effects conj [:cap/call (first args)])
+                        (walk (second args)))
+                    (contains? function-names op)
+                    (do (vswap! calls conj op) (doseq [arg args] (walk arg)))
+                    :else (doseq [arg args] (walk arg))))
+                (coll? x) (doseq [item x] (walk item))))]
+      (walk form)
+      {:effects @effects :calls @calls})))
+
+(defn- infer-effects [functions]
+  (let [names (set (map :name functions))
+        direct (into {} (map (fn [{:keys [name body]}]
+                               [name (direct-facts body names)])) functions)]
+    (loop [inferred (into {} (map (fn [[name facts]] [name (:effects facts)]) direct))]
+      (let [next-effects
+            (into {} (map (fn [[name {direct-effects :effects calls :calls}]]
+                            [name (reduce set/union direct-effects
+                                          (map #(get inferred % #{}) calls))])
+                          direct))]
+        (if (= inferred next-effects) inferred (recur next-effects))))))
 
 (defn analyze [source]
   (let [forms (read-forms source)
@@ -106,5 +142,10 @@
     (when-not (empty? (get signatures 'main)) (reject! "main must take zero arguments" 'main))
     (doseq [{:keys [params body]} parsed]
       (validate-expr body (set params) signatures 0))
-    {:format :kotoba.hir/v2 :entry 'main :result :i64 :effects #{}
-     :functions parsed}))
+    (let [function-effects (infer-effects parsed)
+          functions (mapv #(assoc % :effects (get function-effects (:name %))) parsed)]
+      {:format :kotoba.hir/v2 :entry 'main :result :i64
+       ;; Every function is exported by current backends, so admission covers
+       ;; the union rather than only effects reachable from main.
+       :effects (reduce set/union #{} (vals function-effects))
+       :functions functions})))

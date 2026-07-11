@@ -13,6 +13,14 @@
 
 (defn -main [& args]
   (case (first args)
+    "check"
+    (let [input (second args)
+          policy-path (option args "--policy")
+          policy (if policy-path (edn/read-string (slurp policy-path)) {})
+          result (compiler/check-source (slurp input) policy)]
+      (println (pr-str {:ok true
+                        :effects (get-in result [:hir :effects])
+                        :admission (:admission result)})))
     "compile"
     (let [input (second args) target (parse-target (or (option args "--target") "wasm32"))
           output (or (option args "--output") (str input (if (= target :wasm32-kotoba-v1) ".wasm" ".kexe")))
@@ -36,5 +44,5 @@
       (with-open [out (io/output-stream output)]
         (.write out ^bytes (byte-array (map unchecked-byte (:code artifact)))))
       (println (pr-str (merge {:ok true :output output :symbol symbol} export))))
-    (do (binding [*out* *err*] (println "usage: kotoba -M compile <file> --target wasm32|x86_64|aarch64 --output <file> | kotoba -M verify <file>"))
+    (do (binding [*out* *err*] (println "usage: kotoba -M check <file> [--policy policy.edn] | kotoba -M compile <file> --target wasm32|x86_64|aarch64 --output <file> | kotoba -M verify <file>"))
         (System/exit 2))))

@@ -49,6 +49,18 @@ compiled to all three targets; the gate requires identical KIR, deterministic
 native bytes/seals, successful re-verification, and rejection after a one-byte
 mutation.
 
+`kotoba -M check` performs capability admission before backend selection.
+`cap-call` accepts only a literal ID in `[0,255]`; effects propagate through the
+full function-call graph, including cycles and lexical bindings. Admission is
+deny-by-default and covers every exported function, returns a least-privilege
+policy, and reports unused grants. Effectful machine-code emission remains
+fail-closed until the common Wasm/native trampoline ABI lands.
+
+```bash
+kotoba -M check examples/capability.kotoba \
+  --policy examples/capability-policy.edn
+```
+
 After putting `bin/kotoba` on `PATH`, the public command is simply
 `kotoba -M ...`. The bootstrap currently uses Clojure internally, but that is
 not part of the compiler CLI contract and can be replaced by the self-hosted

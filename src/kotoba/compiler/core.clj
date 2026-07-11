@@ -1,6 +1,7 @@
 (ns kotoba.compiler.core
   (:require [kotoba.compiler.frontend :as frontend]
             [kotoba.compiler.ir :as ir]
+            [kotoba.compiler.admission :as admission]
             [kotoba.compiler.backend.wasm :as wasm]
             [kotoba.compiler.backend.x86-64 :as x86-64]
             [kotoba.compiler.backend.aarch64 :as aarch64]
@@ -9,10 +10,19 @@
 
 (def targets #{:wasm32-kotoba-v1 :x86_64-kotoba-v1 :aarch64-kotoba-v1})
 
+(defn check-source
+  ([source] (check-source source {}))
+  ([source policy]
+   (let [hir (frontend/analyze source)]
+     {:hir hir :admission (admission/check hir policy)})))
+
 (defn compile-source [source target]
   (when-not (contains? targets target)
     (throw (ex-info "unsupported target" {:target target :supported targets})))
   (let [hir (frontend/analyze source)
+        _ (when (seq (:effects hir))
+            (throw (ex-info "effectful code is admitted only after a capability trampoline backend exists"
+                            {:phase :codegen :effects (:effects hir)})))
         kir (ir/lower hir)
         value (:oracle-value kir)]
     (if (= target :wasm32-kotoba-v1)

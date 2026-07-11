@@ -6,6 +6,14 @@ TMP=${TMPDIR:-/tmp}/kotoba-compiler-conformance-$$
 trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 mkdir -p "$TMP"
 
+"$ROOT/bin/kotoba" -M check "$ROOT/examples/capability.kotoba" \
+  --policy "$ROOT/examples/capability-policy.edn" >"$TMP/capability-check.edn"
+if "$ROOT/bin/kotoba" -M check "$ROOT/examples/capability.kotoba" >"$TMP/capability-deny.out" 2>&1; then
+  echo "capability source unexpectedly admitted without policy" >&2
+  exit 1
+fi
+grep -q 'capability policy denies required effects' "$TMP/capability-deny.out"
+
 "$ROOT/bin/kotoba" -M compile "$ROOT/examples/structured.kotoba" --target wasm32 --output "$TMP/program.wasm"
 "$ROOT/bin/kotoba" -M compile "$ROOT/examples/fuel.kotoba" --target wasm32 --output "$TMP/fuel.wasm"
 "$ROOT/bin/kotoba" -M compile "$ROOT/examples/structured.kotoba" --target x86_64 --output "$TMP/x86_64.kexe"

@@ -76,3 +76,18 @@ AArch64 mirrors this as `:hidden-context-x7`. It preserves x19..x23 plus
 x29/x30 according to AAPCS64, moves source parameters into that callee-saved
 bank, and emits verified `BL imm26` relocations while forwarding x7 unchanged.
 All temporary stack slots and register-save frames remain 16-byte aligned.
+
+## Capability admission
+
+The first typed effect is `[:cap/call id]`, authored only as
+`(cap-call <literal-u8> value)`. Dynamic IDs are rejected rather than widened to
+ambient authority. The frontend derives direct effects and call edges, closes
+them to a fixpoint (including mutual recursion), and assigns effects to every
+function. Because all pure functions are currently exported, module admission
+uses the union across all functions, not only `main` reachability.
+
+Policy is deny-by-default: `{:allow #{...}}`. Admission reports missing effects,
+the exact minimal policy, and unused grants. This stage deliberately separates
+authority analysis from execution: effectful code passes `kotoba -M check` only
+with policy but `compile` still rejects it until a capability-checked trampoline
+exists on every backend.
