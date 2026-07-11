@@ -7,6 +7,7 @@ trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 mkdir -p "$TMP"
 
 "$ROOT/bin/kotoba" -M compile "$ROOT/examples/structured.kotoba" --target wasm32 --output "$TMP/program.wasm"
+"$ROOT/bin/kotoba" -M compile "$ROOT/examples/fuel.kotoba" --target wasm32 --output "$TMP/fuel.wasm"
 "$ROOT/bin/kotoba" -M compile "$ROOT/examples/structured.kotoba" --target x86_64 --output "$TMP/x86_64.kexe"
 "$ROOT/bin/kotoba" -M compile "$ROOT/examples/structured.kotoba" --target aarch64 --output "$TMP/aarch64.kexe"
 "$ROOT/bin/kotoba" -M verify "$TMP/x86_64.kexe"
@@ -30,6 +31,17 @@ WebAssembly.instantiate(fs.readFileSync(process.argv[1])).then(({instance}) => {
   if (!overflowTrap) throw new Error("Wasm signed division overflow did not trap");
 }).catch(error => { console.error(error); process.exit(1); });
 ' "$TMP/program.wasm"
+
+node -e '
+const fs = require("fs");
+WebAssembly.instantiate(fs.readFileSync(process.argv[1])).then(({instance}) => {
+  if (instance.exports.fact(10n) !== 3628800n) throw new Error("finite recursion mismatch");
+  let trapped = false;
+  try { instance.exports.forever(0n); } catch (error) { trapped = error instanceof WebAssembly.RuntimeError; }
+  if (!trapped) throw new Error("fuel-exhausted recursion did not trap");
+}).catch(error => { console.error(error); process.exit(1); });
+' "$TMP/fuel.wasm"
+printf '%s\n' 'conformance: Wasm finite recursion passed; infinite recursion fuel-trapped'
 
 native_check() {
   ARTIFACT=$1

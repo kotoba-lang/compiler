@@ -54,3 +54,13 @@ Signed division has an explicit cross-backend trap contract. Wasm `i64.div_s`
 and x86-64 `IDIV` already trap on zero and `MIN_VALUE / -1`; AArch64 `SDIV`
 does neither, so the AArch64 emitter inserts divisor and overflow guards ending
 in `BRK`. Conformance requires all three backends to reject both cases.
+
+## Fuel contract
+
+`wasm32-kotoba-v1` owns a private mutable i64 fuel global initialized to 256.
+Every function body begins with an unconditional zero-check and decrement, so
+direct and mutual recursive calls cannot bypass accounting. Guest code cannot
+import, export, or replenish the counter. Conformance executes factorial and an
+unbounded recursive function, requiring the former to return and the latter to
+trap. Native recursive lowering remains fail-closed until the corresponding
+hidden fuel register/context ABI is implemented.

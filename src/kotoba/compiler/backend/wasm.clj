@@ -77,9 +77,13 @@
   (let [param-env (zipmap (:params function) (range))
         locals (local-count (:body function))
         declarations (if (zero? locals) [0] (concat [1] (uleb locals) [0x7e]))
-        instructions (emit-expr (:body function) param-env
+        ;; Every call consumes one unit from a module-private monotonic fuel
+        ;; global. It is never exported and cannot be replenished by guest code.
+        charge [0x23 0 0x50 0x04 0x40 0x00 0x0b ; global.get;eqz;if;unreachable;end
+                0x23 0 0x42 1 0x7d 0x24 0]       ; global.get;const 1;sub;global.set
+        instructions (concat charge (emit-expr (:body function) param-env
                                 {:function-indices function-indices
-                                 :next-local (count (:params function))})
+                                 :next-local (count (:params function))}))
         body (concat declarations instructions [0x0b])]
     (concat (uleb (count body)) body)))
 
@@ -88,6 +92,9 @@
         indices (into {} (map-indexed (fn [i f] [(:name f) i]) functions))
         types (concat (uleb (count functions)) (mapcat function-type functions))
         function-sec (concat (uleb (count functions)) (mapcat uleb (range (count functions))))
+        ;; (global (mut i64) (i64.const 256)); low enough to trap before the
+        ;; host call stack becomes the limiting resource.
+        global-sec [1 0x7e 1 0x42 0x80 0x02 0x0b]
         ;; Pure functions are exported with their source names. This makes
         ;; runtime parameters observable and testable without host authority.
         export-sec (concat (uleb (count functions))
@@ -99,5 +106,5 @@
     (byte-array
      (map unchecked-byte
           (concat [0 0x61 0x73 0x6d 1 0 0 0]
-                  (section 1 types) (section 3 function-sec)
+                  (section 1 types) (section 3 function-sec) (section 6 global-sec)
                   (section 7 export-sec) (section 10 code-sec))))))

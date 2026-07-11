@@ -16,7 +16,8 @@
         kir (ir/lower hir)
         value (:oracle-value kir)]
     (if (= target :wasm32-kotoba-v1)
-      {:format :wasm/v1 :target target :hir hir :kir kir :bytes (wasm/emit kir)}
+      {:format :wasm/v1 :target target :hir hir :kir kir
+       :limits {:fuel 256 :replenishable? false} :bytes (wasm/emit kir)}
       (let [emitted ((case target
                        :x86_64-kotoba-v1 x86-64/emit-program
                        :aarch64-kotoba-v1 aarch64/emit-program) kir)

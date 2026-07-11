@@ -74,6 +74,18 @@
                          "(defn main [] (+ 9223372036854775807 1))"
                          :x86_64-kotoba-v1))))
 
+(deftest wasm-recursion-is-fuel-bounded-and-native-fails-closed
+  (let [source "(defn fact [n] (if (<= n 1) 1 (* n (fact (- n 1)))))
+                (defn forever [n] (forever (+ n 1)))
+                (defn main [] (fact 5))"
+        wasm (compiler/compile-source source :wasm32-kotoba-v1)]
+    (is (= {:fuel 256 :replenishable? false} (:limits wasm)))
+    (is (= 120 (:oracle-value (:kir wasm))))
+    (doseq [target [:x86_64-kotoba-v1 :aarch64-kotoba-v1]]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"recursive native lowering requires fuel-aware calls"
+                            (compiler/compile-source source target))))))
+
 (deftest fails-closed
   (doseq [bad ["(defn main [] (eval '(+ 1 2)))"
                "#=(java.lang.System/exit 0)"
