@@ -29,9 +29,9 @@
         (reject! "native instruction stream rejected" {:target target})))
     (let [expected-fuel-abi (case target
                               :x86_64-kotoba-v1 {:mode :hidden-context-r9 :initial 256}
-                              :aarch64-kotoba-v1 {:mode :process-limit-only})
+                              :aarch64-kotoba-v1 {:mode :hidden-context-x7 :initial 256})
           expected-limits {:memory-bytes 0
-                           :fuel (if (= target :x86_64-kotoba-v1) 256 (count code))
+                           :fuel 256
                            :stack-bytes 4096}]
       (when-not (= expected-fuel-abi fuel-abi)
         (reject! "fuel ABI is not admitted" {:target target :fuel-abi fuel-abi}))

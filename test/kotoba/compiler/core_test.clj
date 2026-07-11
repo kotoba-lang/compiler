@@ -81,14 +81,16 @@
         wasm (compiler/compile-source source :wasm32-kotoba-v1)]
     (is (= {:fuel 256 :replenishable? false} (:limits wasm)))
     (is (= 120 (:oracle-value (:kir wasm))))
-    (let [x86 (:artifact (compiler/compile-source source :x86_64-kotoba-v1))]
+    (let [x86 (:artifact (compiler/compile-source source :x86_64-kotoba-v1))
+          arm (:artifact (compiler/compile-source source :aarch64-kotoba-v1))]
       (is (= {:mode :hidden-context-r9 :initial 256} (:fuel-abi x86)))
+      (is (= {:mode :hidden-context-x7 :initial 256} (:fuel-abi arm)))
       (is (pos? (get-in x86 [:exports 'forever :length])))
+      (is (pos? (get-in arm [:exports 'forever :length])))
       (is (some #{0xe8} (:code x86)) "contains a real x86 CALL rel32")
-      (is (some #{0x0f} (:code x86)) "contains the fuel-exhaustion UD2 prefix"))
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                          #"recursive native lowering requires fuel-aware calls"
-                          (compiler/compile-source source :aarch64-kotoba-v1)))))
+      (is (some #{0x0f} (:code x86)) "contains the fuel-exhaustion UD2 prefix")
+      (is (some #(<= 0x94 % 0x97) (take-nth 4 (drop 3 (:code arm))))
+          "contains an AArch64 BL imm26 opcode"))))
 
 (deftest fails-closed
   (doseq [bad ["(defn main [] (eval '(+ 1 2)))"

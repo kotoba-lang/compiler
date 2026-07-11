@@ -38,10 +38,10 @@ all three backends; loader resource limits keep native traps outside the compile
 Wasm modules contain a private, non-replenishable i64 fuel global initialized to
 256. Every function entry checks and decrements it before evaluating guest code.
 This permits bounded recursion while guaranteeing that recursive cycles trap.
-x86-64 reserves r9 for a loader-owned fuel-context pointer and charges every
+x86-64 reserves r9 and AArch64 reserves x7 for a loader-owned fuel-context pointer; both charge every
 function entry before guest instructions; its real `CALL rel32` path supports
-bounded direct and mutual recursion. AArch64 recursive calls remain rejected
-until the equivalent x7 context ABI is complete.
+bounded direct and mutual recursion through verified `CALL rel32` / `BL imm26`
+relocations.
 
 After putting `bin/kotoba` on `PATH`, the public command is simply
 `kotoba -M ...`. The bootstrap currently uses Clojure internally, but that is

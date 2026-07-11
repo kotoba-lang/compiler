@@ -54,7 +54,7 @@ native_check() {
   META=$("$ROOT/bin/kotoba" -M extract-native "$ARTIFACT" --symbol "$SYMBOL" --output "$TMP/$ISA-$SYMBOL.bin")
   OFFSET=$(printf '%s' "$META" | sed -n 's/.*:offset \([0-9][0-9]*\).*/\1/p')
   ARITY=$#
-  GOT=$("$TMP/kexe-loader" "$TMP/$ISA-$SYMBOL.bin" "$OFFSET" "$ARITY" "$@")
+  GOT=$("$TMP/kexe-loader" "$TMP/$ISA-$SYMBOL.bin" "$OFFSET" "$ARITY" "$ISA" "$@")
   [ "$GOT" = "$EXPECTED" ] || { echo "native $ISA $SYMBOL expected $EXPECTED, got $GOT" >&2; exit 1; }
 }
 
@@ -66,7 +66,7 @@ native_expect_trap() {
   META=$("$ROOT/bin/kotoba" -M extract-native "$ARTIFACT" --symbol "$SYMBOL" --output "$TMP/$ISA-$SYMBOL-trap.bin")
   OFFSET=$(printf '%s' "$META" | sed -n 's/.*:offset \([0-9][0-9]*\).*/\1/p')
   ARITY=$#
-  if "$TMP/kexe-loader" "$TMP/$ISA-$SYMBOL-trap.bin" "$OFFSET" "$ARITY" "$@" >"$TMP/trap.out" 2>"$TMP/trap.err"; then
+  if "$TMP/kexe-loader" "$TMP/$ISA-$SYMBOL-trap.bin" "$OFFSET" "$ARITY" "$ISA" "$@" >"$TMP/trap.out" 2>"$TMP/trap.err"; then
     echo "native $ISA $SYMBOL unexpectedly returned instead of trapping" >&2
     exit 1
   fi
@@ -95,6 +95,10 @@ case "$(uname -s)-$(uname -m)" in
     native_check "$TMP/aarch64.kexe" aarch64 relations 13 3 3
     native_expect_trap "$TMP/aarch64.kexe" aarch64 calc 20 0
     native_expect_trap "$TMP/aarch64.kexe" aarch64 calc -9223372036854775808 -1
+    "$ROOT/bin/kotoba" -M compile "$ROOT/examples/fuel.kotoba" --target aarch64 --output "$TMP/aarch64-fuel.kexe"
+    "$ROOT/bin/kotoba" -M verify "$TMP/aarch64-fuel.kexe"
+    native_check "$TMP/aarch64-fuel.kexe" aarch64 fact 3628800 10
+    native_expect_trap "$TMP/aarch64-fuel.kexe" aarch64 forever 0
     printf '%s\n' 'conformance: native aarch64 runtime vector passed under W^X loader'
     ;;
 esac

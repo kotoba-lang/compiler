@@ -71,3 +71,8 @@ register is removed from the source ABI and carries a loader-owned pointer to a
 `UD2`. Direct calls are emitted as verified `CALL rel32` relocations and forward
 the same r9 unchanged, allowing bounded direct and mutual recursion. Source
 functions therefore accept at most five integer parameters on x86-64 v1.
+
+AArch64 mirrors this as `:hidden-context-x7`. It preserves x19..x23 plus
+x29/x30 according to AAPCS64, moves source parameters into that callee-saved
+bank, and emits verified `BL imm26` relocations while forwarding x7 unchanged.
+All temporary stack slots and register-save frames remain 16-byte aligned.

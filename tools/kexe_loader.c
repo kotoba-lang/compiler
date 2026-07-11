@@ -12,6 +12,8 @@
 #include <unistd.h>
 
 typedef int64_t (*kexe_fn6)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t);
+typedef int64_t (*kexe_fn8)(int64_t, int64_t, int64_t, int64_t,
+                            int64_t, int64_t, int64_t, int64_t);
 
 static void fail(const char *message) {
   fprintf(stderr, "kexe-loader: %s: %s\n", message, strerror(errno));
@@ -53,15 +55,17 @@ static void install_limits(void) {
 }
 
 int main(int argc, char **argv) {
-  if (argc < 4 || argc > 10) {
-    fprintf(stderr, "usage: kexe-loader <raw-code> <offset> <arity> [i64 ...]\n");
+  if (argc < 5 || argc > 10) {
+    fprintf(stderr, "usage: kexe-loader <raw-code> <offset> <arity> <x86_64|aarch64> [i64 ...]\n");
     return 2;
   }
   char *end = NULL;
   uint64_t offset = strtoull(argv[2], &end, 10);
   if (!end || *end) return 2;
   unsigned long arity = strtoul(argv[3], &end, 10);
-  if (!end || *end || arity > 5 || argc != (int)(4 + arity)) return 2;
+  if (!end || *end || arity > 5 || argc != (int)(5 + arity)) return 2;
+  const char *isa = argv[4];
+  if (strcmp(isa, "x86_64") != 0 && strcmp(isa, "aarch64") != 0) return 2;
   install_limits();
 
   FILE *file = fopen(argv[1], "rb");
@@ -88,13 +92,20 @@ int main(int argc, char **argv) {
 
   int64_t args[6] = {0, 0, 0, 0, 0, 0};
   for (unsigned long i = 0; i < arity; i++) {
-    args[i] = strtoll(argv[4 + i], &end, 10);
+    args[i] = strtoll(argv[5 + i], &end, 10);
     if (!end || *end) return 2;
   }
-  kexe_fn6 fn = (kexe_fn6)((uint8_t *)memory + offset);
   uint64_t fuel = 256;
-  int64_t result = fn(args[0], args[1], args[2], args[3], args[4],
-                      (int64_t)(uintptr_t)&fuel);
+  int64_t result;
+  if (strcmp(isa, "x86_64") == 0) {
+    kexe_fn6 fn = (kexe_fn6)((uint8_t *)memory + offset);
+    result = fn(args[0], args[1], args[2], args[3], args[4],
+                (int64_t)(uintptr_t)&fuel);
+  } else {
+    kexe_fn8 fn = (kexe_fn8)((uint8_t *)memory + offset);
+    result = fn(args[0], args[1], args[2], args[3], args[4], 0, 0,
+                (int64_t)(uintptr_t)&fuel);
+  }
   printf("%" PRId64 "\n", result);
 
   if (munmap(memory, mapped) != 0) fail("munmap");
