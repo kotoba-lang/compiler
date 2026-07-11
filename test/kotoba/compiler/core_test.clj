@@ -17,7 +17,9 @@
 
 (deftest emits-real-wasm
   (let [bytes (:bytes (compiler/compile-source source :wasm32-kotoba-v1))]
-    (is (= [0 97 115 109] (mapv #(bit-and (int %) 0xff) (take 4 bytes))))))
+    (is (= [0 97 115 109] (mapv #(bit-and (int %) 0xff) (take 4 bytes))))
+    (is (some #{0x7c} (map #(bit-and (int %) 0xff) bytes))
+        "Wasm contains runtime i64.add rather than only a folded constant")))
 
 (deftest emits-and-verifies-native-machine-code
   (doseq [target [:x86_64-kotoba-v1 :aarch64-kotoba-v1]]
@@ -31,6 +33,7 @@
 (deftest structured-program-conforms-across-backends
   (let [results (mapv #(compiler/compile-source structured-source %) compiler/targets)]
     (is (= 42 (-> results first :kir :blocks first :instructions first second)))
+    (is (= :kotoba.kir/v3 (-> results first :kir :format)))
     (is (= 1 (count (set (map :kir results)))))
     (is (= #{'main 'abs 'score}
            (set (map :name (-> results first :hir :functions)))))))

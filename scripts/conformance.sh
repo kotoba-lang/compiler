@@ -17,7 +17,9 @@ const fs = require("fs");
 WebAssembly.instantiate(fs.readFileSync(process.argv[1])).then(({instance}) => {
   const got = instance.exports.main();
   if (got !== 42n) throw new Error(`expected 42n, got ${got}`);
+  const runtime = instance.exports.score(-7n, 2n);
+  if (runtime !== 12n) throw new Error(`runtime argument path expected 12n, got ${runtime}`);
 }).catch(error => { console.error(error); process.exit(1); });
 ' "$TMP/program.wasm"
 
-printf '%s\n' 'conformance: wasm32 execution=42, x86_64 verified, aarch64 verified'
+printf '%s\n' 'conformance: wasm32 main=42, wasm32 score(-7,2)=12, x86_64 verified, aarch64 verified'

@@ -15,7 +15,7 @@
       (throw (ex-info "native instruction stream rejected" {:phase :verify :target target})))
     {:verified? true :instruction-bytes (count actual) :target target}))
 
-(defn verify-artifact! [{:keys [format target value code effects limits kir-sha256] :as kexe}]
+(defn verify-artifact! [{:keys [format target value code effects limits kir-sha256 lowering] :as kexe}]
   (when-not (= :kotoba.kexe/v1 format)
     (throw (ex-info "unknown artifact format" {:phase :verify})))
   (when-not (and (string? kir-sha256) (re-matches #"[0-9a-f]{64}" kir-sha256))
@@ -24,6 +24,8 @@
     (throw (ex-info "bootstrap native target admits no effects" {:phase :verify})))
   (when-not (= {:memory-bytes 0 :fuel 1 :stack-bytes 0} limits)
     (throw (ex-info "resource limits are not admitted" {:phase :verify :limits limits})))
+  (when-not (= :closed-program-specialization lowering)
+    (throw (ex-info "native lowering mode is not admitted" {:phase :verify :lowering lowering})))
   (when-not (and (vector? code) (<= 1 (count code) 64)
                  (every? #(and (integer? %) (<= 0 % 255)) code))
     (throw (ex-info "malformed code bytes" {:phase :verify})))

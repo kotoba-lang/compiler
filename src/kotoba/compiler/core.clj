@@ -13,15 +13,16 @@
     (throw (ex-info "unsupported target" {:target target :supported targets})))
   (let [hir (frontend/analyze source)
         kir (ir/lower hir)
-        value (second (first (:instructions (first (:blocks kir)))))]
+        value (:oracle-value kir)]
     (if (= target :wasm32-kotoba-v1)
-      {:format :wasm/v1 :target target :hir hir :kir kir :bytes (wasm/emit value)}
+      {:format :wasm/v1 :target target :hir hir :kir kir :bytes (wasm/emit kir)}
       (let [code ((case target
                     :x86_64-kotoba-v1 native/emit-x86-64
                     :aarch64-kotoba-v1 native/emit-aarch64) value)
             artifact (artifact/seal
                       {:format :kotoba.kexe/v1 :target target :value value
                        :kir-sha256 (artifact/sha256 kir)
+                       :lowering :closed-program-specialization
                        :effects #{} :limits {:memory-bytes 0 :fuel 1 :stack-bytes 0}
                        :code (mapv #(bit-and (int %) 0xff) code)})]
         (verifier/verify-artifact! artifact)

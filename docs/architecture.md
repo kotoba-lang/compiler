@@ -29,9 +29,10 @@ from `kotoba-lang/kotoba`, never by silently accepting unsupported forms.
 
 ## Current maturity
 
-The compiler is `experimental alpha`, not production-safe. Multiple pure
-functions, arguments, lexical `let`, `if`, integer arithmetic, and comparisons
-are admitted. The current KIR specializes the closed zero-argument program to a
-verified return value; runtime parameters, general control-flow machine code,
+The compiler is `experimental alpha`, not production-safe. KIR v3 retains
+multiple pure functions, runtime arguments, lexical `let`, `if`, integer
+arithmetic, comparisons, and direct calls. Wasm lowers that runtime KIR to real
+locals, calls, and structured control flow. Native v1 explicitly declares
+`:closed-program-specialization`; general native control-flow machine code,
 memory, effects, fuel instrumentation, and the W^X loader remain required before
 hostile execution can be considered.

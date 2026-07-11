@@ -59,9 +59,13 @@
 (defn lower [hir]
   (let [functions (into {} (map (juxt :name identity) (:functions hir)))
         value (eval-expr (:body (get functions (:entry hir))) {} functions (volatile! 0) [])]
-    {:format :kotoba.kir/v2
+    {:format :kotoba.kir/v3
      :entry (:entry hir)
      :signature {:params [] :result :i64}
      :effects (:effects hir)
-     :functions (mapv #(select-keys % [:name :params :result :effects]) (:functions hir))
+     ;; Runtime KIR retains executable expressions. :oracle-value is produced by
+     ;; the bounded evaluator for differential checks and specialized backends;
+     ;; it is not the Wasm code-generation input.
+     :functions (mapv #(select-keys % [:name :params :result :effects :body]) (:functions hir))
+     :oracle-value value
      :blocks [{:id 0 :instructions [[:const.i64 value] [:return]]}]}))

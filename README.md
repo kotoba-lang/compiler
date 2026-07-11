@@ -16,7 +16,8 @@ only policy-derived capability trampolines.
 
 The current experimental slice supports pure integer functions, parameters,
 direct calls, sequential `let`, `if`, arithmetic, and comparisons. It emits
-executable Wasm and verified return stubs for x86-64 and AArch64. KEXE seals its
+executable Wasm with real runtime parameters, locals, calls, and branches, plus
+verified specialized return stubs for x86-64 and AArch64. KEXE seals its
 target, KIR identity, effects, resource limits, and exact code bytes with
 SHA-256. Effectful calls, allocation, indirect control flow, and OS ABI emission
 fail closed until their verifier rules exist.
