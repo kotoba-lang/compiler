@@ -1,5 +1,5 @@
 {:format :kotoba.fuzz-baseline/v1
- :loader-source-sha256 "5520ba3262922fd26f4bf8b7296749295ed831f015656fc20ad47edaf9b72ff4"
+ :loader-source-sha256 "85aab0274e861d3e7f9c5dda6de5dcb92b1a2b21e427c797ea2bf991078c2b18"
  :min-cov 60
  :min-features 100
  :min-corpus 20}

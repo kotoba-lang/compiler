@@ -329,9 +329,10 @@ static void install_syscall_sandbox(void) {}
 
 static void probe_denied(const char *reason) {
   static const char prefix[] = "KEXE_TRAP {:kind :sandbox :reason :";
-  (void)write(STDERR_FILENO, prefix, sizeof(prefix) - 1);
-  (void)write(STDERR_FILENO, reason, strlen(reason));
-  (void)write(STDERR_FILENO, "}\n", 2);
+  ssize_t written = write(STDERR_FILENO, prefix, sizeof(prefix) - 1);
+  written = write(STDERR_FILENO, reason, strlen(reason));
+  written = write(STDERR_FILENO, "}\n", 2);
+  (void)written;
   _exit(124);
 }
 
