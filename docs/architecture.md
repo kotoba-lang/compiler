@@ -38,10 +38,17 @@ the compiler's `:read` error phase.
 The compiler is `experimental alpha`, not production-safe. KIR v3 retains
 multiple pure functions, runtime arguments, lexical `let`, `if`, integer
 arithmetic, comparisons, and direct calls. Wasm lowers that runtime KIR to real
-locals, calls, and structured control flow. Native v1 explicitly declares
-`:closed-program-specialization`; general native control-flow machine code,
-memory, effects, fuel instrumentation, and the W^X loader remain required before
-hostile execution can be considered.
+locals, calls, and structured control flow. Both native backends emit general
+verified control flow for this subset and execute through the supervised W^X
+loader. Memory allocation and a production-strength OS sandbox remain absent.
+
+KIR v3 also has a normative bounded reference executor
+(`kotoba.compiler.ir/execute`). All values are signed i64 bit patterns.
+Addition, subtraction, multiplication, and unary negation wrap modulo 2^64,
+matching Wasm i64 and both native ISAs. Invalid division traps, and each
+function entry consumes one unit of non-replenishable fuel. Conformance runs
+boundary vectors through Wasm and the host-native backend to detect semantic
+drift from this contract.
 
 x86-64 has subsequently advanced to `:runtime-sysv-v1`: each pure KIR function
 is an exported SysV integer function with a sealed offset/length/arity record.

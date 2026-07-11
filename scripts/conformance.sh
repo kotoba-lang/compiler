@@ -18,9 +18,12 @@ grep -q 'capability policy denies required effects' "$TMP/capability-deny.out"
 
 "$ROOT/bin/kotoba" -M compile "$ROOT/examples/structured.kotoba" --target wasm32 --output "$TMP/program.wasm"
 "$ROOT/bin/kotoba" -M compile "$ROOT/examples/fuel.kotoba" --target wasm32 --output "$TMP/fuel.wasm"
+"$ROOT/bin/kotoba" -M compile "$ROOT/examples/i64-semantics.kotoba" --target wasm32 --output "$TMP/i64.wasm"
 "$ROOT/bin/kotoba" -M compile "$ROOT/examples/structured.kotoba" --target x86_64 --output "$TMP/x86_64.kexe"
 "$ROOT/bin/kotoba" -M compile "$ROOT/examples/fuel.kotoba" --target x86_64 --output "$TMP/x86_64-fuel.kexe"
+"$ROOT/bin/kotoba" -M compile "$ROOT/examples/i64-semantics.kotoba" --target x86_64 --output "$TMP/x86_64-i64.kexe"
 "$ROOT/bin/kotoba" -M compile "$ROOT/examples/structured.kotoba" --target aarch64 --output "$TMP/aarch64.kexe"
+"$ROOT/bin/kotoba" -M compile "$ROOT/examples/i64-semantics.kotoba" --target aarch64 --output "$TMP/aarch64-i64.kexe"
 "$ROOT/bin/kotoba" -M verify "$TMP/x86_64.kexe"
 "$ROOT/bin/kotoba" -M verify "$TMP/x86_64-fuel.kexe"
 "$ROOT/bin/kotoba" -M verify "$TMP/aarch64.kexe"
@@ -74,6 +77,25 @@ WebAssembly.instantiate(fs.readFileSync(process.argv[1])).then(({instance}) => {
 }).catch(error => { console.error(error); process.exit(1); });
 ' "$TMP/fuel.wasm"
 printf '%s\n' 'conformance: Wasm finite recursion passed; infinite recursion fuel-trapped'
+
+node -e '
+const fs = require("fs");
+WebAssembly.instantiate(fs.readFileSync(process.argv[1])).then(({instance: {exports: e}}) => {
+  const vectors = [
+    ["add", [9223372036854775807n, 1n], -9223372036854775808n],
+    ["subtract", [-9223372036854775808n, 1n], 9223372036854775807n],
+    ["multiply", [9223372036854775807n, 2n], -2n],
+    ["negate", [-9223372036854775808n], -9223372036854775808n],
+    ["choose", [0n, 11n, 22n], 22n],
+    ["choose", [-1n, 11n, 22n], 11n]
+  ];
+  for (const [name, args, expected] of vectors) {
+    const got = e[name](...args);
+    if (got !== expected) throw new Error(`${name}: expected ${expected}, got ${got}`);
+  }
+}).catch(error => { console.error(error); process.exit(1); });
+' "$TMP/i64.wasm"
+printf '%s\n' 'conformance: Wasm normative i64 boundary vector passed'
 
 node -e '
 const fs = require("fs");
@@ -205,6 +227,12 @@ if [ "$(uname -s)-$(uname -m)" = "Linux-x86_64" ]; then
   native_expect_trap "$TMP/x86_64.kexe" x86_64 calc SIGFPE -9223372036854775808 -1
   native_check "$TMP/x86_64-fuel.kexe" x86_64 fact 3628800 10
   native_expect_trap "$TMP/x86_64-fuel.kexe" x86_64 forever SIGILL 0
+  native_check "$TMP/x86_64-i64.kexe" x86_64 add -9223372036854775808 9223372036854775807 1
+  native_check "$TMP/x86_64-i64.kexe" x86_64 subtract 9223372036854775807 -9223372036854775808 1
+  native_check "$TMP/x86_64-i64.kexe" x86_64 multiply -2 9223372036854775807 2
+  native_check "$TMP/x86_64-i64.kexe" x86_64 negate -9223372036854775808 -9223372036854775808
+  native_check "$TMP/x86_64-i64.kexe" x86_64 choose 22 0 11 22
+  native_check "$TMP/x86_64-i64.kexe" x86_64 choose 11 -1 11 22
   "$ROOT/bin/kotoba" -M compile "$ROOT/examples/capability.kotoba" --target x86_64 \
     --policy "$ROOT/examples/capability-policy.edn" --output "$TMP/x86_64-cap.kexe"
   "$ROOT/bin/kotoba" -M verify "$TMP/x86_64-cap.kexe"
@@ -230,6 +258,12 @@ case "$(uname -s)-$(uname -m)" in
     "$ROOT/bin/kotoba" -M verify "$TMP/aarch64-fuel.kexe"
     native_check "$TMP/aarch64-fuel.kexe" aarch64 fact 3628800 10
     native_expect_trap "$TMP/aarch64-fuel.kexe" aarch64 forever SIGTRAP 0
+    native_check "$TMP/aarch64-i64.kexe" aarch64 add -9223372036854775808 9223372036854775807 1
+    native_check "$TMP/aarch64-i64.kexe" aarch64 subtract 9223372036854775807 -9223372036854775808 1
+    native_check "$TMP/aarch64-i64.kexe" aarch64 multiply -2 9223372036854775807 2
+    native_check "$TMP/aarch64-i64.kexe" aarch64 negate -9223372036854775808 -9223372036854775808
+    native_check "$TMP/aarch64-i64.kexe" aarch64 choose 22 0 11 22
+    native_check "$TMP/aarch64-i64.kexe" aarch64 choose 11 -1 11 22
     "$ROOT/bin/kotoba" -M compile "$ROOT/examples/capability.kotoba" --target aarch64 \
       --policy "$ROOT/examples/capability-policy.edn" --output "$TMP/aarch64-cap.kexe"
     "$ROOT/bin/kotoba" -M verify "$TMP/aarch64-cap.kexe"

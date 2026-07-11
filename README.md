@@ -45,6 +45,11 @@ pointer; both charge every function entry before guest instructions. Their real
 call paths support bounded direct and mutual recursion through verified
 `CALL rel32` / `BL imm26` relocations.
 
+KIR v3 includes a normative fuel-bounded reference executor. Signed i64
+add/subtract/multiply wrap modulo 2^64; invalid division traps. CI compares
+boundary vectors with Wasm and the native ISA available on each runner, so
+compile-time validation cannot silently use different arithmetic semantics.
+
 The test gate generates a deterministic 100-program property corpus across
 arithmetic, comparisons, `if`, lexical `let`, and direct calls. Every program is
 compiled to all three targets; the gate requires identical KIR, deterministic

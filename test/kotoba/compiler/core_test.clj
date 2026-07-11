@@ -2,6 +2,7 @@
   (:require [clojure.test :refer [deftest is testing]]
             [kotoba.compiler.artifact :as artifact]
             [kotoba.compiler.core :as compiler]
+            [kotoba.compiler.ir :as ir]
             [kotoba.compiler.verifier :as verifier]))
 
 (def source "(ns demo) (defn main [] (+ 40 2))")
@@ -64,15 +65,31 @@
             (artifact/seal
              (assoc changed :kir-sha256 (artifact/sha256 (:program changed))))))))))
 
-(deftest recursion-and-overflow-are-bounded
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"call depth exhausted"
+(deftest recursion-and-i64-semantics-are-bounded
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"fuel-exhausted"
                         (compiler/compile-source
                          "(defn forever [x] (forever x)) (defn main [] (forever 0))"
                          :wasm32-kotoba-v1)))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"integer overflow"
-                        (compiler/compile-source
-                         "(defn main [] (+ 9223372036854775807 1))"
-                         :x86_64-kotoba-v1))))
+  (let [result (compiler/compile-source
+                "(defn main [] (+ 9223372036854775807 1))"
+                :x86_64-kotoba-v1)]
+    (is (= Long/MIN_VALUE (get-in result [:kir :oracle-value])))))
+
+(deftest normative-kir-execution-covers-runtime-exports
+  (let [kir (:kir (compiler/compile-source structured-source :wasm32-kotoba-v1))]
+    (is (= 12 (ir/execute kir 'score [-7 2])))
+    (is (= Long/MIN_VALUE
+           (ir/execute (:kir (compiler/compile-source
+                              "(defn wrap [x] (+ x 1)) (defn main [] 0)"
+                              :wasm32-kotoba-v1))
+                       'wrap [Long/MAX_VALUE])))
+    (is (= :division-by-zero
+           (:trap (ex-data (try (ir/execute
+                                 (:kir (compiler/compile-source
+                                        "(defn divide [x y] (quot x y)) (defn main [] 0)"
+                                        :wasm32-kotoba-v1))
+                                 'divide [1 0])
+                                (catch clojure.lang.ExceptionInfo error error))))))))
 
 (deftest wasm-recursion-is-fuel-bounded-and-native-fails-closed
   (let [source "(defn fact [n] (if (<= n 1) 1 (* n (fact (- n 1)))))

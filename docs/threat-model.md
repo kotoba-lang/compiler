@@ -19,6 +19,11 @@ Security invariants:
    reproducible builds, independent review, and OS process isolation remain
    required before hostile production execution.
 
+Arithmetic is specified independently of the JVM compiler host: i64
+add/subtract/multiply wrap modulo 2^64, while invalid signed division traps. A
+bounded KIR reference executor plus cross-backend boundary vectors guard against
+validation and execution assigning different meanings to the same program.
+
 Out of scope for the bootstrap: speculative-execution containment, a general
 garbage collector, threads, dynamic dispatch, FFI, and arbitrary Clojure.
 
