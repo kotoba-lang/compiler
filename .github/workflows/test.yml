@@ -17,6 +17,9 @@ jobs:
         with:
           cli: latest
       - run: clojure -M:test
+        env:
+          KOTOBA_FUZZ_SEED: "5426643073673934426"
+          KOTOBA_FUZZ_CASES: "1000"
       - run: |
           printf '(defn main [] (+ 40 2))\n' > /tmp/ci.kotoba
           bin/kotoba -M compile /tmp/ci.kotoba --target x86_64 --output /tmp/ci.kexe

@@ -67,3 +67,12 @@ Linux build IDs are disabled, while macOS uses the deterministic UUID produced
 for an identical output identity. This is not yet a hermetic or independently
 reproduced binary build; compromise of the host compiler remains in scope for
 the next supply-chain layer.
+
+The verifier boundary has a deterministic mutation-fuzz corpus. Mutators cover
+raw and attacker-resealed code changes, KIR identity/body divergence, exports,
+ABI offsets, limits, target/format confusion, signature statements and keys,
+receipt evidence, fuel accounting, unkeyed hash recomputation, and executor
+signatures. CI records the seed and case count; any unexpected exception type
+or accepted mutation fails the job and can be replayed from those values. This
+complements, but does not replace, coverage-guided native fuzzing or an
+independent audit.

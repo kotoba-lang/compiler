@@ -104,5 +104,14 @@ binary hash, and a hash of the C compiler identity. A source mismatch is denied
 before compilation, and the executor signature makes the runtime identity part
 of the receipt's output evidence.
 
+Security mutation fuzzing runs in every CI job with a recorded seed. It mutates
+sealed native artifacts (including attacker-resealed KIR/code/ABI fields),
+Ed25519 envelopes, and executor receipts, requiring every case to fail closed.
+A failure can be replayed locally:
+
+```bash
+KOTOBA_FUZZ_SEED=5426643073673934426 KOTOBA_FUZZ_CASES=1000 clojure -M:test
+```
+
 See [docs/architecture.md](docs/architecture.md) and
 [docs/threat-model.md](docs/threat-model.md).
