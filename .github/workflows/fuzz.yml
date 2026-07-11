@@ -1,0 +1,34 @@
+name: long-fuzz
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: "libFuzzer duration in seconds"
+        required: false
+        default: "300"
+
+permissions:
+  contents: read
+
+jobs:
+  native-parser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run coverage-guided native parser fuzzing
+        env:
+          KOTOBA_NATIVE_FUZZ_SECONDS: ${{ inputs.seconds || '300' }}
+          KOTOBA_FUZZ_ARTIFACT_DIR: fuzz-results
+        run: scripts/fuzz-native.sh
+      - name: Preserve evolved corpus and crash inputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-parser-fuzz-${{ github.run_id }}
+          path: fuzz-results
+          if-no-files-found: error
+          retention-days: 30

@@ -124,5 +124,11 @@ corpus with ASan/UBSan enabled. macOS CI runs 20,000 deterministic sanitized
 mutations of the identical harness because the current Xcode image does not
 ship its libFuzzer runtime.
 
+A separate `long-fuzz` workflow runs the Linux coverage-guided harness for five
+minutes every Monday and can be started manually with a custom duration. It
+uploads the evolved corpus plus any `crash-*`, `timeout-*`, or `leak-*` inputs
+for 30 days even when fuzzing fails, so findings remain reproducible rather than
+being lost with the runner.
+
 See [docs/architecture.md](docs/architecture.md) and
 [docs/threat-model.md](docs/threat-model.md).

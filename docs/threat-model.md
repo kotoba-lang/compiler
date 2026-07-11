@@ -99,3 +99,10 @@ the same entry point with a deterministic xorshift driver under ASan/UBSan
 because its Xcode toolchain advertises but does not ship the libFuzzer runtime.
 Both modes run 20,000 cases per job; Linux additionally evolves inputs from
 coverage feedback.
+
+The weekly and manually dispatched `long-fuzz` workflow uses libFuzzer's wall
+time limit rather than a fixed run count. Its temporary working corpus is copied
+out on every exit, and GitHub Actions uploads it together with libFuzzer crash,
+timeout, and leak artifacts even for failed runs. Artifacts are retained for 30
+days. Promoting useful evolved inputs into the reviewed repository corpus is a
+deliberate human change; CI never commits unreviewed bytes automatically.
