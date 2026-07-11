@@ -55,6 +55,10 @@
                   (emit-expr then env ctx) [0x05]
                   (emit-expr else env ctx) [0x0b]))
 
+        (= op 'cap-call)
+        (let [[cap-id value] args]
+          (concat [0x42] (sleb cap-id) (emit-expr value env ctx) [0x10 0]))
+
         (contains? '#{+ - * quot} op)
         (let [opcode ({'+ 0x7c '- 0x7d '* 0x7e 'quot 0x7f} op)]
           (if (and (= op '-) (= 1 (count args)))
@@ -89,9 +93,16 @@
 
 (defn emit [kir]
   (let [functions (:functions kir)
-        indices (into {} (map-indexed (fn [i f] [(:name f) i]) functions))
-        types (concat (uleb (count functions)) (mapcat function-type functions))
-        function-sec (concat (uleb (count functions)) (mapcat uleb (range (count functions))))
+        has-cap? (contains? (set (map first (:effects kir))) :cap/call)
+        shift (if has-cap? 1 0)
+        indices (into {} (map-indexed (fn [i f] [(:name f) (+ i shift)]) functions))
+        cap-type [0x60 2 0x7e 0x7e 1 0x7e]
+        types (concat (uleb (+ (count functions) shift))
+                      (when has-cap? cap-type) (mapcat function-type functions))
+        import-sec (when has-cap?
+                     (concat [1] (name-bytes "kotoba:cap") (name-bytes "call") [0 0]))
+        function-sec (concat (uleb (count functions))
+                             (mapcat uleb (range shift (+ shift (count functions)))))
         ;; (global (mut i64) (i64.const 256)); low enough to trap before the
         ;; host call stack becomes the limiting resource.
         global-sec [1 0x7e 1 0x42 0x80 0x02 0x0b]
@@ -99,12 +110,14 @@
         ;; runtime parameters observable and testable without host authority.
         export-sec (concat (uleb (count functions))
                            (mapcat (fn [[index function]]
-                                     (concat (name-bytes (name (:name function))) [0] (uleb index)))
+                                     (concat (name-bytes (name (:name function))) [0]
+                                             (uleb (+ index shift))))
                                    (map-indexed vector functions)))
         code-sec (concat (uleb (count functions))
                          (mapcat #(function-body % indices) functions))]
     (byte-array
      (map unchecked-byte
           (concat [0 0x61 0x73 0x6d 1 0 0 0]
-                  (section 1 types) (section 3 function-sec) (section 6 global-sec)
+                  (section 1 types) (when has-cap? (section 2 import-sec))
+                  (section 3 function-sec) (section 6 global-sec)
                   (section 7 export-sec) (section 10 code-sec))))))

@@ -16,17 +16,20 @@
    (let [hir (frontend/analyze source)]
      {:hir hir :admission (admission/check hir policy)})))
 
-(defn compile-source [source target]
-  (when-not (contains? targets target)
-    (throw (ex-info "unsupported target" {:target target :supported targets})))
-  (let [hir (frontend/analyze source)
-        _ (when (seq (:effects hir))
-            (throw (ex-info "effectful code is admitted only after a capability trampoline backend exists"
-                            {:phase :codegen :effects (:effects hir)})))
+(defn compile-source
+  ([source target] (compile-source source target {}))
+  ([source target policy]
+   (when-not (contains? targets target)
+     (throw (ex-info "unsupported target" {:target target :supported targets})))
+   (let [hir (frontend/analyze source)
+        admission (admission/check hir policy)
+        _ (when (and (seq (:effects hir)) (not= target :wasm32-kotoba-v1))
+            (throw (ex-info "native capability trampoline backend is not implemented"
+                            {:phase :codegen :target target :effects (:effects hir)})))
         kir (ir/lower hir)
         value (:oracle-value kir)]
     (if (= target :wasm32-kotoba-v1)
-      {:format :wasm/v1 :target target :hir hir :kir kir
+      {:format :wasm/v1 :target target :hir hir :kir kir :admission admission
        :limits {:fuel 256 :replenishable? false} :bytes (wasm/emit kir)}
       (let [emitted ((case target
                        :x86_64-kotoba-v1 x86-64/emit-program
@@ -49,4 +52,5 @@
                        :code (mapv #(bit-and (int %) 0xff) code)
                        :program program :exports (:exports emitted)})]
         (verifier/verify-artifact! artifact)
-        {:format :kexe/v1 :target target :hir hir :kir kir :artifact artifact}))))
+        {:format :kexe/v1 :target target :hir hir :kir kir
+         :admission admission :artifact artifact})))))

@@ -16,7 +16,7 @@ case "${1-}" in
   -M:compiler|-M:compile) shift ;;
   -h|--help|"")
     printf '%s\n' \
-      'usage: kotoba -M compile <file> --target wasm32|x86_64|aarch64 --output <file>' \
+      'usage: kotoba -M compile <file> --target wasm32|x86_64|aarch64 [--policy policy.edn] --output <file>' \
       '       kotoba -M check <file> [--policy policy.edn]' \
       '       kotoba -M verify <file>'
     exit 0

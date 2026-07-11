@@ -24,7 +24,9 @@
     "compile"
     (let [input (second args) target (parse-target (or (option args "--target") "wasm32"))
           output (or (option args "--output") (str input (if (= target :wasm32-kotoba-v1) ".wasm" ".kexe")))
-          result (compiler/compile-source (slurp input) target)]
+          policy-path (option args "--policy")
+          policy (if policy-path (edn/read-string (slurp policy-path)) {})
+          result (compiler/compile-source (slurp input) target policy)]
       (if (= :wasm/v1 (:format result))
         (with-open [out (io/output-stream output)] (.write out ^bytes (:bytes result)))
         (spit output (pr-str (:artifact result))))

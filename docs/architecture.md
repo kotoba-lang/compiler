@@ -44,11 +44,11 @@ table equality. The Linux conformance loader enforces RW -> RX transition and
 executes runtime arguments. This seal is an integrity binding, not publisher
 authentication; signed package admission remains a separate required layer.
 
-AArch64 now uses the equivalent `:runtime-aapcs64-v1` contract. Parameters are
-captured from x0..x6 into bounded caller-saved temporaries, all user calls are
-purely inlined, stack temporaries preserve 16-byte alignment, and every branch
-target is emitted on a four-byte instruction boundary. The same sealed-export
-and re-lowering checks apply to both native targets.
+AArch64 uses the equivalent `:runtime-aapcs64-v1` contract. Parameters are
+captured into the preserved x19..x23 bank, calls use verified `BL` relocations,
+stack temporaries preserve 16-byte alignment, and every branch target is emitted
+on a four-byte instruction boundary. The same sealed-export and re-lowering
+checks apply to both native targets.
 
 Signed division has an explicit cross-backend trap contract. Wasm `i64.div_s`
 and x86-64 `IDIV` already trap on zero and `MIN_VALUE / -1`; AArch64 `SDIV`
@@ -62,8 +62,8 @@ Every function body begins with an unconditional zero-check and decrement, so
 direct and mutual recursive calls cannot bypass accounting. Guest code cannot
 import, export, or replenish the counter. Conformance executes factorial and an
 unbounded recursive function, requiring the former to return and the latter to
-trap. Native recursive lowering remains fail-closed until the corresponding
-hidden fuel register/context ABI is implemented.
+trap. Native backends enforce the corresponding hidden fuel context described
+below.
 
 x86-64 now implements that ABI as `:hidden-context-r9`: the sixth SysV integer
 register is removed from the source ABI and carries a loader-owned pointer to a
@@ -89,5 +89,12 @@ uses the union across all functions, not only `main` reachability.
 Policy is deny-by-default: `{:allow #{...}}`. Admission reports missing effects,
 the exact minimal policy, and unused grants. This stage deliberately separates
 authority analysis from execution: effectful code passes `kotoba -M check` only
-with policy but `compile` still rejects it until a capability-checked trampoline
-exists on every backend.
+with policy, and each backend must independently provide a capability-checked
+trampoline before accepting it.
+
+Wasm now implements the first trampoline as one typed import:
+`kotoba:cap/call(i64 cap-id, i64 value) -> i64`. The compiler emits only IDs
+already present in inferred effects and admitted policy. The runtime host still
+intersects its local allow set on every invocation; compile-time admission is
+never treated as runtime authority. Native effectful code remains rejected
+until the equivalent context-table call is independently verifiable.

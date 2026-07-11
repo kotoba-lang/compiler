@@ -58,7 +58,9 @@
 
 (defn lower [hir]
   (let [functions (into {} (map (juxt :name identity) (:functions hir)))
-        value (eval-expr (:body (get functions (:entry hir))) {} functions (volatile! 0) [])]
+        ;; Effectful results are host-dependent and cannot be constant-oracled.
+        value (when (empty? (:effects hir))
+                (eval-expr (:body (get functions (:entry hir))) {} functions (volatile! 0) []))]
     {:format :kotoba.kir/v3
      :entry (:entry hir)
      :signature {:params [] :result :i64}
@@ -68,4 +70,6 @@
      ;; it is not the Wasm code-generation input.
      :functions (mapv #(select-keys % [:name :params :result :effects :body]) (:functions hir))
      :oracle-value value
-     :blocks [{:id 0 :instructions [[:const.i64 value] [:return]]}]}))
+     :blocks (if (some? value)
+               [{:id 0 :instructions [[:const.i64 value] [:return]]}]
+               [])}))

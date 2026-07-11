@@ -13,6 +13,8 @@ if "$ROOT/bin/kotoba" -M check "$ROOT/examples/capability.kotoba" >"$TMP/capabil
   exit 1
 fi
 grep -q 'capability policy denies required effects' "$TMP/capability-deny.out"
+"$ROOT/bin/kotoba" -M compile "$ROOT/examples/capability.kotoba" --target wasm32 \
+  --policy "$ROOT/examples/capability-policy.edn" --output "$TMP/capability.wasm"
 
 "$ROOT/bin/kotoba" -M compile "$ROOT/examples/structured.kotoba" --target wasm32 --output "$TMP/program.wasm"
 "$ROOT/bin/kotoba" -M compile "$ROOT/examples/fuel.kotoba" --target wasm32 --output "$TMP/fuel.wasm"
@@ -52,6 +54,26 @@ WebAssembly.instantiate(fs.readFileSync(process.argv[1])).then(({instance}) => {
 }).catch(error => { console.error(error); process.exit(1); });
 ' "$TMP/fuel.wasm"
 printf '%s\n' 'conformance: Wasm finite recursion passed; infinite recursion fuel-trapped'
+
+node -e '
+const fs = require("fs");
+const bytes = fs.readFileSync(process.argv[1]);
+const allow = new Set([7n]);
+WebAssembly.instantiate(bytes, {"kotoba:cap": {call(cap, value) {
+  if (!allow.has(cap)) throw new Error(`capability denied: ${cap}`);
+  return value + 1n;
+}}}).then(({instance}) => {
+  if (instance.exports.helper(41n) !== 42n) throw new Error("capability trampoline mismatch");
+  return WebAssembly.instantiate(bytes, {"kotoba:cap": {call() {
+    throw new Error("runtime capability denied");
+  }}});
+}).then(({instance}) => {
+  let denied = false;
+  try { instance.exports.helper(41n); } catch (error) { denied = /runtime capability denied/.test(error.message); }
+  if (!denied) throw new Error("runtime policy denial was bypassed");
+}).catch(error => { console.error(error); process.exit(1); });
+' "$TMP/capability.wasm"
+printf '%s\n' 'conformance: Wasm capability trampoline allowed and denied paths passed'
 
 native_check() {
   ARTIFACT=$1

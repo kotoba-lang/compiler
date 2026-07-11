@@ -53,12 +53,15 @@ mutation.
 `cap-call` accepts only a literal ID in `[0,255]`; effects propagate through the
 full function-call graph, including cycles and lexical bindings. Admission is
 deny-by-default and covers every exported function, returns a least-privilege
-policy, and reports unused grants. Effectful machine-code emission remains
-fail-closed until the common Wasm/native trampoline ABI lands.
+policy, and reports unused grants. Wasm lowers admitted calls to the sole
+`kotoba:cap/call(i64,i64)->i64` import; the host rechecks policy on every call.
+Native effectful emission remains fail-closed until its context-table ABI lands.
 
 ```bash
 kotoba -M check examples/capability.kotoba \
   --policy examples/capability-policy.edn
+kotoba -M compile examples/capability.kotoba --target wasm32 \
+  --policy examples/capability-policy.edn --output capability.wasm
 ```
 
 After putting `bin/kotoba` on `PATH`, the public command is simply

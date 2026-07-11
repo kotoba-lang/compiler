@@ -28,13 +28,19 @@
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"malformed capability policy"
                         (compiler/check-source effect-source {:allow #{[:cap/call 999]}}))))
 
-(deftest dynamic-capability-identifiers-and-codegen-fail-closed
+(deftest dynamic-capability-identifiers-and-native-codegen-fail-closed
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"literal capability id"
                         (compiler/check-source
                          "(defn f [cap x] (cap-call cap x)) (defn main [] 0)"
                          {:allow #{[:cap/call 7]}})))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"capability trampoline"
-                        (compiler/compile-source effect-source :wasm32-kotoba-v1))))
+  (let [wasm (compiler/compile-source effect-source :wasm32-kotoba-v1
+                                      {:allow #{[:cap/call 7]}})]
+    (is (= #{[:cap/call 7]} (get-in wasm [:admission :required])))
+    (is (= [0 97 115 109] (mapv #(bit-and (int %) 0xff) (take 4 (:bytes wasm))))))
+  (doseq [target [:x86_64-kotoba-v1 :aarch64-kotoba-v1]]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"native capability trampoline"
+                          (compiler/compile-source effect-source target
+                                                   {:allow #{[:cap/call 7]}})))))
 
 (deftest mutual-call-effects-reach-fixpoint
   (let [source "(defn left [x] (if (= x 0) (cap-call 3 x) (right (- x 1))))
