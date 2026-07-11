@@ -70,6 +70,36 @@ static void trap_handler(int signal_number) {
   _exit(120);
 }
 
+/* Keep post-sandbox output independent of libc stdio's lazy initialization. */
+static void write_i64(int64_t value) {
+  char buffer[32];
+  size_t cursor = sizeof(buffer);
+  uint64_t magnitude;
+  buffer[--cursor] = '\n';
+  if (value < 0) {
+    /* This form is defined for INT64_MIN. */
+    magnitude = (uint64_t)(-(value + 1)) + 1;
+  } else {
+    magnitude = (uint64_t)value;
+  }
+  do {
+    buffer[--cursor] = (char)('0' + magnitude % 10);
+    magnitude /= 10;
+  } while (magnitude != 0);
+  if (value < 0) buffer[--cursor] = '-';
+
+  size_t remaining = sizeof(buffer) - cursor;
+  while (remaining != 0) {
+    ssize_t written = write(STDOUT_FILENO, buffer + cursor, remaining);
+    if (written < 0) {
+      if (errno == EINTR) continue;
+      _exit(121);
+    }
+    cursor += (size_t)written;
+    remaining -= (size_t)written;
+  }
+}
+
 static void install_limits(void) {
   struct rlimit limit;
   limit.rlim_cur = limit.rlim_max = 0;
@@ -205,7 +235,7 @@ int main(int argc, char **argv) {
     result = fn(args[0], args[1], args[2], args[3], args[4], 0, 0,
                 (int64_t)(uintptr_t)&context);
   }
-  printf("%" PRId64 "\n", result);
+  write_i64(result);
 
   if (munmap(memory, mapped) != 0) fail("munmap");
   return 0;
