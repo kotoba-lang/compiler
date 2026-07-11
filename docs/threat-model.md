@@ -21,3 +21,9 @@ Security invariants:
 
 Out of scope for the bootstrap: speculative-execution containment, a general
 garbage collector, threads, dynamic dispatch, FFI, and arbitrary Clojure.
+
+The conformance loader is a separate process with core dumps disabled, a
+one-second CPU limit, a 64 MiB address-space limit on Linux, 1 MiB stack limit, and a
+two-second wall alarm. Fatal arithmetic and memory signals become a structured
+`KEXE_TRAP` failure. This is defense in depth for testing; it is not yet the
+full aiueos namespace/seccomp/Landlock production sandbox.

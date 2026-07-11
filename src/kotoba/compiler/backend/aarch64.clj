@@ -16,11 +16,30 @@
   (insn (bit-or 0xf2800000 (bit-shift-left (quot shift 16) 21)
                 (bit-shift-left (bit-and imm 0xffff) 5) rd)))
 
-(defn- load-constant [value]
-  (vec (concat (movz 0 value 0)
-               (movk 0 (unsigned-bit-shift-right value 16) 16)
-               (movk 0 (unsigned-bit-shift-right value 32) 32)
-               (movk 0 (unsigned-bit-shift-right value 48) 48))))
+(defn- load-constant-reg [rd value]
+  (vec (concat (movz rd value 0)
+               (movk rd (unsigned-bit-shift-right value 16) 16)
+               (movk rd (unsigned-bit-shift-right value 32) 32)
+               (movk rd (unsigned-bit-shift-right value 48) 48))))
+
+(defn- load-constant [value] (load-constant-reg 0 value))
+
+(defn- b-ne [byte-offset]
+  (insn (bit-or 0x54000001
+                (bit-shift-left (bit-and (quot byte-offset 4) 0x7ffff) 5))))
+
+(def ^:private signed-division
+  (concat
+   (insn 0xb5000041)                         ; cbnz x1,+8
+   (insn 0xd4200000)                         ; brk #0 (division by zero)
+   (load-constant-reg 2 Long/MIN_VALUE)
+   (insn 0xeb02001f)                         ; cmp x0,x2
+   (b-ne 32)                                 ; not MIN_VALUE -> sdiv
+   (load-constant-reg 2 -1)
+   (insn 0xeb02003f)                         ; cmp x1,x2
+   (b-ne 8)                                  ; divisor != -1 -> sdiv
+   (insn 0xd4200000)                         ; brk #0 (signed overflow)
+   (insn 0x9ac10c00)))                       ; sdiv x0,x0,x1
 
 (defn- expand-expr [form env functions stack]
   (cond
@@ -92,7 +111,10 @@
                                  + (insn 0x8b010000)      ; add x0,x0,x1
                                  - (insn 0xcb010000)      ; sub x0,x0,x1
                                  * (insn 0x9b017c00)      ; mul x0,x0,x1
-                                 quot (insn 0x9ac10c00))))) ; sdiv x0,x0,x1
+                                 ;; Unlike Wasm and x86 IDIV, AArch64 SDIV
+                                 ;; returns zero for divisor zero. Guard it so
+                                 ;; all backends share trapping semantics.
+                                 quot signed-division))))
                 (emit-expr (first args) env) (rest args))
 
         (contains? '#{= < > <= >=} op)

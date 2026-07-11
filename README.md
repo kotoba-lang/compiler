@@ -31,7 +31,9 @@ scripts/conformance.sh
 
 On x86-64 Linux and AArch64 macOS/Linux, `scripts/conformance.sh` additionally compiles the small
 auditable loader in `tools/kexe_loader.c`, maps verified code RW, transitions it
-to RX with `mprotect`, and executes `score(-7, 2)`. No RWX mapping is created.
+to RX with `mprotect`, and executes a runtime arithmetic/comparison vector. No
+RWX mapping is created. Zero division and signed-division overflow must trap on
+all three backends; loader resource limits keep native traps outside the compiler.
 
 After putting `bin/kotoba` on `PATH`, the public command is simply
 `kotoba -M ...`. The bootstrap currently uses Clojure internally, but that is

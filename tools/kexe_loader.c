@@ -6,7 +6,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
+#include <signal.h>
 #include <unistd.h>
 
 typedef int64_t (*kexe_fn6)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t);
@@ -14,6 +16,39 @@ typedef int64_t (*kexe_fn6)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t
 static void fail(const char *message) {
   fprintf(stderr, "kexe-loader: %s: %s\n", message, strerror(errno));
   exit(1);
+}
+
+static void trap_handler(int signal_number) {
+  static const char prefix[] = "KEXE_TRAP signal\n";
+  (void)signal_number;
+  (void)write(STDERR_FILENO, prefix, sizeof(prefix) - 1);
+  _exit(120);
+}
+
+static void install_limits(void) {
+  struct rlimit limit;
+  limit.rlim_cur = limit.rlim_max = 0;
+  if (setrlimit(RLIMIT_CORE, &limit) != 0) fail("setrlimit core");
+  limit.rlim_cur = 1;
+  limit.rlim_max = 2;
+  if (setrlimit(RLIMIT_CPU, &limit) != 0) fail("setrlimit cpu");
+#if !defined(__APPLE__)
+  limit.rlim_cur = limit.rlim_max = 64u * 1024u * 1024u;
+  if (setrlimit(RLIMIT_AS, &limit) != 0) fail("setrlimit address-space");
+#endif
+  limit.rlim_cur = limit.rlim_max = 1024u * 1024u;
+  if (setrlimit(RLIMIT_STACK, &limit) != 0) fail("setrlimit stack");
+
+  struct sigaction action;
+  memset(&action, 0, sizeof(action));
+  action.sa_handler = trap_handler;
+  sigemptyset(&action.sa_mask);
+  action.sa_flags = SA_RESETHAND;
+  const int signals[] = {SIGILL, SIGTRAP, SIGFPE, SIGBUS, SIGSEGV, SIGXCPU, SIGALRM};
+  for (size_t i = 0; i < sizeof(signals) / sizeof(signals[0]); i++) {
+    if (sigaction(signals[i], &action, NULL) != 0) fail("sigaction");
+  }
+  alarm(2);
 }
 
 int main(int argc, char **argv) {
@@ -26,6 +61,7 @@ int main(int argc, char **argv) {
   if (!end || *end) return 2;
   unsigned long arity = strtoul(argv[3], &end, 10);
   if (!end || *end || arity > 6 || argc != (int)(4 + arity)) return 2;
+  install_limits();
 
   FILE *file = fopen(argv[1], "rb");
   if (!file) fail("open");

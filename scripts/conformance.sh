@@ -22,6 +22,12 @@ WebAssembly.instantiate(fs.readFileSync(process.argv[1])).then(({instance}) => {
   if (instance.exports.calc(20n, 4n) !== 21n) throw new Error("calc mismatch");
   if (instance.exports.relations(7n, 3n) !== 10n) throw new Error("relations gt mismatch");
   if (instance.exports.relations(3n, 3n) !== 13n) throw new Error("relations eq mismatch");
+  let zeroTrap = false;
+  try { instance.exports.calc(20n, 0n); } catch (error) { zeroTrap = error instanceof WebAssembly.RuntimeError; }
+  if (!zeroTrap) throw new Error("Wasm zero division did not trap");
+  let overflowTrap = false;
+  try { instance.exports.calc(-9223372036854775808n, -1n); } catch (error) { overflowTrap = error instanceof WebAssembly.RuntimeError; }
+  if (!overflowTrap) throw new Error("Wasm signed division overflow did not trap");
 }).catch(error => { console.error(error); process.exit(1); });
 ' "$TMP/program.wasm"
 
@@ -38,12 +44,29 @@ native_check() {
   [ "$GOT" = "$EXPECTED" ] || { echo "native $ISA $SYMBOL expected $EXPECTED, got $GOT" >&2; exit 1; }
 }
 
+native_expect_trap() {
+  ARTIFACT=$1
+  ISA=$2
+  SYMBOL=$3
+  shift 3
+  META=$("$ROOT/bin/kotoba" -M extract-native "$ARTIFACT" --symbol "$SYMBOL" --output "$TMP/$ISA-$SYMBOL-trap.bin")
+  OFFSET=$(printf '%s' "$META" | sed -n 's/.*:offset \([0-9][0-9]*\).*/\1/p')
+  ARITY=$#
+  if "$TMP/kexe-loader" "$TMP/$ISA-$SYMBOL-trap.bin" "$OFFSET" "$ARITY" "$@" >"$TMP/trap.out" 2>"$TMP/trap.err"; then
+    echo "native $ISA $SYMBOL unexpectedly returned instead of trapping" >&2
+    exit 1
+  fi
+  grep -q '^KEXE_TRAP signal$' "$TMP/trap.err"
+}
+
 if [ "$(uname -s)-$(uname -m)" = "Linux-x86_64" ]; then
   cc -std=c11 -O2 -Wall -Wextra -Werror "$ROOT/tools/kexe_loader.c" -o "$TMP/kexe-loader"
   native_check "$TMP/x86_64.kexe" x86_64 score 12 -7 2
   native_check "$TMP/x86_64.kexe" x86_64 calc 21 20 4
   native_check "$TMP/x86_64.kexe" x86_64 relations 10 7 3
   native_check "$TMP/x86_64.kexe" x86_64 relations 13 3 3
+  native_expect_trap "$TMP/x86_64.kexe" x86_64 calc 20 0
+  native_expect_trap "$TMP/x86_64.kexe" x86_64 calc -9223372036854775808 -1
   printf '%s\n' 'conformance: native x86_64 runtime vector passed under W^X loader'
 fi
 
@@ -54,6 +77,8 @@ case "$(uname -s)-$(uname -m)" in
     native_check "$TMP/aarch64.kexe" aarch64 calc 21 20 4
     native_check "$TMP/aarch64.kexe" aarch64 relations 10 7 3
     native_check "$TMP/aarch64.kexe" aarch64 relations 13 3 3
+    native_expect_trap "$TMP/aarch64.kexe" aarch64 calc 20 0
+    native_expect_trap "$TMP/aarch64.kexe" aarch64 calc -9223372036854775808 -1
     printf '%s\n' 'conformance: native aarch64 runtime vector passed under W^X loader'
     ;;
 esac

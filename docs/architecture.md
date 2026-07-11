@@ -49,3 +49,8 @@ captured from x0..x6 into bounded caller-saved temporaries, all user calls are
 purely inlined, stack temporaries preserve 16-byte alignment, and every branch
 target is emitted on a four-byte instruction boundary. The same sealed-export
 and re-lowering checks apply to both native targets.
+
+Signed division has an explicit cross-backend trap contract. Wasm `i64.div_s`
+and x86-64 `IDIV` already trap on zero and `MIN_VALUE / -1`; AArch64 `SDIV`
+does neither, so the AArch64 emitter inserts divisor and overflow guards ending
+in `BRK`. Conformance requires all three backends to reject both cases.
