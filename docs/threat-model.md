@@ -33,3 +33,10 @@ contains a fixed 256-bit bitmap and one callback slot. A literal cap ID selects
 one bit; it cannot influence the callback address. Both generated code and the
 callback reject a missing bit. The conformance loader materializes the bitmap
 from an explicit allow list and tests allowed and empty-policy executions.
+
+On Linux, the loader sets `no_new_privs` and installs a seccomp-BPF filter after
+loading and changing code to RX but before guest entry. The allowlist contains
+only process exit, structured signal handling, output, unmapping, and minimal
+libc bookkeeping calls. Filesystem, network, process creation, and arbitrary
+syscalls trap as `SIGSYS`. CI deliberately attempts to open `/etc/passwd` after
+filter installation and requires a structured `KEXE_TRAP`.

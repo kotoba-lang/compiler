@@ -136,8 +136,21 @@ native_cap_check() {
   grep -q '^KEXE_TRAP signal$' "$TMP/cap-deny.err"
 }
 
+native_sandbox_probe() {
+  ARTIFACT=$1 ISA=$2
+  META=$("$ROOT/bin/kotoba" -M extract-native "$ARTIFACT" --symbol main --output "$TMP/$ISA-sandbox.bin")
+  OFFSET=$(printf '%s' "$META" | sed -n 's/.*:offset \([0-9][0-9]*\).*/\1/p')
+  if KEXE_SANDBOX_PROBE=1 "$TMP/kexe-loader" "$TMP/$ISA-sandbox.bin" "$OFFSET" 0 "$ISA" - \
+       >"$TMP/sandbox-probe.out" 2>"$TMP/sandbox-probe.err"; then
+    echo "native $ISA sandbox allowed forbidden filesystem access" >&2
+    exit 1
+  fi
+  grep -q '^KEXE_TRAP signal$' "$TMP/sandbox-probe.err"
+}
+
 if [ "$(uname -s)-$(uname -m)" = "Linux-x86_64" ]; then
   cc -std=c11 -O2 -Wall -Wextra -Werror "$ROOT/tools/kexe_loader.c" -o "$TMP/kexe-loader"
+  native_sandbox_probe "$TMP/x86_64.kexe" x86_64
   native_check "$TMP/x86_64.kexe" x86_64 score 12 -7 2
   native_check "$TMP/x86_64.kexe" x86_64 calc 21 20 4
   native_check "$TMP/x86_64.kexe" x86_64 relations 10 7 3

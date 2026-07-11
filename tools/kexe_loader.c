@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include <errno.h>
+#include <fcntl.h>
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -10,6 +11,15 @@
 #include <sys/stat.h>
 #include <signal.h>
 #include <unistd.h>
+
+#if defined(__linux__)
+#include <linux/audit.h>
+#include <linux/filter.h>
+#include <linux/seccomp.h>
+#include <stddef.h>
+#include <sys/prctl.h>
+#include <sys/syscall.h>
+#endif
 
 typedef int64_t (*kexe_fn6)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t);
 typedef int64_t (*kexe_fn8)(int64_t, int64_t, int64_t, int64_t,
@@ -79,12 +89,57 @@ static void install_limits(void) {
   action.sa_handler = trap_handler;
   sigemptyset(&action.sa_mask);
   action.sa_flags = SA_RESETHAND;
-  const int signals[] = {SIGILL, SIGTRAP, SIGFPE, SIGBUS, SIGSEGV, SIGXCPU, SIGALRM};
+  const int signals[] = {SIGILL, SIGTRAP, SIGFPE, SIGBUS, SIGSEGV, SIGXCPU, SIGALRM
+#if defined(SIGSYS)
+                         , SIGSYS
+#endif
+  };
   for (size_t i = 0; i < sizeof(signals) / sizeof(signals[0]); i++) {
     if (sigaction(signals[i], &action, NULL) != 0) fail("sigaction");
   }
   alarm(2);
 }
+
+#if defined(__linux__)
+#define ALLOW_SYSCALL(number) \
+  BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, (number), 0, 1), \
+  BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW)
+
+static void install_syscall_sandbox(void) {
+#if defined(__x86_64__)
+  const uint32_t expected_arch = AUDIT_ARCH_X86_64;
+#elif defined(__aarch64__)
+  const uint32_t expected_arch = AUDIT_ARCH_AARCH64;
+#else
+#error "unsupported Linux architecture for KEXE seccomp"
+#endif
+  struct sock_filter filter[] = {
+      BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch)),
+      BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, expected_arch, 1, 0),
+      BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS),
+      BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
+      ALLOW_SYSCALL(__NR_write),
+      ALLOW_SYSCALL(__NR_exit),
+      ALLOW_SYSCALL(__NR_exit_group),
+      ALLOW_SYSCALL(__NR_rt_sigreturn),
+      ALLOW_SYSCALL(__NR_rt_sigprocmask),
+      ALLOW_SYSCALL(__NR_getpid),
+      ALLOW_SYSCALL(__NR_gettid),
+      ALLOW_SYSCALL(__NR_tgkill),
+      ALLOW_SYSCALL(__NR_munmap),
+      ALLOW_SYSCALL(__NR_brk),
+      BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_TRAP),
+  };
+  struct sock_fprog program = {
+      .len = (unsigned short)(sizeof(filter) / sizeof(filter[0])),
+      .filter = filter,
+  };
+  if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) fail("no_new_privs");
+  if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &program) != 0) fail("seccomp");
+}
+#else
+static void install_syscall_sandbox(void) {}
+#endif
 
 int main(int argc, char **argv) {
   if (argc < 6 || argc > 11) {
@@ -131,6 +186,15 @@ int main(int argc, char **argv) {
       .version = 1, .fuel = 256, .allow = {0, 0, 0, 0},
       .cap_call = checked_cap_call};
   if (parse_allow(argv[5], context.allow) != 0) return 2;
+  install_syscall_sandbox();
+  if (getenv("KEXE_SANDBOX_PROBE") != NULL) {
+    int probe = open("/etc/passwd", O_RDONLY);
+    if (probe >= 0) {
+      (void)close(probe);
+      fprintf(stderr, "kexe-loader: sandbox probe unexpectedly opened a file\n");
+      return 3;
+    }
+  }
   int64_t result;
   if (strcmp(isa, "x86_64") == 0) {
     kexe_fn6 fn = (kexe_fn6)((uint8_t *)memory + offset);
