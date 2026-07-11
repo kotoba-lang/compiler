@@ -167,17 +167,24 @@ before compilation, and the executor signature makes the runtime identity part
 of the receipt's output evidence.
 
 For high-assurance verification, provision the measured runtime from a reviewed
-run into the trust policy, then verify against that pinned policy:
+build into the trust policy before any guest execution. The measured loader is
+published owner-only and executable; `run` hashes that exact file and never
+invokes a C compiler:
 
 ```bash
-kotoba -M trust-runtime run.result.edn --trust trust.edn --output pinned-trust.edn
+kotoba -M measure-runtime --output runtime.edn --loader-output kotoba-loader
+kotoba -M trust-runtime runtime.edn --trust trust.edn --output pinned-trust.edn
+kotoba -M run app.signed.kexe --trust pinned-trust.edn \
+  --runtime runtime.edn --loader kotoba-loader ...
 kotoba -M verify-receipt run.receipt.edn --trust pinned-trust.edn ...
 ```
 
 The pin covers the reviewed loader source, reproduced loader binary, and C
-compiler identity. Once `:trusted-runtime-sha256` exists, it is an explicit
-allowlist; an empty set denies all native runtimes. Runtime revocation uses
-`:revoked-runtime-sha256`.
+compiler identity. Native execution always requires an explicit
+`:trusted-runtime-sha256` membership; an absent or empty set denies every
+runtime. Runtime revocation uses `:revoked-runtime-sha256`. Measurement is a
+deliberate provisioning operation and still executes the local toolchain, so it
+belongs in a controlled build environment rather than on an exposed executor.
 
 Security mutation fuzzing runs in every CI job with a recorded seed. It mutates
 sealed native artifacts (including attacker-resealed KIR/code/ABI fields),

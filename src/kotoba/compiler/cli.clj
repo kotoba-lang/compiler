@@ -60,11 +60,13 @@
           output (or (option args "--output") "kotoba-trust.edn")
           trust {:format :kotoba.trust/v1 :trusted-signers #{signer}
                  :revoked-signers #{} :revoked-artifacts #{}
+                 :trusted-runtime-sha256 #{}
                  :revoked-runtime-sha256 #{}}]
       (atomic-output/write-edn! output trust)
       (println (pr-str {:ok true :output output :signer signer})))
     "trust-runtime"
     (let [evidence (bounded-edn/read-file (second args))
+          _ (runtime-identity/validate-measurement! evidence)
           trust-path (option args "--trust")
           trust (signing/validate-trust! (bounded-edn/read-file trust-path))
           runtime (:runtime evidence)
@@ -73,6 +75,15 @@
           updated (update trust :trusted-runtime-sha256 (fnil conj #{}) runtime-sha)]
       (atomic-output/write-edn! output updated)
       (println (pr-str {:ok true :output output :runtime-sha256 runtime-sha})))
+    "measure-runtime"
+    (let [{:keys [runtime loader-bytes]} (native-executor/measure-runtime)
+          output (or (option args "--output") "kotoba-runtime.edn")
+          loader-output (or (option args "--loader-output") "kotoba-loader")]
+      (atomic-output/write-bytes! loader-output loader-bytes {:executable? true})
+      (atomic-output/write-edn! output {:format :kotoba.runtime-measurement/v1
+                                        :runtime runtime})
+      (println (pr-str {:ok true :output output :loader-output loader-output
+                        :runtime-sha256 (runtime-identity/identity-sha256 runtime)})))
     "sign"
     (let [artifact (bounded-edn/read-file (second args))
           key (bounded-edn/read-file (option args "--key"))
@@ -101,8 +112,12 @@
           parent-path (option args "--parent")
           parent (when parent-path (bounded-edn/read-file parent-path))
           entry (symbol (or (option args "--entry") "main"))
+          runtime-measurement (bounded-edn/read-file (option args "--runtime"))
+          _ (runtime-identity/validate-measurement! runtime-measurement)
           execution (native-executor/execute envelope trust policy input
-                                              {:now now :entry entry})
+                                              {:now now :entry entry
+                                               :runtime (:runtime runtime-measurement)
+                                               :loader-path (option args "--loader")})
           report (:report execution)
           evidence (:evidence execution)
           value (receipt/create

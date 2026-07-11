@@ -36,3 +36,14 @@
       (is (= (PosixFilePermissions/fromString "rw-------")
              (Files/getPosixFilePermissions output (make-array LinkOption 0))))
       (finally (delete-tree! directory)))))
+
+(deftest executable-output-is-owner-only-and-executable
+  (let [directory (Files/createTempDirectory "kotoba-executable-"
+                                              (make-array FileAttribute 0))
+        output (.resolve directory "loader")]
+    (try
+      (atomic-output/write-bytes! (str output) (.getBytes "binary" StandardCharsets/UTF_8)
+                                  {:executable? true})
+      (is (= (PosixFilePermissions/fromString "rwx------")
+             (Files/getPosixFilePermissions output (make-array LinkOption 0))))
+      (finally (delete-tree! directory)))))

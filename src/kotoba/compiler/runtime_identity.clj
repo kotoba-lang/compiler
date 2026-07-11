@@ -26,6 +26,15 @@
 (defn identity-sha256 [runtime]
   (artifact/sha256 (validate! runtime)))
 
+(defn validate-measurement! [measurement]
+  (when-not (and (map? measurement)
+                 (= #{:format :runtime} (set (keys measurement)))
+                 (= :kotoba.runtime-measurement/v1 (:format measurement)))
+    (throw (ex-info "runtime measurement schema mismatch"
+                    {:phase :runtime-identity})))
+  (validate! (:runtime measurement))
+  measurement)
+
 (defn admit! [runtime trust]
   (let [identity (identity-sha256 runtime)
         trusted (:trusted-runtime-sha256 trust)
@@ -33,10 +42,9 @@
     (when (contains? revoked identity)
       (throw (ex-info "native runtime identity is revoked"
                       {:phase :trust :runtime-sha256 identity})))
-    ;; Absence retains v1 trust-file compatibility. Once the field is present,
-    ;; it is an explicit allowlist and an empty set denies every native runtime.
-    (when (and (contains? trust :trusted-runtime-sha256)
-               (not (contains? trusted identity)))
+    ;; Native execution is never a trust-on-first-use operation. A measured
+    ;; runtime must be reviewed and explicitly provisioned before guest entry.
+    (when-not (and (set? trusted) (contains? trusted identity))
       (throw (ex-info "native runtime identity is not trusted"
                       {:phase :trust :runtime-sha256 identity})))
-    {:runtime-sha256 identity :trusted? (contains? trusted identity)}))
+    {:runtime-sha256 identity :trusted? true}))

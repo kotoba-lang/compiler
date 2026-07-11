@@ -175,7 +175,8 @@ Fuel is read after all transitive generated calls return, so it records the
 actual dynamic charge count rather than a caller-supplied estimate.
 
 The public `kotoba -M run` path accepts only a signed envelope plus current
-trust, local policy, typed argument input, and an executor key. It verifies and
+trust, a measured runtime manifest and matching loader, local policy, typed
+argument input, and an executor key. It verifies and
 admits before extracting bytes, rejects a target/host or entry/arity mismatch,
 and converts only the supervisor report into result evidence. That evidence and
 its measured interval and fuel counters are passed directly to receipt signing;
@@ -218,5 +219,10 @@ job of full per-receipt verification. Receipt creation also validates a parent
 attestation before accepting its hash as a link.
 Native result evidence is schema-checked against the pinned loader source.
 Trust policies may contain `:trusted-runtime-sha256` and
-`:revoked-runtime-sha256`; when the trusted field is present it becomes a strict
-allowlist over the loader source, loader binary, and compiler identity tuple.
+`:revoked-runtime-sha256`. Native execution requires membership in the strict
+allowlist over the loader source, loader binary, and compiler identity tuple;
+absence and an empty set both deny. Provisioning builds twice and publishes a
+measured owner-executable loader. Execution consumes that exact binary, checks
+its hash before entry, and does not invoke the C toolchain.
+The checked loader bytes are copied into a private execution directory before
+launch, closing replacement between hash verification and process creation.

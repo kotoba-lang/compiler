@@ -244,14 +244,18 @@ native_report_check() {
 
 attested_run_check() {
   SIGNED=$1 ISA=$2
-  "$ROOT/bin/kotoba" -M run "$SIGNED" --trust "$TMP/trust.edn" \
+  "$ROOT/bin/kotoba" -M measure-runtime --output "$TMP/$ISA-runtime.edn" \
+    --loader-output "$TMP/$ISA-attested-loader" \
+    >"$TMP/$ISA-runtime-measure-summary.edn"
+  "$ROOT/bin/kotoba" -M trust-runtime "$TMP/$ISA-runtime.edn" \
+    --trust "$TMP/trust.edn" --output "$TMP/$ISA-runtime-trust.edn" \
+    >"$TMP/$ISA-runtime-trust-summary.edn"
+  "$ROOT/bin/kotoba" -M run "$SIGNED" --trust "$TMP/$ISA-runtime-trust.edn" \
+    --runtime "$TMP/$ISA-runtime.edn" --loader "$TMP/$ISA-attested-loader" \
     --policy "$TMP/pure-policy.edn" --input "$TMP/input.edn" \
     --executor-key "$TMP/signing-key.edn" --now 1500 \
     --result-output "$TMP/$ISA-run-result.edn" --output "$TMP/$ISA-run-receipt.edn" \
     >"$TMP/$ISA-run-summary.edn"
-  "$ROOT/bin/kotoba" -M trust-runtime "$TMP/$ISA-run-result.edn" \
-    --trust "$TMP/trust.edn" --output "$TMP/$ISA-runtime-trust.edn" \
-    >"$TMP/$ISA-runtime-trust-summary.edn"
   "$ROOT/bin/kotoba" -M verify-receipt "$TMP/$ISA-run-receipt.edn" \
     --signed "$SIGNED" --trust "$TMP/$ISA-runtime-trust.edn" --policy "$TMP/pure-policy.edn" \
     --input "$TMP/input.edn" --result "$TMP/$ISA-run-result.edn" --now 1500 \

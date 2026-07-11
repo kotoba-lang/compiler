@@ -117,13 +117,15 @@
                  :loader-binary-sha256 (apply str (repeat 64 "a"))
                  :compiler-identity-sha256 (apply str (repeat 64 "b"))}
         output {:status :ok :result 42 :runtime runtime}
-        value (receipt/create envelope trust policy input output
-                              (assoc opts :executor-key key))
-        identity (runtime-identity/identity-sha256 runtime)]
-    (is (:verified? (receipt/verify value envelope trust policy input output
-                                    {:now 1500 :parent nil})))
+        identity (runtime-identity/identity-sha256 runtime)
+        pinned-trust (assoc trust :trusted-runtime-sha256 #{identity})
+        value (receipt/create envelope pinned-trust policy input output
+                              (assoc opts :executor-key key))]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not trusted"
+                          (receipt/create envelope trust policy input output
+                                          (assoc opts :executor-key key))))
     (is (:verified? (receipt/verify value envelope
-                                    (assoc trust :trusted-runtime-sha256 #{identity})
+                                    pinned-trust
                                     policy input output {:now 1500 :parent nil})))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not trusted"
                           (receipt/verify value envelope
@@ -138,3 +140,14 @@
                                           (assoc-in output [:runtime :loader-source-sha256]
                                                     (apply str (repeat 64 "0")))
                                           {:now 1500 :parent nil})))))
+
+(deftest runtime-measurement-schema-is-exact
+  (let [runtime {:format :kotoba.native-runtime/v1
+                 :loader-source-sha256 runtime-identity/loader-source-sha256
+                 :loader-binary-sha256 (apply str (repeat 64 "a"))
+                 :compiler-identity-sha256 (apply str (repeat 64 "b"))}
+        measurement {:format :kotoba.runtime-measurement/v1 :runtime runtime}]
+    (is (= measurement (runtime-identity/validate-measurement! measurement)))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"schema mismatch"
+                          (runtime-identity/validate-measurement!
+                           (assoc measurement :ignored true))))))

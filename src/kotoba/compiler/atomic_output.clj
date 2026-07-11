@@ -23,9 +23,15 @@
     (catch UnsupportedOperationException error
       (reject! "private output permissions are unsupported" {:path (str path)} error))))
 
+(defn- set-executable-permissions! [^Path path]
+  (try
+    (Files/setPosixFilePermissions path (PosixFilePermissions/fromString "rwx------"))
+    (catch UnsupportedOperationException error
+      (reject! "executable output permissions are unsupported" {:path (str path)} error))))
+
 (defn write-bytes!
   ([path bytes] (write-bytes! path bytes {}))
-  ([path bytes {:keys [private?] :or {private? false}}]
+  ([path bytes {:keys [private? executable?] :or {private? false executable? false}}]
    (when-not (instance? (Class/forName "[B") bytes)
      (reject! "output must be a byte array" {:path path} nil))
    (let [target (target-path path)
@@ -33,7 +39,8 @@
          temporary (Files/createTempFile parent ".kotoba-" ".tmp"
                                          (make-array FileAttribute 0))]
      (try
-       (when private? (set-private-permissions! temporary))
+       (cond executable? (set-executable-permissions! temporary)
+             private? (set-private-permissions! temporary))
        (with-open [channel (FileChannel/open
                             temporary
                             (into-array OpenOption

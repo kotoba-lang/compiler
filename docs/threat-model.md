@@ -93,14 +93,18 @@ child can only monotonically consume its counter through regenerated code; the
 supervisor reads the final counter and result slot after `waitpid`, producing
 the evidence later bound into an executor-signed receipt.
 
-The bootstrap executor pins the reviewed loader source by raw SHA-256 before
-invoking the C toolchain. It measures the resulting binary and compiler identity
-and places all three hashes in `:kotoba.native-runtime/v1` result evidence. The
+The explicit `measure-runtime` provisioning step pins the reviewed loader source
+by raw SHA-256 before invoking the C toolchain. It measures the resulting binary
+and compiler identity and places all three hashes in
+`:kotoba.native-runtime/v1`. The loader binary is published separately with
+owner-only execute permission. The production `run` path requires both files,
+checks exact schemas, trust membership, revocation, and binary hash, and never
+starts `cc`. The
 executor-signed receipt therefore identifies the exact runtime used. This is an
 attestation and drift detector. Receipt verification always requires the pinned
 reviewed loader-source identity; deployments can additionally make the complete
 runtime hash an explicit trust allowlist and revoke identities independently.
-The executor also builds the same output twice
+The provisioning step also builds the same output twice
 with fixed flags and requires byte-identical SHA-256 values before execution;
 Linux build IDs are disabled, while macOS uses the deterministic UUID produced
 for an identical output identity. This is not yet a hermetic or independently
