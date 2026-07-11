@@ -22,4 +22,13 @@ WebAssembly.instantiate(fs.readFileSync(process.argv[1])).then(({instance}) => {
 }).catch(error => { console.error(error); process.exit(1); });
 ' "$TMP/program.wasm"
 
+if [ "$(uname -s)-$(uname -m)" = "Linux-x86_64" ]; then
+  cc -std=c11 -O2 -Wall -Wextra -Werror "$ROOT/tools/kexe_loader.c" -o "$TMP/kexe-loader"
+  META=$("$ROOT/bin/kotoba" -M extract-native "$TMP/x86_64.kexe" --symbol score --output "$TMP/x86_64.bin")
+  OFFSET=$(printf '%s' "$META" | sed -n 's/.*:offset \([0-9][0-9]*\).*/\1/p')
+  GOT=$("$TMP/kexe-loader" "$TMP/x86_64.bin" "$OFFSET" 2 -7 2)
+  [ "$GOT" = 12 ] || { echo "native x86_64 expected 12, got $GOT" >&2; exit 1; }
+  printf '%s\n' 'conformance: native x86_64 score(-7,2)=12 under W^X loader'
+fi
+
 printf '%s\n' 'conformance: wasm32 main=42, wasm32 score(-7,2)=12, x86_64 verified, aarch64 verified'

@@ -36,3 +36,10 @@ locals, calls, and structured control flow. Native v1 explicitly declares
 `:closed-program-specialization`; general native control-flow machine code,
 memory, effects, fuel instrumentation, and the W^X loader remain required before
 hostile execution can be considered.
+
+x86-64 has subsequently advanced to `:runtime-sysv-v1`: each pure KIR function
+is an exported SysV integer function with a sealed offset/length/arity record.
+The verifier re-lowers the sealed KIR and requires byte-for-byte code and export
+table equality. The Linux conformance loader enforces RW -> RX transition and
+executes runtime arguments. This seal is an integrity binding, not publisher
+authentication; signed package admission remains a separate required layer.

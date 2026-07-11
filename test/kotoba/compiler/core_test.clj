@@ -1,5 +1,6 @@
 (ns kotoba.compiler.core-test
   (:require [clojure.test :refer [deftest is testing]]
+            [kotoba.compiler.artifact :as artifact]
             [kotoba.compiler.core :as compiler]
             [kotoba.compiler.verifier :as verifier]))
 
@@ -45,6 +46,22 @@
                      (assoc artifact :target :aarch64-kotoba-v1)
                      (assoc artifact :kir-sha256 (apply str (repeat 64 "0")))]]
       (is (thrown? clojure.lang.ExceptionInfo (verifier/verify-artifact! mutated))))))
+
+(deftest x86-runtime-artifact-is-derived-from-sealed-kir
+  (let [kexe (:artifact (compiler/compile-source structured-source :x86_64-kotoba-v1))]
+    (is (= :runtime-sysv-v1 (:lowering kexe)))
+    (is (= 2 (get-in kexe [:exports 'score :arity])))
+    (is (pos? (get-in kexe [:exports 'score :length])))
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo #"KIR identity mismatch"
+         (verifier/verify-artifact!
+          (artifact/seal (assoc kexe :kir-sha256 (apply str (repeat 64 "0")))))))
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo #"export table rejected|instruction stream rejected"
+         (verifier/verify-artifact!
+          (let [changed (assoc-in kexe [:program :functions 0 :body] 999)]
+            (artifact/seal
+             (assoc changed :kir-sha256 (artifact/sha256 (:program changed))))))))))
 
 (deftest recursion-and-overflow-are-bounded
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"call depth exhausted"

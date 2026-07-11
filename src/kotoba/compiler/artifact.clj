@@ -17,7 +17,8 @@
     (apply str (map #(format "%02x" (bit-and (int %) 0xff)) digest))))
 
 (defn seal [artifact]
-  (assoc artifact :sha256 (sha256 artifact)))
+  (let [payload (dissoc artifact :sha256)]
+    (assoc payload :sha256 (sha256 payload))))
 
 (defn valid-seal? [artifact]
   (and (string? (:sha256 artifact))

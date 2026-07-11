@@ -25,5 +25,16 @@
     (let [artifact (edn/read-string (slurp (second args)))]
       (verifier/verify-artifact! artifact)
       (println (pr-str {:ok true :verified true :target (:target artifact)})))
+    "extract-native"
+    (let [artifact (edn/read-string (slurp (second args)))
+          symbol (symbol (or (option args "--symbol") "main"))
+          output (or (option args "--output") "program.bin")
+          _ (verifier/verify-artifact! artifact)
+          export (get (:exports artifact) symbol)]
+      (when-not export
+        (throw (ex-info "unknown native export" {:symbol symbol :available (keys (:exports artifact))})))
+      (with-open [out (io/output-stream output)]
+        (.write out ^bytes (byte-array (map unchecked-byte (:code artifact)))))
+      (println (pr-str (merge {:ok true :output output :symbol symbol} export))))
     (do (binding [*out* *err*] (println "usage: kotoba -M compile <file> --target wasm32|x86_64|aarch64 --output <file> | kotoba -M verify <file>"))
         (System/exit 2))))

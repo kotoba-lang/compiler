@@ -29,6 +29,10 @@ bin/kotoba -M verify app.kexe
 scripts/conformance.sh
 ```
 
+On x86-64 Linux, `scripts/conformance.sh` additionally compiles the small
+auditable loader in `tools/kexe_loader.c`, maps verified code RW, transitions it
+to RX with `mprotect`, and executes `score(-7, 2)`. No RWX mapping is created.
+
 After putting `bin/kotoba` on `PATH`, the public command is simply
 `kotoba -M ...`. The bootstrap currently uses Clojure internally, but that is
 not part of the compiler CLI contract and can be replaced by the self-hosted
