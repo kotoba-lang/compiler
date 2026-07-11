@@ -25,5 +25,5 @@
     (let [artifact (edn/read-string (slurp (second args)))]
       (verifier/verify-artifact! artifact)
       (println (pr-str {:ok true :verified true :target (:target artifact)})))
-    (do (binding [*out* *err*] (println "usage: compile <file> --target wasm32|x86_64|aarch64 --output <file> | verify <file>"))
+    (do (binding [*out* *err*] (println "usage: kotoba -M compile <file> --target wasm32|x86_64|aarch64 --output <file> | kotoba -M verify <file>"))
         (System/exit 2))))

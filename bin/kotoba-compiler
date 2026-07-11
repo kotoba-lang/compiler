@@ -1,3 +1,4 @@
-#!/usr/bin/env sh
+#!/bin/sh
 set -eu
-exec clojure -M:run "$@"
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec "$HERE/kotoba" -M "$@"

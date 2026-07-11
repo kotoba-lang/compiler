@@ -20,11 +20,15 @@ stubs for x86-64 and AArch64. Effectful calls, allocation, indirect control flow
 and OS ABI emission fail closed until their verifier rules exist.
 
 ```bash
-clojure -M:test
-clojure -M:run compile example.kotoba --target wasm32 --output app.wasm
-clojure -M:run compile example.kotoba --target x86_64 --output app.kexe
-clojure -M:run verify app.kexe
+bin/kotoba -M compile example.kotoba --target wasm32 --output app.wasm
+bin/kotoba -M compile example.kotoba --target x86_64 --output app.kexe
+bin/kotoba -M verify app.kexe
 ```
+
+After putting `bin/kotoba` on `PATH`, the public command is simply
+`kotoba -M ...`. The bootstrap currently uses Clojure internally, but that is
+not part of the compiler CLI contract and can be replaced by the self-hosted
+Kotoba driver without changing user commands.
 
 See [docs/architecture.md](docs/architecture.md) and
 [docs/threat-model.md](docs/threat-model.md).

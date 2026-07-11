@@ -1,0 +1,30 @@
+#!/bin/sh
+set -eu
+
+# Public Kotoba compiler driver. Resolve the checkout so the command works from
+# any directory; Clojure is a private bootstrap implementation detail.
+SELF=$0
+while [ -L "$SELF" ]; do
+  BASE=$(CDPATH= cd -- "$(dirname -- "$SELF")" && pwd)
+  LINK=$(readlink "$SELF")
+  case "$LINK" in /*) SELF=$LINK ;; *) SELF=$BASE/$LINK ;; esac
+done
+ROOT=$(CDPATH= cd -- "$(dirname -- "$SELF")/.." && pwd)
+
+case "${1-}" in
+  -M) shift ;;
+  -M:compiler|-M:compile) shift ;;
+  -h|--help|"")
+    printf '%s\n' \
+      'usage: kotoba -M compile <file> --target wasm32|x86_64|aarch64 --output <file>' \
+      '       kotoba -M verify <file>'
+    exit 0
+    ;;
+  *)
+    printf '%s\n' 'error: compiler commands require the -M execution boundary' >&2
+    exit 2
+    ;;
+esac
+
+cd "$ROOT"
+exec clojure -M:run "$@"
