@@ -32,9 +32,16 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 
 #if defined(KEXE_STANDALONE_FUZZ)
 int main(int argc, char **argv) {
-  unsigned long runs = argc == 2 ? strtoul(argv[1], NULL, 10) : 20000;
+  unsigned long runs = argc >= 2 ? strtoul(argv[1], NULL, 10) : 20000;
   uint64_t state = UINT64_C(0x4b4f544f4241465a);
   uint8_t input[1024];
+  for (int arg = 2; arg < argc; arg++) {
+    FILE *seed = fopen(argv[arg], "rb");
+    if (seed == NULL) return 2;
+    size_t size = fread(input, 1, sizeof(input), seed);
+    if (ferror(seed) || !feof(seed) || fclose(seed) != 0) return 2;
+    (void)LLVMFuzzerTestOneInput(input, size);
+  }
   for (unsigned long run = 0; run < runs; run++) {
     state ^= state << 13;
     state ^= state >> 7;

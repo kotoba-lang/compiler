@@ -106,3 +106,11 @@ out on every exit, and GitHub Actions uploads it together with libFuzzer crash,
 timeout, and leak artifacts even for failed runs. Artifacts are retained for 30
 days. Promoting useful evolved inputs into the reviewed repository corpus is a
 deliberate human change; CI never commits unreviewed bytes automatically.
+
+`review-fuzz-corpus.sh` treats downloaded artifacts as hostile. It rejects
+symlinks, non-regular files, unknown named seeds, inputs over 1024 bytes, more
+than 10,000 files, and aggregate content over 1 MiB. Dry-run is the default
+review path. Explicit `--apply` first replays the entire imported corpus through
+the sanitized harness, deduplicates against all existing seed contents, and
+stores new inputs under their SHA-256 names. A CI self-test exercises filename,
+symlink, size, and empty-corpus rejection.

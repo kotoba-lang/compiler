@@ -130,5 +130,17 @@ uploads the evolved corpus plus any `crash-*`, `timeout-*`, or `leak-*` inputs
 for 30 days even when fuzzing fails, so findings remain reproducible rather than
 being lost with the runner.
 
+Downloaded corpus artifacts are reviewed in dry-run mode before promotion:
+
+```bash
+scripts/review-fuzz-corpus.sh path/to/artifact/corpus --dry-run
+scripts/review-fuzz-corpus.sh path/to/artifact/corpus --apply
+```
+
+Promotion accepts only non-symlink regular files no larger than 1024 bytes,
+enforces aggregate limits, rejects untrusted filenames, deduplicates by content
+SHA-256, and reruns the sanitized fuzz harness before copying new inputs under
+canonical SHA-256 names.
+
 See [docs/architecture.md](docs/architecture.md) and
 [docs/threat-model.md](docs/threat-model.md).

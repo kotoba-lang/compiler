@@ -29,3 +29,4 @@ jobs:
       - run: scripts/fuzz-native.sh
         env:
           KOTOBA_NATIVE_FUZZ_RUNS: "20000"
+      - run: scripts/test-review-fuzz-corpus.sh
