@@ -35,7 +35,9 @@ to RX with `mprotect`, and executes a runtime arithmetic/comparison vector. No
 RWX mapping is created. Zero division and signed-division overflow must trap on
 all three backends; loader resource limits keep native traps outside the compiler.
 Linux additionally applies `no_new_privs` and a seccomp-BPF syscall allowlist
-before guest entry; its CI probe requires filesystem access to trap.
+before guest entry. macOS applies a deny-by-default Seatbelt profile in the
+child. CI independently requires filesystem, network, and process-creation
+probes to be denied on both OS families.
 
 Wasm modules contain a private, non-replenishable i64 fuel global initialized to
 256. Every function entry checks and decrements it before evaluating guest code.

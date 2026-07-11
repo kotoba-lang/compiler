@@ -124,6 +124,9 @@ into an RW mapping, seals it RX, then forks. The child alone enters generated
 code under resource limits and the platform sandbox; the parent only supervises
 termination and an independent wall-clock deadline. Guest traps and supervisor
 failures have distinct structured report kinds.
+The Linux child uses `no_new_privs` plus a seccomp-BPF syscall allowlist. The
+macOS child uses a deny-by-default Seatbelt profile. Conformance independently
+probes filesystem, network, and process creation denial on both OS families.
 The context and result slot live in a small anonymous shared mapping, allowing
 the parent to attest the post-execution fuel counter without trusting text from
 the child. With structured reporting enabled, a successful execution produces

@@ -11,7 +11,13 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include <unistd.h>
+
+#if defined(__APPLE__)
+#include <sandbox.h>
+#endif
 
 #if defined(__linux__)
 #include <linux/audit.h>
@@ -292,9 +298,42 @@ static void install_syscall_sandbox(void) {
   if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) fail("no_new_privs");
   if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &program) != 0) fail("seccomp");
 }
+#elif defined(__APPLE__) && !defined(KEXE_SANITIZER_TEST)
+static void install_syscall_sandbox(void) {
+  static const char profile[] =
+      "(version 1)"
+      "(deny default)"
+      "(allow file-write-data)"
+      "(allow signal (target self))"
+      "(allow process-info-pidinfo)"
+      "(allow process-info-setcontrol)";
+  char *error = NULL;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+  int result = sandbox_init(profile, 0, &error);
+  if (result != 0) {
+    if (error != NULL) {
+      static const char prefix[] = "kexe-loader: sandbox_init: ";
+      (void)write(STDERR_FILENO, prefix, sizeof(prefix) - 1);
+      (void)write(STDERR_FILENO, error, strlen(error));
+      (void)write(STDERR_FILENO, "\n", 1);
+      sandbox_free_error(error);
+    }
+    _exit(125);
+  }
+#pragma clang diagnostic pop
+}
 #else
 static void install_syscall_sandbox(void) {}
 #endif
+
+static void probe_denied(const char *reason) {
+  static const char prefix[] = "KEXE_TRAP {:kind :sandbox :reason :";
+  (void)write(STDERR_FILENO, prefix, sizeof(prefix) - 1);
+  (void)write(STDERR_FILENO, reason, strlen(reason));
+  (void)write(STDERR_FILENO, "}\n", 2);
+  _exit(124);
+}
 
 int main(int argc, char **argv) {
   if (argc < 6 || argc > 11) {
@@ -363,13 +402,45 @@ int main(int argc, char **argv) {
   }
   install_limits();
   install_syscall_sandbox();
-  if (getenv("KEXE_SANDBOX_PROBE") != NULL) {
+  if (getenv("KEXE_FILESYSTEM_PROBE") != NULL) {
     int probe = open("/etc/passwd", O_RDONLY);
     if (probe >= 0) {
       (void)close(probe);
-      fprintf(stderr, "kexe-loader: sandbox probe unexpectedly opened a file\n");
+      fprintf(stderr, "kexe-loader: filesystem probe unexpectedly succeeded\n");
       return 3;
     }
+    probe_denied("filesystem-denied");
+  }
+  if (getenv("KEXE_NETWORK_PROBE") != NULL) {
+    int probe = socket(AF_INET, SOCK_STREAM, 0);
+    if (probe < 0) probe_denied("network-denied");
+    struct sockaddr_in address;
+    memset(&address, 0, sizeof(address));
+    address.sin_family = AF_INET;
+    address.sin_port = htons(9);
+    address.sin_addr.s_addr = htonl(UINT32_C(0x7f000001));
+    errno = 0;
+    if (connect(probe, (const struct sockaddr *)&address, sizeof(address)) == 0 ||
+        (errno != EPERM && errno != EACCES)) {
+      int probe_errno = errno;
+      (void)close(probe);
+      errno = probe_errno;
+      fprintf(stderr, "kexe-loader: network probe was not policy-denied: %s\n",
+              strerror(errno));
+      return 3;
+    }
+    (void)close(probe);
+    probe_denied("network-denied");
+  }
+  if (getenv("KEXE_PROCESS_PROBE") != NULL) {
+    pid_t probe = fork();
+    if (probe == 0) _exit(0);
+    if (probe > 0) {
+      (void)waitpid(probe, NULL, 0);
+      fprintf(stderr, "kexe-loader: process probe unexpectedly succeeded\n");
+      return 3;
+    }
+    probe_denied("process-denied");
   }
   int64_t result;
   if (strcmp(isa, "x86_64") == 0) {

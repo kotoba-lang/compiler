@@ -160,15 +160,19 @@ native_cap_check() {
 }
 
 native_sandbox_probe() {
-  ARTIFACT=$1 ISA=$2
+  ARTIFACT=$1 ISA=$2 PROBE=$3 REASON=$4
   META=$("$ROOT/bin/kotoba" -M extract-native "$ARTIFACT" --symbol main --output "$TMP/$ISA-sandbox.bin")
   OFFSET=$(printf '%s' "$META" | sed -n 's/.*:offset \([0-9][0-9]*\).*/\1/p')
-  if KEXE_SANDBOX_PROBE=1 "$TMP/kexe-loader" "$TMP/$ISA-sandbox.bin" "$OFFSET" 0 "$ISA" - \
+  if env "$PROBE=1" "$TMP/kexe-loader" "$TMP/$ISA-sandbox.bin" "$OFFSET" 0 "$ISA" - \
        >"$TMP/sandbox-probe.out" 2>"$TMP/sandbox-probe.err"; then
-    echo "native $ISA sandbox allowed forbidden filesystem access" >&2
+    echo "native $ISA sandbox allowed forbidden $REASON operation" >&2
     exit 1
   fi
-  grep -q '^KEXE_TRAP {:kind :signal :signal :SIGSYS}$' "$TMP/sandbox-probe.err"
+  if [ "$(uname -s)" = Linux ]; then
+    grep -q '^KEXE_TRAP {:kind :signal :signal :SIGSYS}$' "$TMP/sandbox-probe.err"
+  else
+    grep -q "^KEXE_TRAP {:kind :sandbox :reason :$REASON-denied}$" "$TMP/sandbox-probe.err"
+  fi
 }
 
 native_timeout_probe() {
@@ -218,7 +222,9 @@ if [ "$(uname -s)-$(uname -m)" = "Linux-x86_64" ]; then
   native_timeout_probe "$TMP/x86_64.kexe" x86_64
   native_report_check "$TMP/x86_64.kexe" x86_64
   attested_run_check "$TMP/x86_64.signed.kexe" x86_64
-  native_sandbox_probe "$TMP/x86_64.kexe" x86_64
+  native_sandbox_probe "$TMP/x86_64.kexe" x86_64 KEXE_FILESYSTEM_PROBE filesystem
+  native_sandbox_probe "$TMP/x86_64.kexe" x86_64 KEXE_NETWORK_PROBE network
+  native_sandbox_probe "$TMP/x86_64.kexe" x86_64 KEXE_PROCESS_PROBE process
   native_check "$TMP/x86_64.kexe" x86_64 score 12 -7 2
   native_check "$TMP/x86_64.kexe" x86_64 calc 21 20 4
   native_check "$TMP/x86_64.kexe" x86_64 relations 10 7 3
@@ -248,6 +254,9 @@ case "$(uname -s)-$(uname -m)" in
     "$ROOT/bin/kotoba" -M sign "$TMP/aarch64.kexe" --key "$TMP/signing-key.edn" \
       --not-before 1000 --expires 2000 --output "$TMP/aarch64.signed.kexe"
     attested_run_check "$TMP/aarch64.signed.kexe" aarch64
+    native_sandbox_probe "$TMP/aarch64.kexe" aarch64 KEXE_FILESYSTEM_PROBE filesystem
+    native_sandbox_probe "$TMP/aarch64.kexe" aarch64 KEXE_NETWORK_PROBE network
+    native_sandbox_probe "$TMP/aarch64.kexe" aarch64 KEXE_PROCESS_PROBE process
     native_check "$TMP/aarch64.kexe" aarch64 score 12 -7 2
     native_check "$TMP/aarch64.kexe" aarch64 calc 21 20 4
     native_check "$TMP/aarch64.kexe" aarch64 relations 10 7 3

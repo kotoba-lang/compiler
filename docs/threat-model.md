@@ -43,17 +43,24 @@ On Linux, the loader sets `no_new_privs` and installs a seccomp-BPF filter after
 loading and changing code to RX but before guest entry. The allowlist contains
 only process exit, structured signal handling, output, unmapping, and minimal
 libc bookkeeping calls. Filesystem, network, process creation, and arbitrary
-syscalls trap as `SIGSYS`. CI deliberately attempts to open `/etc/passwd` after
-filter installation and requires the machine-readable EDN report
+syscalls trap as `SIGSYS`. CI independently probes filesystem access, network
+connection, and process creation and requires the machine-readable EDN report
 `KEXE_TRAP {:kind :signal :signal :SIGSYS}`. Arithmetic, fuel, and capability
 traps likewise report their exact OS signal without calling unsafe libc code
 from the signal handler. The native backends deliberately use their own hard
 trap instructions for generated-code policy denial: x86-64 `UD2` reports
 `SIGILL`, while AArch64 `BRK` reports `SIGTRAP`.
 
+On macOS, the child installs a deny-by-default Seatbelt profile after RX sealing
+and before guest entry. It permits writing already-held result descriptors and
+minimal self bookkeeping, but grants no file read, network, or child-process
+authority. CI requires all three operations to fail with a structured
+`:sandbox` denial. Seatbelt is a deprecated platform API and defense in depth,
+not a substitute for an aiueos VM boundary.
+
 The loader forks after loading and sealing the code mapping. Only the child
-enters guest code and receives resource limits, trap handlers, and Linux
-seccomp. The parent waits for that exact child and enforces an independent
+enters guest code and receives resource limits, trap handlers, and the OS
+sandbox. The parent waits for that exact child and enforces an independent
 three-second wall deadline. A stuck child is killed and reported as
 `KEXE_TRAP {:kind :supervisor :reason :wall-timeout}`; CI tests this boundary
 on both supported host architectures.
