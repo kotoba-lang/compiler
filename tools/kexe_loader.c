@@ -21,7 +21,8 @@ static void fail(const char *message) {
 static void trap_handler(int signal_number) {
   static const char prefix[] = "KEXE_TRAP signal\n";
   (void)signal_number;
-  (void)write(STDERR_FILENO, prefix, sizeof(prefix) - 1);
+  ssize_t written = write(STDERR_FILENO, prefix, sizeof(prefix) - 1);
+  (void)written;
   _exit(120);
 }
 
