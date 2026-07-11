@@ -95,8 +95,9 @@ the evidence later bound into an executor-signed receipt.
 
 The explicit `measure-runtime` provisioning step pins the reviewed loader source
 by raw SHA-256 before invoking the C toolchain. It measures the resulting binary
-and compiler identity and places all three hashes in
-`:kotoba.native-runtime/v1`. The loader binary is published separately with
+and places the loader source, loader binary, resolved compiler binary, and
+compiler version hashes in
+`:kotoba.native-runtime/v2`. The loader binary is published separately with
 owner-only execute permission. The production `run` path requires both files,
 checks exact schemas, trust membership, revocation, and binary hash, and never
 starts `cc`. The
@@ -110,6 +111,14 @@ Linux build IDs are disabled, while macOS uses the deterministic UUID produced
 for an identical output identity. This is not yet a hermetic or independently
 reproduced binary build; compromise of the host compiler remains in scope for
 the next supply-chain layer.
+PATH lookup is performed once, canonicalized to an absolute real path, and that
+exact executable is used for the version query and both builds. Its bytes are
+hashed before execution and again after the second build. Thus a shadow
+compiler cannot impersonate an approved runtime merely by copying a trusted
+`--version` string, and a persistent replacement during measurement is rejected. This
+detects persistent identity drift; a transient race, dynamically loaded
+toolchain components, and a compromised compiler remain in scope until the
+toolchain is hermetic.
 The bootstrap nevertheless treats every invoked process as potentially
 unresponsive or noisy. Version queries and loader executions have five-second
 Java deadlines, builds have thirty-second deadlines, and output capture is

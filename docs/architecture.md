@@ -239,7 +239,8 @@ attestation before accepting its hash as a link.
 Native result evidence is schema-checked against the pinned loader source.
 Trust policies may contain `:trusted-runtime-sha256` and
 `:revoked-runtime-sha256`. Native execution requires membership in the strict
-allowlist over the loader source, loader binary, and compiler identity tuple;
+allowlist over the loader source, loader binary, compiler binary, and compiler
+version tuple;
 absence and an empty set both deny. Provisioning builds twice and publishes a
 measured owner-executable loader. Execution consumes that exact binary, checks
 its hash before entry, and does not invoke the C toolchain.

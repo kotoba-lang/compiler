@@ -7,7 +7,7 @@
 
 (def ^:private fields
   #{:format :loader-source-sha256 :loader-binary-sha256
-    :compiler-identity-sha256})
+    :compiler-binary-sha256 :compiler-version-sha256})
 
 (defn- sha256? [value]
   (and (string? value) (boolean (re-matches #"[0-9a-f]{64}" value))))
@@ -15,10 +15,11 @@
 (defn validate! [runtime]
   (when-not (and (map? runtime)
                  (= fields (set (keys runtime)))
-                 (= :kotoba.native-runtime/v1 (:format runtime))
+                 (= :kotoba.native-runtime/v2 (:format runtime))
                  (= loader-source-sha256 (:loader-source-sha256 runtime))
                  (sha256? (:loader-binary-sha256 runtime))
-                 (sha256? (:compiler-identity-sha256 runtime)))
+                 (sha256? (:compiler-binary-sha256 runtime))
+                 (sha256? (:compiler-version-sha256 runtime)))
     (throw (ex-info "native runtime identity rejected"
                     {:phase :runtime-identity})))
   runtime)

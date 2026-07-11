@@ -39,7 +39,7 @@
         result (executor/execute envelope trust {:allow #{}} {:args []}
                                  options)]
     (is (= {:status :ok :result 42} (select-keys (:evidence result) [:status :result])))
-    (is (= :kotoba.native-runtime/v1 (get-in result [:evidence :runtime :format])))
+    (is (= :kotoba.native-runtime/v2 (get-in result [:evidence :runtime :format])))
     (is (= executor/loader-source-sha256
            (get-in result [:evidence :runtime :loader-source-sha256])))
     (is (every? #(re-matches #"[0-9a-f]{64}" %)
@@ -95,6 +95,18 @@
     (is (:timed-out? timeout))
     (is (:output-exceeded? flood))
     (is (<= (count (:stdout flood)) 1024))))
+
+(deftest compiler-executable-is-resolved-to-a-hashed-real-file
+  (let [resolve-executable @#'executor/resolve-executable
+        file-sha256 @#'executor/file-sha256
+        path (resolve-executable "cc")]
+    (is (.isAbsolute path))
+    (is (java.nio.file.Files/isRegularFile
+         path (make-array java.nio.file.LinkOption 0)))
+    (is (java.nio.file.Files/isExecutable path))
+    (is (re-matches #"[0-9a-f]{64}" (file-sha256 (.toFile path))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"invalid toolchain"
+                          (resolve-executable "./cc")))))
 
 (deftest native-trap-is-returned-as-measured-evidence
   (let [{:keys [envelope trust]}

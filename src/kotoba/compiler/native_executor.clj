@@ -5,7 +5,7 @@
             [kotoba.compiler.admission :as admission]
             [kotoba.compiler.runtime-identity :as runtime-identity]
             [kotoba.compiler.signing :as signing])
-  (:import [java.nio.file Files]
+  (:import [java.nio.file Files LinkOption Path Paths]
            [java.lang ProcessHandle]
            [java.nio.charset StandardCharsets]
            [java.nio.file.attribute FileAttribute]
@@ -21,6 +21,24 @@
 
 (defn- file-sha256 [file]
   (raw-sha256 (Files/readAllBytes (.toPath ^java.io.File file))))
+
+(defn- resolve-executable [name]
+  (when-not (and (string? name) (seq name) (not (str/includes? name "/")))
+    (throw (ex-info "invalid toolchain executable name" {:phase :execute})))
+  (let [path (or (System/getenv "PATH") "")
+        candidates (map (fn [entry]
+                          (.resolve (if (empty? entry)
+                                      (.toAbsolutePath (Paths/get "." (make-array String 0)))
+                                      (.toAbsolutePath (Paths/get entry (make-array String 0))))
+                                    name))
+                        (str/split path #":" -1))
+        candidate (first (filter #(and (Files/isRegularFile % (make-array LinkOption 0))
+                                       (Files/isExecutable %))
+                                 candidates))]
+    (when-not candidate
+      (throw (ex-info "required toolchain executable was not found"
+                      {:phase :execute})))
+    (.toRealPath ^Path candidate (make-array LinkOption 0))))
 
 (defn- host-target []
   (let [os (str/lower-case (System/getProperty "os.name"))
@@ -106,12 +124,15 @@
 (defn- build-runtime! [directory]
   (let [loader (io/file directory "kexe-loader")
         loader-source (io/file "tools/kexe_loader.c")
+        compiler-path (resolve-executable "cc")
+        compiler-file (.toFile compiler-path)
+        compiler-binary-sha (file-sha256 compiler-file)
         actual-source-sha (file-sha256 loader-source)]
     (when-not (= loader-source-sha256 actual-source-sha)
       (throw (ex-info "native loader source identity mismatch"
                       {:phase :execute :expected loader-source-sha256
                        :actual actual-source-sha})))
-    (let [compiler (run-process ["cc" "--version"] {} {:timeout-ms 5000})
+    (let [compiler (run-process [(str compiler-path) "--version"] {} {:timeout-ms 5000})
           _ (when-not (and (zero? (:exit compiler))
                            (not (:timed-out? compiler))
                            (not (:output-exceeded? compiler)))
@@ -120,7 +141,7 @@
           compiler-text (str (:stdout compiler) (:stderr compiler))
           build-command (fn []
                           (vec (concat
-                                ["cc" "-std=c11" "-O2" "-Wall" "-Wextra" "-Werror"]
+                                [(str compiler-path) "-std=c11" "-O2" "-Wall" "-Wextra" "-Werror"]
                                 (deterministic-linker-flags)
                                 [(.getPath loader-source) "-o" (.getPath loader)])))
           build (run-process (build-command) {} {:timeout-ms 30000})
@@ -133,15 +154,19 @@
                         {:phase :execute :stderr (str (:stderr build)
                                                      (:stderr reproduced-build))})))
       (let [loader-sha (file-sha256 loader)]
+        (when-not (= compiler-binary-sha (file-sha256 compiler-file))
+          (throw (ex-info "native C compiler changed during measurement"
+                          {:phase :execute})))
         (when-not (= first-loader-sha loader-sha)
           (throw (ex-info "native loader build is not reproducible"
                           {:phase :execute :first first-loader-sha
                            :second loader-sha})))
         {:loader loader
-         :runtime {:format :kotoba.native-runtime/v1
+         :runtime {:format :kotoba.native-runtime/v2
                    :loader-source-sha256 loader-source-sha256
                    :loader-binary-sha256 loader-sha
-                   :compiler-identity-sha256
+                   :compiler-binary-sha256 compiler-binary-sha
+                   :compiler-version-sha256
                    (raw-sha256 (.getBytes compiler-text StandardCharsets/UTF_8))}}))))
 
 (defn measure-runtime
