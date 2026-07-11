@@ -125,7 +125,7 @@ native_expect_trap() {
 }
 
 native_cap_check() {
-  ARTIFACT=$1 ISA=$2 ALLOW=$3 EXPECTED=$4
+  ARTIFACT=$1 ISA=$2 ALLOW=$3 EXPECTED=$4 SIGNAL=$5
   META=$("$ROOT/bin/kotoba" -M extract-native "$ARTIFACT" --symbol helper --output "$TMP/$ISA-cap.bin")
   OFFSET=$(printf '%s' "$META" | sed -n 's/.*:offset \([0-9][0-9]*\).*/\1/p')
   GOT=$("$TMP/kexe-loader" "$TMP/$ISA-cap.bin" "$OFFSET" 1 "$ISA" "$ALLOW" 41)
@@ -134,7 +134,7 @@ native_cap_check() {
     echo "native $ISA capability unexpectedly bypassed runtime policy" >&2
     exit 1
   fi
-  grep -q '^KEXE_TRAP {:kind :signal :signal :SIGILL}$' "$TMP/cap-deny.err"
+  grep -q "^KEXE_TRAP {:kind :signal :signal :$SIGNAL}$" "$TMP/cap-deny.err"
 }
 
 native_sandbox_probe() {
@@ -163,7 +163,7 @@ if [ "$(uname -s)-$(uname -m)" = "Linux-x86_64" ]; then
   "$ROOT/bin/kotoba" -M compile "$ROOT/examples/capability.kotoba" --target x86_64 \
     --policy "$ROOT/examples/capability-policy.edn" --output "$TMP/x86_64-cap.kexe"
   "$ROOT/bin/kotoba" -M verify "$TMP/x86_64-cap.kexe"
-  native_cap_check "$TMP/x86_64-cap.kexe" x86_64 7 42
+  native_cap_check "$TMP/x86_64-cap.kexe" x86_64 7 42 SIGILL
   printf '%s\n' 'conformance: native x86_64 runtime vector passed under W^X loader'
 fi
 
@@ -183,7 +183,7 @@ case "$(uname -s)-$(uname -m)" in
     "$ROOT/bin/kotoba" -M compile "$ROOT/examples/capability.kotoba" --target aarch64 \
       --policy "$ROOT/examples/capability-policy.edn" --output "$TMP/aarch64-cap.kexe"
     "$ROOT/bin/kotoba" -M verify "$TMP/aarch64-cap.kexe"
-    native_cap_check "$TMP/aarch64-cap.kexe" aarch64 7 42
+    native_cap_check "$TMP/aarch64-cap.kexe" aarch64 7 42 SIGTRAP
     printf '%s\n' 'conformance: native aarch64 runtime vector passed under W^X loader'
     ;;
 esac

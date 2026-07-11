@@ -42,4 +42,6 @@ syscalls trap as `SIGSYS`. CI deliberately attempts to open `/etc/passwd` after
 filter installation and requires the machine-readable EDN report
 `KEXE_TRAP {:kind :signal :signal :SIGSYS}`. Arithmetic, fuel, and capability
 traps likewise report their exact OS signal without calling unsafe libc code
-from the signal handler.
+from the signal handler. The native backends deliberately use their own hard
+trap instructions for generated-code policy denial: x86-64 `UD2` reports
+`SIGILL`, while AArch64 `BRK` reports `SIGTRAP`.
