@@ -17,3 +17,4 @@ jobs:
           printf '(defn main [] (+ 40 2))\n' > /tmp/ci.kotoba
           bin/kotoba -M compile /tmp/ci.kotoba --target x86_64 --output /tmp/ci.kexe
           bin/kotoba -M verify /tmp/ci.kexe
+      - run: scripts/conformance.sh

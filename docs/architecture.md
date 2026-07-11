@@ -23,6 +23,15 @@ change it to read+execute, and never map it writable again. No generated code
 may contain a syscall instruction. External effects will be reachable only
 through fixed, capability-checked loader trampolines.
 
-The bootstrap slice intentionally accepts less than the current Kotoba Wasm
+The experimental slice intentionally accepts less than the current Kotoba Wasm
 compiler. Migration proceeds by moving frontend rules and conformance vectors
 from `kotoba-lang/kotoba`, never by silently accepting unsupported forms.
+
+## Current maturity
+
+The compiler is `experimental alpha`, not production-safe. Multiple pure
+functions, arguments, lexical `let`, `if`, integer arithmetic, and comparisons
+are admitted. The current KIR specializes the closed zero-argument program to a
+verified return value; runtime parameters, general control-flow machine code,
+memory, effects, fuel instrumentation, and the W^X loader remain required before
+hostile execution can be considered.

@@ -14,15 +14,18 @@ or a Wasm runtime. Native output is deliberately a sealed `KEXE` object rather
 than an OS executable: an aiueos loader must verify it, map code W^X, and expose
 only policy-derived capability trampolines.
 
-The first vertical slice compiles a pure, zero-argument `main` containing
-integer constants and arithmetic. It emits executable Wasm and verified return
-stubs for x86-64 and AArch64. Effectful calls, allocation, indirect control flow,
-and OS ABI emission fail closed until their verifier rules exist.
+The current experimental slice supports pure integer functions, parameters,
+direct calls, sequential `let`, `if`, arithmetic, and comparisons. It emits
+executable Wasm and verified return stubs for x86-64 and AArch64. KEXE seals its
+target, KIR identity, effects, resource limits, and exact code bytes with
+SHA-256. Effectful calls, allocation, indirect control flow, and OS ABI emission
+fail closed until their verifier rules exist.
 
 ```bash
 bin/kotoba -M compile example.kotoba --target wasm32 --output app.wasm
 bin/kotoba -M compile example.kotoba --target x86_64 --output app.kexe
 bin/kotoba -M verify app.kexe
+scripts/conformance.sh
 ```
 
 After putting `bin/kotoba` on `PATH`, the public command is simply

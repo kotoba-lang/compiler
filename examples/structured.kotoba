@@ -1,0 +1,12 @@
+(ns examples.structured)
+
+(defn abs [x]
+  (if (< x 0) (- x) x))
+
+(defn score [x bonus]
+  (let [m (* x 2)
+        total (+ m bonus)]
+    (abs total)))
+
+(defn main []
+  (score -20 -2))
