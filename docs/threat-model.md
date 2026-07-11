@@ -56,3 +56,14 @@ The fuel context is backed by a dedicated parent-created shared mapping. The
 child can only monotonically consume its counter through regenerated code; the
 supervisor reads the final counter and result slot after `waitpid`, producing
 the evidence later bound into an executor-signed receipt.
+
+The bootstrap executor pins the reviewed loader source by raw SHA-256 before
+invoking the C toolchain. It measures the resulting binary and compiler identity
+and places all three hashes in `:kotoba.native-runtime/v1` result evidence. The
+executor-signed receipt therefore identifies the exact runtime used. This is an
+attestation and drift detector. The executor also builds the same output twice
+with fixed flags and requires byte-identical SHA-256 values before execution;
+Linux build IDs are disabled, while macOS uses the deterministic UUID produced
+for an identical output identity. This is not yet a hermetic or independently
+reproduced binary build; compromise of the host compiler remains in scope for
+the next supply-chain layer.

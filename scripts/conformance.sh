@@ -183,7 +183,10 @@ attested_run_check() {
     --signed "$SIGNED" --trust "$TMP/trust.edn" --policy "$TMP/pure-policy.edn" \
     --input "$TMP/input.edn" --result "$TMP/$ISA-run-result.edn" --now 1500 \
     >"$TMP/$ISA-run-verification.edn"
-  grep -q '^{:status :ok, :result 42}$' "$TMP/$ISA-run-result.edn"
+  grep -q ':status :ok' "$TMP/$ISA-run-result.edn"
+  grep -q ':result 42' "$TMP/$ISA-run-result.edn"
+  grep -q ':format :kotoba.native-runtime/v1' "$TMP/$ISA-run-result.edn"
+  grep -Eq ':loader-binary-sha256 "[0-9a-f]{64}"' "$TMP/$ISA-run-result.edn"
   grep -q ':remaining 253' "$TMP/$ISA-run-receipt.edn"
   grep -q ':verified? true' "$TMP/$ISA-run-verification.edn"
 }

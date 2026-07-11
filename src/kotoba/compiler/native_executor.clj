@@ -5,7 +5,20 @@
             [kotoba.compiler.admission :as admission]
             [kotoba.compiler.signing :as signing])
   (:import [java.nio.file Files]
-           [java.nio.file.attribute FileAttribute]))
+           [java.nio.charset StandardCharsets]
+           [java.nio.file.attribute FileAttribute]
+           [java.security MessageDigest]))
+
+(def loader-source-sha256
+  "Pinned identity of the reviewed native loader source used by this executor."
+  "d7e18ad376909126b36dd7a8791fb5983eaf7b69394fee61b68fe924a04b8a65")
+
+(defn- raw-sha256 [bytes]
+  (let [digest (.digest (MessageDigest/getInstance "SHA-256") bytes)]
+    (apply str (map #(format "%02x" (bit-and (int %) 0xff)) digest))))
+
+(defn- file-sha256 [file]
+  (raw-sha256 (Files/readAllBytes (.toPath ^java.io.File file))))
 
 (defn- host-target []
   (let [os (str/lower-case (System/getProperty "os.name"))
@@ -18,6 +31,11 @@
       (contains? #{"aarch64" "arm64"} arch) :aarch64-kotoba-v1
       :else (throw (ex-info "native execution is unsupported on this architecture"
                             {:phase :execute :arch arch})))))
+
+(defn- deterministic-linker-flags []
+  (if (str/includes? (str/lower-case (System/getProperty "os.name")) "mac")
+    []
+    ["-Wl,--build-id=none"]))
 
 (defn- run-process [command env]
   (let [builder (ProcessBuilder. ^java.util.List (mapv str command))
@@ -74,16 +92,44 @@
     (let [directory (.toFile (Files/createTempDirectory
                               "kotoba-native-" (make-array FileAttribute 0)))
           code-file (io/file directory "program.bin")
-          loader (io/file directory "kexe-loader")]
+          loader (io/file directory "kexe-loader")
+          loader-source (io/file "tools/kexe_loader.c")]
       (try
+        (let [actual-source-sha (file-sha256 loader-source)]
+          (when-not (= loader-source-sha256 actual-source-sha)
+            (throw (ex-info "native loader source identity mismatch"
+                            {:phase :execute :expected loader-source-sha256
+                             :actual actual-source-sha}))))
         (with-open [out (io/output-stream code-file)]
           (.write out ^bytes (byte-array (map unchecked-byte (:code artifact)))))
-        (let [build (run-process ["cc" "-std=c11" "-O2" "-Wall" "-Wextra" "-Werror"
-                                  "tools/kexe_loader.c" "-o" (.getPath loader)] {})]
-          (when-not (zero? (:exit build))
+        (let [compiler (run-process ["cc" "--version"] {})
+              _ (when-not (zero? (:exit compiler))
+                  (throw (ex-info "native C compiler identity query failed"
+                                  {:phase :execute :stderr (:stderr compiler)})))
+              compiler-text (str (:stdout compiler) (:stderr compiler))
+              build-command (fn [output]
+                              (vec (concat
+                                    ["cc" "-std=c11" "-O2" "-Wall" "-Wextra" "-Werror"]
+                                    (deterministic-linker-flags)
+                                    [(.getPath loader-source) "-o" (.getPath output)])))
+              build (run-process (build-command loader) {})
+              first-loader-sha (when (zero? (:exit build)) (file-sha256 loader))
+              reproduced-build (run-process (build-command loader) {})]
+          (when-not (and (zero? (:exit build)) (zero? (:exit reproduced-build)))
             (throw (ex-info "native loader build failed"
-                            {:phase :execute :stderr (:stderr build)}))))
-        (let [isa (if (= target :x86_64-kotoba-v1) "x86_64" "aarch64")
+                            {:phase :execute :stderr (str (:stderr build)
+                                                         (:stderr reproduced-build))})))
+          (let [loader-sha (file-sha256 loader)
+                _ (when-not (= first-loader-sha loader-sha)
+                    (throw (ex-info "native loader build is not reproducible"
+                                    {:phase :execute :first first-loader-sha
+                                     :second loader-sha})))
+                runtime {:format :kotoba.native-runtime/v1
+                         :loader-source-sha256 loader-source-sha256
+                         :loader-binary-sha256 loader-sha
+                         :compiler-identity-sha256
+                         (raw-sha256 (.getBytes compiler-text StandardCharsets/UTF_8))}
+                isa (if (= target :x86_64-kotoba-v1) "x86_64" "aarch64")
               allow (let [ids (allowed-capabilities policy)] (if (empty? ids) "-" ids))
               command (into [(.getPath loader) (.getPath code-file)
                              (str (:offset export)) (str (:arity export)) isa allow]
@@ -94,7 +140,7 @@
               report (edn/read-string (str/trim (:stdout process)))
               trap (trap-value (:stderr process))
               status (:status report)
-              evidence (cond-> {:status status}
+              evidence (cond-> {:status status :runtime runtime}
                          (= status :ok) (assoc :result (:result report))
                          trap (assoc :trap trap))]
           (when-not (and (#{:ok :trap} status)
@@ -106,5 +152,5 @@
                              :stdout (:stdout process) :stderr (:stderr process)})))
           {:artifact artifact :signer signer :target target :entry entry
            :input input :evidence evidence :report report
-           :started-at started-at :finished-at finished-at})
+           :started-at started-at :finished-at finished-at}))
         (finally (delete-tree! directory))))))

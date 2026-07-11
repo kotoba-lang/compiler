@@ -99,6 +99,10 @@ policy, requires host ISA and entry arity to match, then invokes the supervised
 loader. The command writes the measured result separately and creates an
 executor-signed receipt using the supervisor's actual post-execution fuel
 counter; callers cannot supply result, status, timing, or fuel values.
+The result evidence also binds the pinned loader-source hash, the exact loader
+binary hash, and a hash of the C compiler identity. A source mismatch is denied
+before compilation, and the executor signature makes the runtime identity part
+of the receipt's output evidence.
 
 See [docs/architecture.md](docs/architecture.md) and
 [docs/threat-model.md](docs/threat-model.md).

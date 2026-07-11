@@ -21,7 +21,12 @@
   (let [{:keys [envelope trust]} (signed "(defn main [] 42)" {:allow #{}})
         result (executor/execute envelope trust {:allow #{}} {:args []}
                                  {:now 1500 :entry 'main})]
-    (is (= {:status :ok :result 42} (:evidence result)))
+    (is (= {:status :ok :result 42} (select-keys (:evidence result) [:status :result])))
+    (is (= :kotoba.native-runtime/v1 (get-in result [:evidence :runtime :format])))
+    (is (= executor/loader-source-sha256
+           (get-in result [:evidence :runtime :loader-source-sha256])))
+    (is (every? #(re-matches #"[0-9a-f]{64}" %)
+                (vals (dissoc (get-in result [:evidence :runtime]) :format))))
     (is (= {:status :ok :result 42
             :fuel {:initial 256 :remaining 255}}
            (:report result)))
