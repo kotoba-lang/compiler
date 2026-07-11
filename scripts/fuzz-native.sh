@@ -67,11 +67,27 @@ if [ "$(uname -s)" = Linux ]; then
     LIMIT=-runs=$RUNS
     LABEL=$RUNS
   fi
-  ASAN_OPTIONS=detect_leaks=0:abort_on_error=1 \
-  UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
-    "$TMP/kexe-parser-fuzz" "$TMP/corpus" "$LIMIT" -max_len=1024 \
-    -timeout=2 -artifact_prefix="$ARTIFACT_PREFIX" \
-    -print_final_stats=1 -verbosity=0
+  FUZZ_LOG=$TMP/libfuzzer.log
+  if ! ASAN_OPTIONS=detect_leaks=0:abort_on_error=1 \
+       UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+       "$TMP/kexe-parser-fuzz" "$TMP/corpus" "$LIMIT" -max_len=1024 \
+       -timeout=2 -artifact_prefix="$ARTIFACT_PREFIX" \
+       -print_final_stats=1 -verbosity=1 >"$FUZZ_LOG" 2>&1; then
+    cat "$FUZZ_LOG" >&2
+    exit 1
+  fi
+  DONE=$(grep 'DONE.*cov:' "$FUZZ_LOG" | tail -1)
+  COV=$(printf '%s' "$DONE" | sed -n 's/.* cov: \([0-9][0-9]*\).*/\1/p')
+  FEATURES=$(printf '%s' "$DONE" | sed -n 's/.* ft: \([0-9][0-9]*\).*/\1/p')
+  CORPUS=$(printf '%s' "$DONE" | sed -n 's/.* corp: \([0-9][0-9]*\)\/.*/\1/p')
+  [ -n "$COV" ] && [ -n "$FEATURES" ] && [ -n "$CORPUS" ] || {
+    cat "$FUZZ_LOG" >&2
+    echo "native-fuzz: unable to parse libFuzzer coverage summary" >&2
+    exit 1
+  }
+  SUMMARY="{:format :kotoba.fuzz-coverage/v1 :engine :libfuzzer :cov $COV :features $FEATURES :corpus $CORPUS :limit \"$LABEL\"}"
+  printf '%s\n' "$SUMMARY"
+  if [ -n "$OUTPUT_DIR" ]; then printf '%s\n' "$SUMMARY" >"$OUTPUT_DIR/coverage.edn"; fi
   MODE=coverage-guided
 else
   clang -std=c11 -O1 -g -Wall -Wextra -DKEXE_STANDALONE_FUZZ \
@@ -82,6 +98,9 @@ else
     "$TMP/kexe-parser-fuzz" "$RUNS" "$TMP"/corpus/*
   MODE=deterministic-sanitized
   LABEL=$RUNS
+  SUMMARY="{:format :kotoba.fuzz-coverage/v1 :engine :deterministic-sanitized :cases $RUNS}"
+  printf '%s\n' "$SUMMARY"
+  if [ -n "$OUTPUT_DIR" ]; then printf '%s\n' "$SUMMARY" >"$OUTPUT_DIR/coverage.edn"; fi
 fi
 
 printf '%s\n' "native-fuzz: $LABEL $MODE parser fuzz passed"
