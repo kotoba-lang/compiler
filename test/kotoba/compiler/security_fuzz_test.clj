@@ -45,7 +45,9 @@
     16 (reseal-program kexe (assoc-in (:program kexe) [:functions 0 :body]
                                       '(attacker-op 1)))
     17 (reseal-program kexe (assoc-in (:program kexe) [:functions 0 :params]
-                                      '[a b c d e f]))))
+                                      '[a b c d e f]))
+    18 (reseal (assoc kexe :attacker-field true))
+    19 (reseal (update kexe :value inc))))
 
 (defn- mutate-envelope [envelope choice]
   (case choice
@@ -54,7 +56,8 @@
     2 (update-in envelope [:artifact :code 0] bit-xor 1)
     3 (assoc-in envelope [:statement :public-key] "malformed")
     4 (assoc-in envelope [:statement :expires] 999)
-    5 (assoc envelope :format :kotoba.signed-kexe/unknown)))
+    5 (assoc envelope :format :kotoba.signed-kexe/unknown)
+    6 (assoc envelope :attacker-field true)))
 
 (defn- receipt-hash [value]
   (artifact/sha256 (dissoc value :receipt-sha256 :executor)))
@@ -66,7 +69,9 @@
                   2 (assoc-in value [:fuel :remaining] 257)
                   3 (update value :output-sha256 flip-string)
                   4 (update-in value [:executor :signature] flip-string)
-                  5 (assoc value :entry 'attacker))]
+                  5 (assoc value :entry 'attacker)
+                  6 (assoc value :attacker-field true)
+                  7 (assoc-in value [:fuel :attacker-field] 0))]
     ;; Half of the mutations model an attacker who can recompute unkeyed hashes.
     (if (odd? choice) (assoc changed :receipt-sha256 (receipt-hash changed)) changed)))
 
@@ -95,14 +100,14 @@
         (case domain
           0 (is (thrown? clojure.lang.ExceptionInfo
                          (verifier/verify-artifact!
-                          (mutate-artifact kexe (.nextInt rng 18))))
+                          (mutate-artifact kexe (.nextInt rng 20))))
                 assertion-message)
           1 (is (thrown? clojure.lang.ExceptionInfo
                          (signing/verify
-                          (mutate-envelope envelope (.nextInt rng 6)) trust 1500))
+                          (mutate-envelope envelope (.nextInt rng 7)) trust 1500))
                 assertion-message)
           2 (is (thrown? clojure.lang.ExceptionInfo
                          (receipt/verify
-                          (mutate-receipt run-receipt (.nextInt rng 6))
+                          (mutate-receipt run-receipt (.nextInt rng 8))
                           envelope trust policy input output {:now 1500 :parent nil}))
                 assertion-message))))))

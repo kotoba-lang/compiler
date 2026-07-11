@@ -50,6 +50,19 @@
                                                  #{(get-in envelope [:statement :signer])})
                                           policy input output {:now 1500 :parent nil})))))
 
+(deftest receipt-schema-rejects-unknown-fields-before-hash-or-signature
+  (let [{:keys [envelope key trust policy input output]} (fixture)
+        value (receipt/create envelope trust policy input output
+                              (assoc opts :executor-key key))]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"schema rejected"
+                          (receipt/verify (assoc value :ignored true)
+                                          envelope trust policy input output
+                                          {:now 1500 :parent nil})))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"schema rejected"
+                          (receipt/verify (assoc-in value [:fuel :ignored] 0)
+                                          envelope trust policy input output
+                                          {:now 1500 :parent nil})))))
+
 (deftest receipt-chain-links-and-rejects-reordering
   (let [{:keys [envelope key trust policy input output]} (fixture)
         first-receipt (receipt/create envelope trust policy input output

@@ -19,6 +19,12 @@ recomputed every unkeyed hash. It independently validates the KIR AST, lexical
 scope, call arities, transitive capability effects, ABI limits, node/depth
 budgets, and `let` expansion cost before regenerating and comparing machine
 code.
+KEXE, signed envelopes/statements, trust policies, capability policies,
+runtime identities, signing/verification keys, receipts, and receipt fuel maps
+all use exact versioned schemas: unknown fields are rejected rather than
+ignored. For pure KEXE, the verifier also re-executes `main` with the normative
+KIR interpreter and requires sealed `:value` metadata to match; effectful KEXE
+must carry no oracle value.
 
 The current experimental slice supports pure integer functions, parameters,
 direct calls, sequential `let`, `if`, arithmetic, and comparisons. It emits

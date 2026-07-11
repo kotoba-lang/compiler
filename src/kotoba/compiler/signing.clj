@@ -1,5 +1,6 @@
 (ns kotoba.compiler.signing
-  (:require [kotoba.compiler.artifact :as artifact]
+  (:require [clojure.set :as set]
+            [kotoba.compiler.artifact :as artifact]
             [kotoba.compiler.verifier :as verifier])
   (:import [java.security KeyFactory KeyPairGenerator Signature]
            [java.security.spec PKCS8EncodedKeySpec X509EncodedKeySpec]
@@ -14,7 +15,14 @@
   (and (string? value) (boolean (re-matches #"[0-9a-f]{64}" value))))
 
 (defn validate-trust! [trust]
-  (when-not (and (= :kotoba.trust/v1 (:format trust))
+  (let [allowed-fields #{:format :trusted-signers :revoked-signers :revoked-artifacts
+                         :trusted-runtime-sha256 :revoked-runtime-sha256}]
+    (when-not (and (map? trust)
+                 (every? allowed-fields (keys trust))
+                 (= #{:format :trusted-signers :revoked-signers :revoked-artifacts}
+                    (set/intersection (set (keys trust))
+                                      #{:format :trusted-signers :revoked-signers :revoked-artifacts}))
+                 (= :kotoba.trust/v1 (:format trust))
                  (set? (:trusted-signers trust))
                  (every? sha256? (:trusted-signers trust))
                  (set? (:revoked-signers trust))
@@ -27,7 +35,7 @@
                  (or (not (contains? trust :revoked-runtime-sha256))
                      (and (set? (:revoked-runtime-sha256 trust))
                           (every? sha256? (:revoked-runtime-sha256 trust)))))
-    (throw (ex-info "malformed trust policy" {:phase :trust})))
+      (throw (ex-info "malformed trust policy" {:phase :trust}))))
   trust)
 
 (defn signer-id [public-key]
@@ -131,10 +139,16 @@
   [envelope trust now]
   (when-not (= :kotoba.signed-kexe/v1 (:format envelope))
     (throw (ex-info "unknown signed artifact envelope" {:phase :signature})))
+  (when-not (and (map? envelope)
+                 (= #{:format :artifact :statement :signature} (set (keys envelope))))
+    (throw (ex-info "signed artifact envelope schema mismatch" {:phase :signature})))
   (validate-trust! trust)
   (let [{:keys [artifact statement signature]} envelope
         {:keys [signer public-key not-before expires artifact-sha256]} statement]
-    (when-not (and (= :kotoba.signature-statement/v1 (:format statement))
+    (when-not (and (map? statement)
+                   (= #{:format :artifact-sha256 :signer :public-key :not-before :expires}
+                      (set (keys statement)))
+                   (= :kotoba.signature-statement/v1 (:format statement))
                    (= signer (signer-id public-key))
                    (= artifact-sha256 (:sha256 artifact))
                    (integer? not-before) (integer? expires) (< not-before expires)

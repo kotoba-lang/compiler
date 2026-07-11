@@ -6,6 +6,10 @@
   {:allow #{[:cap/call 7] ...}}. Returns least privilege and lint facts or
   throws before any backend is selected."
   [hir policy]
+  (when-not (and (map? policy)
+                 (every? #{:allow} (keys policy))
+                 (or (not (contains? policy :allow)) (set? (:allow policy))))
+    (throw (ex-info "malformed capability policy" {:phase :admission})))
   (let [required (set (:effects hir))
         allowed (set (or (:allow policy) #{}))
         malformed (remove #(and (vector? %) (= :cap/call (first %))

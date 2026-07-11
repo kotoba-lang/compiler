@@ -26,7 +26,12 @@
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"malformed capability policy"
                         (compiler/check-source effect-source {:allow #{[:network "*"]}})))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"malformed capability policy"
-                        (compiler/check-source effect-source {:allow #{[:cap/call 999]}}))))
+                        (compiler/check-source effect-source {:allow #{[:cap/call 999]}})))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"malformed capability policy"
+                        (compiler/check-source effect-source
+                                               {:allow #{[:cap/call 7]} :ignored true})))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"malformed capability policy"
+                        (compiler/check-source effect-source {:allow [[:cap/call 7]]}))))
 
 (deftest dynamic-capability-identifiers-and-native-codegen-fail-closed
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"literal capability id"

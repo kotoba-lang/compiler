@@ -18,6 +18,13 @@ targets, function/module effect closure, expression depth/count, and symbolic
 post-`let` lowering cost. Thus an attacker-resealed KEXE cannot bypass frontend
 budgets or hide a capability call inside falsely pure KIR.
 
+All versioned security objects use exact key sets. KEXE, signature envelopes
+and statements, trust policies, keys, runtime identities, receipts, and nested
+fuel records reject unknown fields, including after an attacker recomputes
+unkeyed hashes. Capability policies likewise accept only an optional set-valued
+`:allow`. For pure native programs, verification recomputes sealed oracle
+metadata through the normative KIR executor; effectful programs require nil.
+
 Targets are versioned contracts:
 
 - `wasm32-kotoba-v1`: portable sandbox target and conformance oracle.

@@ -2,7 +2,8 @@
   (:require [clojure.set :as set]
             [kotoba.compiler.artifact :as artifact]
             [kotoba.compiler.backend.aarch64 :as aarch64]
-            [kotoba.compiler.backend.x86-64 :as x86-64]))
+            [kotoba.compiler.backend.x86-64 :as x86-64]
+            [kotoba.compiler.ir :as ir]))
 
 (defn- reject! [message data]
   (throw (ex-info message (assoc data :phase :verify))))
@@ -10,6 +11,10 @@
 (def target-contracts
   {:x86_64-kotoba-v1 {:lowering :runtime-sysv-v1 :emit x86-64/emit-program}
    :aarch64-kotoba-v1 {:lowering :runtime-aapcs64-v1 :emit aarch64/emit-program}})
+
+(def ^:private artifact-fields
+  #{:format :target :value :kir-sha256 :lowering :fuel-abi :context-abi
+    :effects :limits :code :program :exports :sha256})
 
 (def max-functions 1024)
 (def max-expression-nodes 50000)
@@ -223,6 +228,8 @@
                  {:target target :context-abi context-abi})))))
 
 (defn verify-artifact! [{:keys [format target code effects kir-sha256] :as kexe}]
+  (when-not (and (map? kexe) (= artifact-fields (set (keys kexe))))
+    (reject! "native artifact schema rejected" {}))
   (when-not (= :kotoba.kexe/v1 format) (reject! "unknown artifact format" {}))
   (when-not (and (string? kir-sha256) (re-matches #"[0-9a-f]{64}" kir-sha256))
     (reject! "missing or malformed KIR identity" {}))
@@ -239,4 +246,13 @@
   (when-not (= kir-sha256 (artifact/sha256 (:program kexe)))
     (reject! "runtime KIR identity mismatch" {}))
   (verify-runtime! kexe)
+  (let [expected-value
+        (when (empty? effects)
+          (try
+            (ir/execute (:program kexe) (get-in kexe [:program :entry]) [])
+            (catch Exception error
+              (reject! "native artifact oracle evaluation rejected"
+                       {:cause (.getMessage error)}))))]
+    (when-not (= expected-value (:value kexe))
+      (reject! "native artifact oracle value rejected" {})))
   kexe)

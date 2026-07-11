@@ -53,6 +53,16 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"statement mismatch"
                           (signing/verify resealed trust 1500)))))
 
+(deftest versioned-signature-and-trust-schemas-reject-unknown-fields
+  (let [{:keys [envelope trust]} (fixture)]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"envelope schema"
+                          (signing/verify (assoc envelope :ignored true) trust 1500)))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"statement mismatch"
+                          (signing/verify (assoc-in envelope [:statement :ignored] true)
+                                          trust 1500)))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"malformed trust policy"
+                          (signing/verify envelope (assoc trust :ignored true) 1500)))))
+
 (deftest signing-and-verification-key-material-is-validated
   (let [first-key (signing/generate-keypair)
         second-key (signing/generate-keypair)

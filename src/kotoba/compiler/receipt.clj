@@ -5,6 +5,19 @@
             [kotoba.compiler.signing :as signing]))
 
 (def statuses #{:ok :trap :denied})
+(def ^:private receipt-fields
+  #{:format :artifact-envelope-sha256 :artifact-sha256 :signer :target :entry
+    :required-effects :policy-sha256 :input-sha256 :output-sha256 :fuel :status
+    :started-at :finished-at :parent :admission-sha256 :receipt-sha256 :executor})
+
+(defn- verify-schema! [receipt]
+  (when-not (and (map? receipt)
+                 (= receipt-fields (set (keys receipt)))
+                 (= :kotoba.run-receipt/v1 (:format receipt))
+                 (map? (:fuel receipt))
+                 (= #{:initial :remaining :consumed} (set (keys (:fuel receipt)))))
+    (throw (ex-info "run receipt schema rejected" {:phase :receipt})))
+  receipt)
 
 (defn- receipt-hash [receipt]
   (artifact/sha256 (dissoc receipt :receipt-sha256 :executor)))
@@ -40,7 +53,8 @@
         required (:effects kexe)
         policy-result (admission/check {:effects required} policy)
         parent-sha (when parent
-                     (do (when-not (valid-hash? parent)
+                     (do (verify-schema! parent)
+                         (when-not (valid-hash? parent)
                            (throw (ex-info "parent receipt integrity mismatch" {:phase :receipt})))
                          (verify-executor! parent trust)
                          (:receipt-sha256 parent)))]
@@ -84,8 +98,7 @@
 
 (defn verify
   [receipt envelope trust policy input output {:keys [now parent]}]
-  (when-not (= :kotoba.run-receipt/v1 (:format receipt))
-    (throw (ex-info "unknown run receipt format" {:phase :receipt})))
+  (verify-schema! receipt)
   (when-not (valid-hash? receipt)
     (throw (ex-info "receipt integrity mismatch" {:phase :receipt})))
   (let [{kexe :artifact signer :signer} (signing/verify envelope trust now)
@@ -129,10 +142,9 @@
   (loop [remaining receipts parent nil seen #{}]
     (if-let [receipt (first remaining)]
       (do
+        (verify-schema! receipt)
         (when-not (valid-hash? receipt)
           (throw (ex-info "receipt chain integrity mismatch" {:phase :receipt})))
-        (when-not (= :kotoba.run-receipt/v1 (:format receipt))
-          (throw (ex-info "receipt chain format mismatch" {:phase :receipt})))
         (verify-executor! receipt trust)
         (when-not (= (:parent receipt) (some-> parent :receipt-sha256))
           (throw (ex-info "receipt parent link mismatch" {:phase :receipt})))

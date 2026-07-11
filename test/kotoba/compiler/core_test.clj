@@ -49,6 +49,15 @@
                      (assoc artifact :kir-sha256 (apply str (repeat 64 "0")))]]
       (is (thrown? clojure.lang.ExceptionInfo (verifier/verify-artifact! mutated))))))
 
+(deftest artifact-schema-and-oracle-metadata-are-recomputed
+  (let [kexe (:artifact (compiler/compile-source source :x86_64-kotoba-v1))]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"schema rejected"
+                          (verifier/verify-artifact!
+                           (artifact/seal (assoc kexe :attacker-field true)))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"oracle value rejected"
+                          (verifier/verify-artifact!
+                           (artifact/seal (update kexe :value inc)))))))
+
 (deftest x86-runtime-artifact-is-derived-from-sealed-kir
   (let [kexe (:artifact (compiler/compile-source structured-source :x86_64-kotoba-v1))]
     (is (= :runtime-sysv-v1 (:lowering kexe)))
