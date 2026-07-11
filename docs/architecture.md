@@ -178,6 +178,13 @@ signer membership, signer/artifact revocation sets, and the validity interval,
 then invokes the ordinary KEXE verifier. Revocation remains outside immutable
 artifact identity and can change without rewriting the artifact.
 
+Signing keys and verification keys are distinct serialized formats. A signing
+key is accepted only after a fixed domain-separated challenge signed by its
+PKCS#8 private key verifies under its X.509 public key, proving that encoded
+halves match. `public-key` strips private material into
+`kotoba.verification-key/v1`; trust provisioning validates the public encoding,
+algorithm, exact fields, and fingerprint before recording the signer ID.
+
 ## Run receipts
 
 `kotoba.run-receipt/v1` is a canonical hash-linked evidence record. Creation

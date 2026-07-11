@@ -22,14 +22,21 @@
           key (signing/generate-keypair)]
       (atomic-output/write-edn! output key {:private? true})
       (println (pr-str {:ok true :output output :signer (:signer key)})))
+    "public-key"
+    (let [key (bounded-edn/read-file (second args))
+          public (signing/verification-key key)
+          output (or (option args "--output") "kotoba-verification-key.edn")]
+      (atomic-output/write-edn! output public)
+      (println (pr-str {:ok true :output output :signer (:signer public)})))
     "trust-key"
     (let [key (bounded-edn/read-file (second args))
+          signer (signing/trusted-signer-id! key)
           output (or (option args "--output") "kotoba-trust.edn")
-          trust {:format :kotoba.trust/v1 :trusted-signers #{(:signer key)}
+          trust {:format :kotoba.trust/v1 :trusted-signers #{signer}
                  :revoked-signers #{} :revoked-artifacts #{}
                  :revoked-runtime-sha256 #{}}]
       (atomic-output/write-edn! output trust)
-      (println (pr-str {:ok true :output output :signer (:signer key)})))
+      (println (pr-str {:ok true :output output :signer signer})))
     "trust-runtime"
     (let [evidence (bounded-edn/read-file (second args))
           trust-path (option args "--trust")

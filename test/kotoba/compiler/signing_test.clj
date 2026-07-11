@@ -52,3 +52,21 @@
                           (signing/verify changed trust 1500)))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"statement mismatch"
                           (signing/verify resealed trust 1500)))))
+
+(deftest signing-and-verification-key-material-is-validated
+  (let [first-key (signing/generate-keypair)
+        second-key (signing/generate-keypair)
+        public (signing/verification-key first-key)
+        mismatch (assoc first-key :private-key (:private-key second-key))]
+    (is (signing/valid-key? first-key))
+    (is (signing/valid-verification-key? public))
+    (is (= (:signer first-key) (signing/trusted-signer-id! public)))
+    (is (= (:signer first-key) (signing/trusted-signer-id! first-key))
+        "legacy trust provisioning from a private key remains accepted")
+    (is (not (contains? public :private-key)))
+    (is (not (signing/valid-key? mismatch)))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"malformed Ed25519 signing key"
+                          (signing/sign-value mismatch {:value 1})))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"verification key"
+                          (signing/trusted-signer-id!
+                           (assoc public :public-key "malformed"))))))

@@ -3,6 +3,7 @@
             [kotoba.compiler.verifier :as verifier])
   (:import [java.security KeyFactory KeyPairGenerator Signature]
            [java.security.spec PKCS8EncodedKeySpec X509EncodedKeySpec]
+           [java.nio.charset StandardCharsets]
            [java.util Base64]))
 
 (def encoder (Base64/getEncoder))
@@ -32,23 +33,69 @@
 (defn signer-id [public-key]
   (artifact/sha256 {:algorithm :ed25519 :public-key public-key}))
 
+(defn- decode-public [encoded]
+  (.generatePublic (KeyFactory/getInstance "Ed25519")
+                   (X509EncodedKeySpec. (unb64 encoded))))
+
+(defn- decode-private [encoded]
+  (.generatePrivate (KeyFactory/getInstance "Ed25519")
+                    (PKCS8EncodedKeySpec. (unb64 encoded))))
+
+(defn- keypair-matches? [public-key private-key]
+  (try
+    (let [challenge (.getBytes "kotoba:key-consistency:v1" StandardCharsets/UTF_8)
+          signature (doto (Signature/getInstance "Ed25519")
+                      (.initSign (decode-private private-key))
+                      (.update challenge))
+          proof (.sign signature)
+          verifier (doto (Signature/getInstance "Ed25519")
+                     (.initVerify (decode-public public-key))
+                     (.update challenge))]
+      (.verify verifier proof))
+    (catch Exception _ false)))
+
 (defn valid-key? [key]
-  (and (= :kotoba.signing-key/v1 (:format key)) (= :ed25519 (:algorithm key))
-       (= (:signer key) (signer-id (:public-key key))) (string? (:private-key key))))
+  (and (map? key)
+       (= #{:format :algorithm :signer :public-key :private-key} (set (keys key)))
+       (= :kotoba.signing-key/v1 (:format key))
+       (= :ed25519 (:algorithm key))
+       (string? (:public-key key))
+       (string? (:private-key key))
+       (= (:signer key) (signer-id (:public-key key)))
+       (keypair-matches? (:public-key key) (:private-key key))))
+
+(defn valid-verification-key? [key]
+  (and (map? key)
+       (= #{:format :algorithm :signer :public-key} (set (keys key)))
+       (= :kotoba.verification-key/v1 (:format key))
+       (= :ed25519 (:algorithm key))
+       (string? (:public-key key))
+       (= (:signer key) (signer-id (:public-key key)))
+       (try (decode-public (:public-key key)) true (catch Exception _ false))))
+
+(defn verification-key [signing-key]
+  (when-not (valid-key? signing-key)
+    (throw (ex-info "malformed Ed25519 signing key" {:phase :sign})))
+  {:format :kotoba.verification-key/v1 :algorithm :ed25519
+   :signer (:signer signing-key) :public-key (:public-key signing-key)})
+
+(defn trusted-signer-id! [key]
+  (cond
+    (valid-verification-key? key) (:signer key)
+    (valid-key? key) (:signer key)
+    :else (throw (ex-info "malformed Ed25519 verification key" {:phase :trust}))))
 
 (defn sign-value [key value]
   (when-not (valid-key? key)
     (throw (ex-info "malformed Ed25519 signing key" {:phase :sign})))
-  (let [private-key (.generatePrivate (KeyFactory/getInstance "Ed25519")
-                                      (PKCS8EncodedKeySpec. (unb64 (:private-key key))))
+  (let [private-key (decode-private (:private-key key))
         signer (doto (Signature/getInstance "Ed25519") (.initSign private-key)
                  (.update (artifact/canonical-bytes value)))]
     (b64 (.sign signer))))
 
 (defn verify-value [public-key value signature]
   (try
-    (let [public (.generatePublic (KeyFactory/getInstance "Ed25519")
-                                  (X509EncodedKeySpec. (unb64 public-key)))
+    (let [public (decode-public public-key)
           checker (doto (Signature/getInstance "Ed25519") (.initVerify public)
                     (.update (artifact/canonical-bytes value)))]
       (.verify checker (unb64 signature)))

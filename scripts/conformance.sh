@@ -51,7 +51,12 @@ case "$(uname -s)" in
   Linux) KEY_MODE=$(stat -c '%a' "$TMP/signing-key.edn") ;;
 esac
 [ "$KEY_MODE" = 600 ] || { echo "signing key permissions expected 600, got $KEY_MODE" >&2; exit 1; }
-"$ROOT/bin/kotoba" -M trust-key "$TMP/signing-key.edn" --output "$TMP/trust.edn"
+"$ROOT/bin/kotoba" -M public-key "$TMP/signing-key.edn" --output "$TMP/verification-key.edn"
+if grep -q ':private-key' "$TMP/verification-key.edn"; then
+  echo "verification key leaked private key material" >&2
+  exit 1
+fi
+"$ROOT/bin/kotoba" -M trust-key "$TMP/verification-key.edn" --output "$TMP/trust.edn"
 "$ROOT/bin/kotoba" -M sign "$TMP/x86_64.kexe" --key "$TMP/signing-key.edn" \
   --not-before 1000 --expires 2000 --output "$TMP/x86_64.signed.kexe"
 "$ROOT/bin/kotoba" -M verify-signed "$TMP/x86_64.signed.kexe" \

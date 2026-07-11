@@ -95,10 +95,18 @@ revocation and time validity, then runs the normal KEXE verifier.
 
 ```bash
 kotoba -M keygen --output key.edn
-kotoba -M trust-key key.edn --output trust.edn
+kotoba -M public-key key.edn --output verification-key.edn
+kotoba -M trust-key verification-key.edn --output trust.edn
 kotoba -M sign app.kexe --key key.edn --expires 2000000000 --output app.signed.kexe
 kotoba -M verify-signed app.signed.kexe --trust trust.edn
 ```
+
+`keygen` proves that the encoded Ed25519 private and public keys form one pair
+before any signing operation. `public-key` emits a separate
+`:kotoba.verification-key/v1` without private material; `trust-key` validates
+its algorithm, encoding, fingerprint, and exact shape before provisioning
+trust. Direct provisioning from a validated signing key remains supported for
+bootstrap compatibility but is discouraged outside local setup.
 
 Verified executions can produce `kotoba.run-receipt/v1`. Its hash binds the
 signed envelope and artifact, signer, target/entry, required effects, exact

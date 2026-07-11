@@ -33,6 +33,9 @@ Security invariants:
 12. Receipt-chain verification authenticates every node against current
     executor trust/revocation state; an unkeyed hash chain or authenticated head
     cannot confer trust on a forged ancestor.
+13. Signing-key admission proves the encoded private/public Ed25519 pair is
+    consistent, while trust provisioning consumes a validated public-only key
+    format and never requires distributing private material.
 
 Arithmetic is specified independently of the JVM compiler host: i64
 add/subtract/multiply wrap modulo 2^64, while invalid signed division traps. A
