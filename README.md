@@ -17,7 +17,7 @@ only policy-derived capability trampolines.
 The current experimental slice supports pure integer functions, parameters,
 direct calls, sequential `let`, `if`, arithmetic, and comparisons. It emits
 executable Wasm with real runtime parameters, locals, calls, and branches, plus
-verified specialized return stubs for x86-64 and AArch64. KEXE seals its
+verified runtime functions for x86-64 and AArch64. KEXE seals its
 target, KIR identity, effects, resource limits, and exact code bytes with
 SHA-256. Effectful calls, allocation, indirect control flow, and OS ABI emission
 fail closed until their verifier rules exist.
@@ -38,10 +38,16 @@ all three backends; loader resource limits keep native traps outside the compile
 Wasm modules contain a private, non-replenishable i64 fuel global initialized to
 256. Every function entry checks and decrements it before evaluating guest code.
 This permits bounded recursion while guaranteeing that recursive cycles trap.
-x86-64 reserves r9 and AArch64 reserves x7 for a loader-owned fuel-context pointer; both charge every
-function entry before guest instructions; its real `CALL rel32` path supports
-bounded direct and mutual recursion through verified `CALL rel32` / `BL imm26`
-relocations.
+x86-64 reserves r9 and AArch64 reserves x7 for a loader-owned fuel-context
+pointer; both charge every function entry before guest instructions. Their real
+call paths support bounded direct and mutual recursion through verified
+`CALL rel32` / `BL imm26` relocations.
+
+The test gate generates a deterministic 100-program property corpus across
+arithmetic, comparisons, `if`, lexical `let`, and direct calls. Every program is
+compiled to all three targets; the gate requires identical KIR, deterministic
+native bytes/seals, successful re-verification, and rejection after a one-byte
+mutation.
 
 After putting `bin/kotoba` on `PATH`, the public command is simply
 `kotoba -M ...`. The bootstrap currently uses Clojure internally, but that is
