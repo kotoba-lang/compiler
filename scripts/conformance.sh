@@ -222,14 +222,18 @@ attested_run_check() {
     --executor-key "$TMP/signing-key.edn" --now 1500 \
     --result-output "$TMP/$ISA-run-result.edn" --output "$TMP/$ISA-run-receipt.edn" \
     >"$TMP/$ISA-run-summary.edn"
+  "$ROOT/bin/kotoba" -M trust-runtime "$TMP/$ISA-run-result.edn" \
+    --trust "$TMP/trust.edn" --output "$TMP/$ISA-runtime-trust.edn" \
+    >"$TMP/$ISA-runtime-trust-summary.edn"
   "$ROOT/bin/kotoba" -M verify-receipt "$TMP/$ISA-run-receipt.edn" \
-    --signed "$SIGNED" --trust "$TMP/trust.edn" --policy "$TMP/pure-policy.edn" \
+    --signed "$SIGNED" --trust "$TMP/$ISA-runtime-trust.edn" --policy "$TMP/pure-policy.edn" \
     --input "$TMP/input.edn" --result "$TMP/$ISA-run-result.edn" --now 1500 \
     >"$TMP/$ISA-run-verification.edn"
   grep -q ':status :ok' "$TMP/$ISA-run-result.edn"
   grep -q ':result 42' "$TMP/$ISA-run-result.edn"
   grep -q ':format :kotoba.native-runtime/v1' "$TMP/$ISA-run-result.edn"
   grep -Eq ':loader-binary-sha256 "[0-9a-f]{64}"' "$TMP/$ISA-run-result.edn"
+  grep -Eq ':runtime-sha256 "[0-9a-f]{64}"' "$TMP/$ISA-runtime-trust-summary.edn"
   grep -q ':remaining 253' "$TMP/$ISA-run-receipt.edn"
   grep -q ':verified? true' "$TMP/$ISA-run-verification.edn"
 }

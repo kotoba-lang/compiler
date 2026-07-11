@@ -170,3 +170,7 @@ Each receipt hash also carries an Ed25519 executor attestation verified against
 the current trusted/revoked signer sets. This proves which executor attested the
 evidence; it does not by itself prove hardware integrity or confidential
 execution.
+Native result evidence is schema-checked against the pinned loader source.
+Trust policies may contain `:trusted-runtime-sha256` and
+`:revoked-runtime-sha256`; when the trusted field is present it becomes a strict
+allowlist over the loader source, loader binary, and compiler identity tuple.

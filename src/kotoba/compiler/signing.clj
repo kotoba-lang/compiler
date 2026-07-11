@@ -9,6 +9,25 @@
 (def decoder (Base64/getDecoder))
 (defn- b64 [bytes] (.encodeToString encoder bytes))
 (defn- unb64 [s] (.decode decoder ^String s))
+(defn- sha256? [value]
+  (and (string? value) (boolean (re-matches #"[0-9a-f]{64}" value))))
+
+(defn validate-trust! [trust]
+  (when-not (and (= :kotoba.trust/v1 (:format trust))
+                 (set? (:trusted-signers trust))
+                 (every? sha256? (:trusted-signers trust))
+                 (set? (:revoked-signers trust))
+                 (every? sha256? (:revoked-signers trust))
+                 (set? (:revoked-artifacts trust))
+                 (every? sha256? (:revoked-artifacts trust))
+                 (or (not (contains? trust :trusted-runtime-sha256))
+                     (and (set? (:trusted-runtime-sha256 trust))
+                          (every? sha256? (:trusted-runtime-sha256 trust))))
+                 (or (not (contains? trust :revoked-runtime-sha256))
+                     (and (set? (:revoked-runtime-sha256 trust))
+                          (every? sha256? (:revoked-runtime-sha256 trust)))))
+    (throw (ex-info "malformed trust policy" {:phase :trust})))
+  trust)
 
 (defn signer-id [public-key]
   (artifact/sha256 {:algorithm :ed25519 :public-key public-key}))
@@ -65,13 +84,9 @@
   [envelope trust now]
   (when-not (= :kotoba.signed-kexe/v1 (:format envelope))
     (throw (ex-info "unknown signed artifact envelope" {:phase :signature})))
+  (validate-trust! trust)
   (let [{:keys [artifact statement signature]} envelope
         {:keys [signer public-key not-before expires artifact-sha256]} statement]
-    (when-not (and (= :kotoba.trust/v1 (:format trust))
-                   (set? (:trusted-signers trust))
-                   (set? (:revoked-signers trust))
-                   (set? (:revoked-artifacts trust)))
-      (throw (ex-info "malformed trust policy" {:phase :trust})))
     (when-not (and (= :kotoba.signature-statement/v1 (:format statement))
                    (= signer (signer-id public-key))
                    (= artifact-sha256 (:sha256 artifact))

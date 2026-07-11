@@ -3,15 +3,14 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [kotoba.compiler.admission :as admission]
+            [kotoba.compiler.runtime-identity :as runtime-identity]
             [kotoba.compiler.signing :as signing])
   (:import [java.nio.file Files]
            [java.nio.charset StandardCharsets]
            [java.nio.file.attribute FileAttribute]
            [java.security MessageDigest]))
 
-(def loader-source-sha256
-  "Pinned identity of the reviewed native loader source used by this executor."
-  "85aab0274e861d3e7f9c5dda6de5dcb92b1a2b21e427c797ea2bf991078c2b18")
+(def loader-source-sha256 runtime-identity/loader-source-sha256)
 
 (defn- raw-sha256 [bytes]
   (let [digest (.digest (MessageDigest/getInstance "SHA-256") bytes)]
@@ -129,6 +128,7 @@
                          :loader-binary-sha256 loader-sha
                          :compiler-identity-sha256
                          (raw-sha256 (.getBytes compiler-text StandardCharsets/UTF_8))}
+                _runtime-admission (runtime-identity/admit! runtime trust)
                 isa (if (= target :x86_64-kotoba-v1) "x86_64" "aarch64")
               allow (let [ids (allowed-capabilities policy)] (if (empty? ids) "-" ids))
               command (into [(.getPath loader) (.getPath code-file)

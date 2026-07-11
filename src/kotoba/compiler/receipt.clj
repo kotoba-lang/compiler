@@ -1,6 +1,7 @@
 (ns kotoba.compiler.receipt
   (:require [kotoba.compiler.admission :as admission]
             [kotoba.compiler.artifact :as artifact]
+            [kotoba.compiler.runtime-identity :as runtime-identity]
             [kotoba.compiler.signing :as signing]))
 
 (def statuses #{:ok :trap :denied})
@@ -23,6 +24,8 @@
                      (do (when-not (valid-hash? parent)
                            (throw (ex-info "parent receipt integrity mismatch" {:phase :receipt})))
                          (:receipt-sha256 parent)))]
+    (when-let [runtime (and (map? output) (:runtime output))]
+      (runtime-identity/admit! runtime trust))
     (when-not (contains? statuses status)
       (throw (ex-info "invalid receipt status" {:phase :receipt :status status})))
     (when-not (and (integer? started-at) (integer? finished-at) (<= started-at finished-at))
@@ -74,6 +77,8 @@
         executor-statement {:format :kotoba.receipt-attestation/v1
                             :receipt-sha256 (:receipt-sha256 receipt)
                             :executor (:signer executor)}]
+    (when-let [runtime (and (map? output) (:runtime output))]
+      (runtime-identity/admit! runtime trust))
     (when (and parent (not (valid-hash? parent)))
       (throw (ex-info "parent receipt integrity mismatch" {:phase :receipt})))
     (when-not (and (= (:signer executor) (signing/signer-id (:public-key executor)))

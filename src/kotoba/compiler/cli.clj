@@ -4,6 +4,7 @@
             [kotoba.compiler.core :as compiler]
             [kotoba.compiler.native-executor :as native-executor]
             [kotoba.compiler.receipt :as receipt]
+            [kotoba.compiler.runtime-identity :as runtime-identity]
             [kotoba.compiler.signing :as signing]
             [kotoba.compiler.verifier :as verifier])
   (:gen-class))
@@ -25,9 +26,20 @@
     (let [key (bounded-edn/read-file (second args))
           output (or (option args "--output") "kotoba-trust.edn")
           trust {:format :kotoba.trust/v1 :trusted-signers #{(:signer key)}
-                 :revoked-signers #{} :revoked-artifacts #{}}]
+                 :revoked-signers #{} :revoked-artifacts #{}
+                 :revoked-runtime-sha256 #{}}]
       (spit output (pr-str trust))
       (println (pr-str {:ok true :output output :signer (:signer key)})))
+    "trust-runtime"
+    (let [evidence (bounded-edn/read-file (second args))
+          trust-path (option args "--trust")
+          trust (signing/validate-trust! (bounded-edn/read-file trust-path))
+          runtime (:runtime evidence)
+          runtime-sha (runtime-identity/identity-sha256 runtime)
+          output (or (option args "--output") trust-path)
+          updated (update trust :trusted-runtime-sha256 (fnil conj #{}) runtime-sha)]
+      (spit output (pr-str updated))
+      (println (pr-str {:ok true :output output :runtime-sha256 runtime-sha})))
     "sign"
     (let [artifact (bounded-edn/read-file (second args))
           key (bounded-edn/read-file (option args "--key"))

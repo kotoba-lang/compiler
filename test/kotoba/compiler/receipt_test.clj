@@ -2,6 +2,7 @@
   (:require [clojure.test :refer [deftest is]]
             [kotoba.compiler.core :as compiler]
             [kotoba.compiler.receipt :as receipt]
+            [kotoba.compiler.runtime-identity :as runtime-identity]
             [kotoba.compiler.signing :as signing]))
 
 (defn fixture []
@@ -74,3 +75,32 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"time interval"
                           (receipt/create envelope trust policy input output
                                           (assoc opts :finished-at 1399 :executor-key key))))))
+
+(deftest receipt-runtime-identity-can-be-pinned-and-revoked
+  (let [{:keys [envelope key trust policy input]} (fixture)
+        runtime {:format :kotoba.native-runtime/v1
+                 :loader-source-sha256 runtime-identity/loader-source-sha256
+                 :loader-binary-sha256 (apply str (repeat 64 "a"))
+                 :compiler-identity-sha256 (apply str (repeat 64 "b"))}
+        output {:status :ok :result 42 :runtime runtime}
+        value (receipt/create envelope trust policy input output
+                              (assoc opts :executor-key key))
+        identity (runtime-identity/identity-sha256 runtime)]
+    (is (:verified? (receipt/verify value envelope trust policy input output
+                                    {:now 1500 :parent nil})))
+    (is (:verified? (receipt/verify value envelope
+                                    (assoc trust :trusted-runtime-sha256 #{identity})
+                                    policy input output {:now 1500 :parent nil})))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not trusted"
+                          (receipt/verify value envelope
+                                          (assoc trust :trusted-runtime-sha256 #{})
+                                          policy input output {:now 1500 :parent nil})))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"revoked"
+                          (receipt/verify value envelope
+                                          (assoc trust :revoked-runtime-sha256 #{identity})
+                                          policy input output {:now 1500 :parent nil})))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"identity rejected"
+                          (receipt/verify value envelope trust policy input
+                                          (assoc-in output [:runtime :loader-source-sha256]
+                                                    (apply str (repeat 64 "0")))
+                                          {:now 1500 :parent nil})))))

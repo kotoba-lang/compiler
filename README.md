@@ -116,6 +116,19 @@ binary hash, and a hash of the C compiler identity. A source mismatch is denied
 before compilation, and the executor signature makes the runtime identity part
 of the receipt's output evidence.
 
+For high-assurance verification, provision the measured runtime from a reviewed
+run into the trust policy, then verify against that pinned policy:
+
+```bash
+kotoba -M trust-runtime run.result.edn --trust trust.edn --output pinned-trust.edn
+kotoba -M verify-receipt run.receipt.edn --trust pinned-trust.edn ...
+```
+
+The pin covers the reviewed loader source, reproduced loader binary, and C
+compiler identity. Once `:trusted-runtime-sha256` exists, it is an explicit
+allowlist; an empty set denies all native runtimes. Runtime revocation uses
+`:revoked-runtime-sha256`.
+
 Security mutation fuzzing runs in every CI job with a recorded seed. It mutates
 sealed native artifacts (including attacker-resealed KIR/code/ABI fields),
 Ed25519 envelopes, and executor receipts, requiring every case to fail closed.
