@@ -33,6 +33,12 @@ recursion, top-level form count is capped, expression validation is capped at
 256, and literals must fit signed i64. Host reader failures are normalized into
 the compiler's `:read` error phase.
 
+The CLI treats serialized control-plane objects as hostile too. KEXE, signing
+keys/envelopes, trust stores, policies, inputs, and receipts share a strict UTF-8
+EDN decoder with an 8 MiB byte ceiling, depth 128, token length 4,096, decoded
+node count 200,000, and string length 1 MiB. Exactly one form is required;
+tagged literals and trailing forms fail before verifier or crypto code runs.
+
 ## Current maturity
 
 The compiler is `experimental alpha`, not production-safe. KIR v3 retains

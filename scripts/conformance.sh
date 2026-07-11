@@ -6,6 +6,23 @@ TMP=${TMPDIR:-/tmp}/kotoba-compiler-conformance-$$
 trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 mkdir -p "$TMP"
 
+printf '%s\n' '{} {}' >"$TMP/trailing-policy.edn"
+printf '%s\n' '(defn main [] 0)' >"$TMP/bounded-source.kotoba"
+if "$ROOT/bin/kotoba" -M check "$TMP/bounded-source.kotoba" \
+     --policy "$TMP/trailing-policy.edn" >"$TMP/trailing.out" 2>"$TMP/trailing.err"; then
+  echo "trailing EDN control-plane form was accepted" >&2
+  exit 1
+fi
+grep -q 'EDN input contains trailing forms' "$TMP/trailing.err"
+
+dd if=/dev/zero of="$TMP/oversized-source.kotoba" bs=1048577 count=1 2>/dev/null
+if "$ROOT/bin/kotoba" -M check "$TMP/oversized-source.kotoba" \
+     >"$TMP/oversized.out" 2>"$TMP/oversized.err"; then
+  echo "oversized source file was accepted" >&2
+  exit 1
+fi
+grep -q 'input exceeds byte limit' "$TMP/oversized.err"
+
 "$ROOT/bin/kotoba" -M check "$ROOT/examples/capability.kotoba" \
   --policy "$ROOT/examples/capability-policy.edn" >"$TMP/capability-check.edn"
 if "$ROOT/bin/kotoba" -M check "$ROOT/examples/capability.kotoba" >"$TMP/capability-deny.out" 2>&1; then

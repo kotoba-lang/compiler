@@ -18,6 +18,9 @@ Security invariants:
 7. Compiler success is not a security proof. Differential tests, fuzzing,
    reproducible builds, independent review, and OS process isolation remain
    required before hostile production execution.
+8. Serialized artifacts, policies, keys, and receipts are byte- and
+   structure-bounded before semantic verification; trailing forms, malformed
+   UTF-8, and tagged EDN fail closed.
 
 Arithmetic is specified independently of the JVM compiler host: i64
 add/subtract/multiply wrap modulo 2^64, while invalid signed division traps. A

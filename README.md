@@ -70,6 +70,11 @@ checks the same bitmap again. x86-64 keeps the context in r9 and AArch64 in x7.
 
 KEXE authenticity uses a separate Ed25519 envelope. The signed statement binds
 the artifact SHA-256, signer fingerprint/public key, not-before, and expiry.
+All external EDN inputs—including KEXE, envelopes, trust stores, policies,
+execution inputs, and receipts—pass through one strict bounded decoder before
+verification. It accepts exactly one valid UTF-8 form and caps bytes, nesting,
+token length, decoded nodes, and strings. Source files are byte-capped while
+streaming before the frontend allocates the complete input.
 Verification requires an explicit trusted-signer set, checks signer/artifact
 revocation and time validity, then runs the normal KEXE verifier.
 

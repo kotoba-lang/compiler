@@ -1,6 +1,6 @@
 (ns kotoba.compiler.cli
-  (:require [clojure.edn :as edn]
-            [clojure.java.io :as io]
+  (:require [clojure.java.io :as io]
+            [kotoba.compiler.bounded-edn :as bounded-edn]
             [kotoba.compiler.core :as compiler]
             [kotoba.compiler.native-executor :as native-executor]
             [kotoba.compiler.receipt :as receipt]
@@ -22,15 +22,15 @@
       (spit output (pr-str key))
       (println (pr-str {:ok true :output output :signer (:signer key)})))
     "trust-key"
-    (let [key (edn/read-string (slurp (second args)))
+    (let [key (bounded-edn/read-file (second args))
           output (or (option args "--output") "kotoba-trust.edn")
           trust {:format :kotoba.trust/v1 :trusted-signers #{(:signer key)}
                  :revoked-signers #{} :revoked-artifacts #{}}]
       (spit output (pr-str trust))
       (println (pr-str {:ok true :output output :signer (:signer key)})))
     "sign"
-    (let [artifact (edn/read-string (slurp (second args)))
-          key (edn/read-string (slurp (option args "--key")))
+    (let [artifact (bounded-edn/read-file (second args))
+          key (bounded-edn/read-file (option args "--key"))
           output (or (option args "--output") "program.signed.kexe")
           not-before (Long/parseLong (or (option args "--not-before") "0"))
           expires (Long/parseLong (or (option args "--expires")
@@ -39,22 +39,22 @@
       (spit output (pr-str envelope))
       (println (pr-str {:ok true :output output :signer (get-in envelope [:statement :signer])})))
     "verify-signed"
-    (let [envelope (edn/read-string (slurp (second args)))
-          trust (edn/read-string (slurp (option args "--trust")))
+    (let [envelope (bounded-edn/read-file (second args))
+          trust (bounded-edn/read-file (option args "--trust"))
           now (Long/parseLong (or (option args "--now")
                                   (str (quot (System/currentTimeMillis) 1000))))
           result (signing/verify envelope trust now)]
       (println (pr-str (dissoc result :artifact))))
     "run"
-    (let [envelope (edn/read-string (slurp (second args)))
-          trust (edn/read-string (slurp (option args "--trust")))
-          policy (edn/read-string (slurp (option args "--policy")))
-          input (edn/read-string (slurp (option args "--input")))
-          executor-key (edn/read-string (slurp (option args "--executor-key")))
+    (let [envelope (bounded-edn/read-file (second args))
+          trust (bounded-edn/read-file (option args "--trust"))
+          policy (bounded-edn/read-file (option args "--policy"))
+          input (bounded-edn/read-file (option args "--input"))
+          executor-key (bounded-edn/read-file (option args "--executor-key"))
           now (Long/parseLong (or (option args "--now")
                                   (str (quot (System/currentTimeMillis) 1000))))
           parent-path (option args "--parent")
-          parent (when parent-path (edn/read-string (slurp parent-path)))
+          parent (when parent-path (bounded-edn/read-file parent-path))
           entry (symbol (or (option args "--entry") "main"))
           execution (native-executor/execute envelope trust policy input
                                               {:now now :entry entry})
@@ -78,14 +78,14 @@
                         :receipt-sha256 (:receipt-sha256 value)}))
       (when-not (= :ok (:status evidence)) (System/exit 120)))
     "receipt"
-    (let [envelope (edn/read-string (slurp (option args "--signed")))
-          trust (edn/read-string (slurp (option args "--trust")))
-          policy (edn/read-string (slurp (option args "--policy")))
-          input (edn/read-string (slurp (option args "--input")))
-          output-value (edn/read-string (slurp (option args "--result")))
+    (let [envelope (bounded-edn/read-file (option args "--signed"))
+          trust (bounded-edn/read-file (option args "--trust"))
+          policy (bounded-edn/read-file (option args "--policy"))
+          input (bounded-edn/read-file (option args "--input"))
+          output-value (bounded-edn/read-file (option args "--result"))
           parent-path (option args "--parent")
-          parent (when parent-path (edn/read-string (slurp parent-path)))
-          executor-key (edn/read-string (slurp (option args "--executor-key")))
+          parent (when parent-path (bounded-edn/read-file parent-path))
+          executor-key (bounded-edn/read-file (option args "--executor-key"))
           output-path (or (option args "--output") "run.receipt.edn")
           value (receipt/create
                  envelope trust policy input output-value
@@ -101,25 +101,25 @@
       (spit output-path (pr-str value))
       (println (pr-str {:ok true :output output-path :receipt-sha256 (:receipt-sha256 value)})))
     "verify-receipt"
-    (let [value (edn/read-string (slurp (second args)))
-          envelope (edn/read-string (slurp (option args "--signed")))
-          trust (edn/read-string (slurp (option args "--trust")))
-          policy (edn/read-string (slurp (option args "--policy")))
-          input (edn/read-string (slurp (option args "--input")))
-          output-value (edn/read-string (slurp (option args "--result")))
+    (let [value (bounded-edn/read-file (second args))
+          envelope (bounded-edn/read-file (option args "--signed"))
+          trust (bounded-edn/read-file (option args "--trust"))
+          policy (bounded-edn/read-file (option args "--policy"))
+          input (bounded-edn/read-file (option args "--input"))
+          output-value (bounded-edn/read-file (option args "--result"))
           parent-path (option args "--parent")
-          parent (when parent-path (edn/read-string (slurp parent-path)))]
+          parent (when parent-path (bounded-edn/read-file parent-path))]
       (println (pr-str (receipt/verify value envelope trust policy input output-value
                                        {:now (Long/parseLong (option args "--now"))
                                         :parent parent}))))
     "verify-chain"
-    (let [receipts (edn/read-string (slurp (second args)))]
+    (let [receipts (bounded-edn/read-file (second args))]
       (println (pr-str (receipt/verify-chain receipts))))
     "check"
     (let [input (second args)
           policy-path (option args "--policy")
-          policy (if policy-path (edn/read-string (slurp policy-path)) {})
-          result (compiler/check-source (slurp input) policy)]
+          policy (if policy-path (bounded-edn/read-file policy-path) {})
+          result (compiler/check-source (bounded-edn/read-text-file input) policy)]
       (println (pr-str {:ok true
                         :effects (get-in result [:hir :effects])
                         :admission (:admission result)})))
@@ -127,18 +127,18 @@
     (let [input (second args) target (parse-target (or (option args "--target") "wasm32"))
           output (or (option args "--output") (str input (if (= target :wasm32-kotoba-v1) ".wasm" ".kexe")))
           policy-path (option args "--policy")
-          policy (if policy-path (edn/read-string (slurp policy-path)) {})
-          result (compiler/compile-source (slurp input) target policy)]
+          policy (if policy-path (bounded-edn/read-file policy-path) {})
+          result (compiler/compile-source (bounded-edn/read-text-file input) target policy)]
       (if (= :wasm/v1 (:format result))
         (with-open [out (io/output-stream output)] (.write out ^bytes (:bytes result)))
         (spit output (pr-str (:artifact result))))
       (println (pr-str {:ok true :target target :output output})))
     "verify"
-    (let [artifact (edn/read-string (slurp (second args)))]
+    (let [artifact (bounded-edn/read-file (second args))]
       (verifier/verify-artifact! artifact)
       (println (pr-str {:ok true :verified true :target (:target artifact)})))
     "extract-native"
-    (let [artifact (edn/read-string (slurp (second args)))
+    (let [artifact (bounded-edn/read-file (second args))
           symbol (symbol (or (option args "--symbol") "main"))
           output (or (option args "--output") "program.bin")
           _ (verifier/verify-artifact! artifact)
