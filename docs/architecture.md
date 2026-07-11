@@ -115,3 +115,17 @@ not-before, and expiry. Admission verifies the signature, explicit trusted
 signer membership, signer/artifact revocation sets, and the validity interval,
 then invokes the ordinary KEXE verifier. Revocation remains outside immutable
 artifact identity and can change without rewriting the artifact.
+
+## Run receipts
+
+`kotoba.run-receipt/v1` is a canonical hash-linked evidence record. Creation
+first re-verifies the signed artifact under current trust, then binds envelope
+and artifact hashes, signer, target/entry, required effects, policy/admission,
+input/output, fuel, status, timestamps, and an optional parent receipt hash.
+Verification requires the original signed envelope and evidence values and
+repeats all authenticity, revocation, policy, and KEXE checks. Chains reject
+broken links, reordering, duplicate hashes, and more than 10,000 entries.
+Each receipt hash also carries an Ed25519 executor attestation verified against
+the current trusted/revoked signer sets. This proves which executor attested the
+evidence; it does not by itself prove hardware integrity or confidential
+execution.

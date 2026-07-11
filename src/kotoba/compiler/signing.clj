@@ -13,6 +13,26 @@
 (defn signer-id [public-key]
   (artifact/sha256 {:algorithm :ed25519 :public-key public-key}))
 
+(defn valid-key? [key]
+  (and (= :kotoba.signing-key/v1 (:format key)) (= :ed25519 (:algorithm key))
+       (= (:signer key) (signer-id (:public-key key))) (string? (:private-key key))))
+
+(defn sign-value [key value]
+  (when-not (valid-key? key)
+    (throw (ex-info "malformed Ed25519 signing key" {:phase :sign})))
+  (let [private-key (.generatePrivate (KeyFactory/getInstance "Ed25519")
+                                      (PKCS8EncodedKeySpec. (unb64 (:private-key key))))
+        signer (doto (Signature/getInstance "Ed25519") (.initSign private-key)
+                 (.update (artifact/canonical-bytes value)))]
+    (b64 (.sign signer))))
+
+(defn verify-value [public-key value signature]
+  (let [public (.generatePublic (KeyFactory/getInstance "Ed25519")
+                                (X509EncodedKeySpec. (unb64 public-key)))
+        checker (doto (Signature/getInstance "Ed25519") (.initVerify public)
+                  (.update (artifact/canonical-bytes value)))]
+    (.verify checker (unb64 signature))))
+
 (defn generate-keypair []
   (let [pair (.generateKeyPair (KeyPairGenerator/getInstance "Ed25519"))
         public (b64 (.getEncoded (.getPublic pair)))
@@ -30,20 +50,14 @@
 
 (defn sign [kexe key {:keys [not-before expires]}]
   (verifier/verify-artifact! kexe)
-  (when-not (and (= :kotoba.signing-key/v1 (:format key))
-                 (= :ed25519 (:algorithm key))
-                 (= (:signer key) (signer-id (:public-key key)))
-                 (string? (:private-key key)))
+  (when-not (valid-key? key)
     (throw (ex-info "malformed Ed25519 signing key" {:phase :sign})))
   (when-not (and (integer? not-before) (integer? expires) (< not-before expires))
     (throw (ex-info "invalid signature validity interval" {:phase :sign})))
   (let [statement (statement kexe key not-before expires)
-        private-key (.generatePrivate (KeyFactory/getInstance "Ed25519")
-                                      (PKCS8EncodedKeySpec. (unb64 (:private-key key))))
-        signer (doto (Signature/getInstance "Ed25519") (.initSign private-key)
-                 (.update (artifact/canonical-bytes statement)))]
+        signature (sign-value key statement)]
     {:format :kotoba.signed-kexe/v1 :artifact kexe :statement statement
-     :signature (b64 (.sign signer))}))
+     :signature signature}))
 
 (defn verify
   [envelope trust now]
@@ -62,12 +76,8 @@
                    (integer? not-before) (integer? expires) (< not-before expires)
                    (string? signature))
       (throw (ex-info "signature statement mismatch" {:phase :signature})))
-    (let [public (.generatePublic (KeyFactory/getInstance "Ed25519")
-                                  (X509EncodedKeySpec. (unb64 public-key)))
-          checker (doto (Signature/getInstance "Ed25519") (.initVerify public)
-                    (.update (artifact/canonical-bytes statement)))]
-      (when-not (.verify checker (unb64 signature))
-        (throw (ex-info "Ed25519 signature verification failed" {:phase :signature}))))
+    (when-not (verify-value public-key statement signature)
+      (throw (ex-info "Ed25519 signature verification failed" {:phase :signature})))
     (when-not (contains? (set (:trusted-signers trust)) signer)
       (throw (ex-info "signer is not trusted" {:phase :trust :signer signer})))
     (when (contains? (set (:revoked-signers trust)) signer)

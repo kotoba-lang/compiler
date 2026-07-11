@@ -31,6 +31,19 @@ grep -q 'capability policy denies required effects' "$TMP/capability-deny.out"
   --not-before 1000 --expires 2000 --output "$TMP/x86_64.signed.kexe"
 "$ROOT/bin/kotoba" -M verify-signed "$TMP/x86_64.signed.kexe" \
   --trust "$TMP/trust.edn" --now 1500 >"$TMP/signature-verification.edn"
+printf '%s\n' '{:allow #{}}' >"$TMP/pure-policy.edn"
+printf '%s\n' '{:argv []}' >"$TMP/input.edn"
+printf '%s\n' '42' >"$TMP/output.edn"
+"$ROOT/bin/kotoba" -M receipt --signed "$TMP/x86_64.signed.kexe" \
+  --trust "$TMP/trust.edn" --policy "$TMP/pure-policy.edn" \
+  --input "$TMP/input.edn" --result "$TMP/output.edn" --now 1500 \
+  --started-at 1400 --finished-at 1401 --status ok --target x86_64 \
+  --entry main --fuel-initial 256 --fuel-remaining 255 \
+  --executor-key "$TMP/signing-key.edn" --output "$TMP/run.receipt.edn"
+"$ROOT/bin/kotoba" -M verify-receipt "$TMP/run.receipt.edn" \
+  --signed "$TMP/x86_64.signed.kexe" --trust "$TMP/trust.edn" \
+  --policy "$TMP/pure-policy.edn" --input "$TMP/input.edn" \
+  --result "$TMP/output.edn" --now 1500 >"$TMP/receipt-verification.edn"
 
 node -e '
 const fs = require("fs");

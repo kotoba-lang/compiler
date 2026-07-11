@@ -2,6 +2,7 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [kotoba.compiler.core :as compiler]
+            [kotoba.compiler.receipt :as receipt]
             [kotoba.compiler.signing :as signing]
             [kotoba.compiler.verifier :as verifier])
   (:gen-class))
@@ -43,6 +44,44 @@
                                   (str (quot (System/currentTimeMillis) 1000))))
           result (signing/verify envelope trust now)]
       (println (pr-str (dissoc result :artifact))))
+    "receipt"
+    (let [envelope (edn/read-string (slurp (option args "--signed")))
+          trust (edn/read-string (slurp (option args "--trust")))
+          policy (edn/read-string (slurp (option args "--policy")))
+          input (edn/read-string (slurp (option args "--input")))
+          output-value (edn/read-string (slurp (option args "--result")))
+          parent-path (option args "--parent")
+          parent (when parent-path (edn/read-string (slurp parent-path)))
+          executor-key (edn/read-string (slurp (option args "--executor-key")))
+          output-path (or (option args "--output") "run.receipt.edn")
+          value (receipt/create
+                 envelope trust policy input output-value
+                 {:now (Long/parseLong (option args "--now"))
+                  :started-at (Long/parseLong (option args "--started-at"))
+                  :finished-at (Long/parseLong (option args "--finished-at"))
+                  :status (keyword (option args "--status"))
+                  :target (parse-target (option args "--target"))
+                  :entry (symbol (or (option args "--entry") "main"))
+                  :fuel-initial (Long/parseLong (or (option args "--fuel-initial") "256"))
+                  :fuel-remaining (Long/parseLong (option args "--fuel-remaining"))
+                  :parent parent :executor-key executor-key})]
+      (spit output-path (pr-str value))
+      (println (pr-str {:ok true :output output-path :receipt-sha256 (:receipt-sha256 value)})))
+    "verify-receipt"
+    (let [value (edn/read-string (slurp (second args)))
+          envelope (edn/read-string (slurp (option args "--signed")))
+          trust (edn/read-string (slurp (option args "--trust")))
+          policy (edn/read-string (slurp (option args "--policy")))
+          input (edn/read-string (slurp (option args "--input")))
+          output-value (edn/read-string (slurp (option args "--result")))
+          parent-path (option args "--parent")
+          parent (when parent-path (edn/read-string (slurp parent-path)))]
+      (println (pr-str (receipt/verify value envelope trust policy input output-value
+                                       {:now (Long/parseLong (option args "--now"))
+                                        :parent parent}))))
+    "verify-chain"
+    (let [receipts (edn/read-string (slurp (second args)))]
+      (println (pr-str (receipt/verify-chain receipts))))
     "check"
     (let [input (second args)
           policy-path (option args "--policy")

@@ -22,6 +22,9 @@ case "${1-}" in
       '       kotoba -M trust-key key.edn --output trust.edn' \
       '       kotoba -M sign program.kexe --key key.edn --expires <epoch> --output signed.kexe' \
       '       kotoba -M verify-signed signed.kexe --trust trust.edn [--now <epoch>]' \
+      '       kotoba -M receipt --signed signed.kexe --trust trust.edn --executor-key key.edn --policy policy.edn --input in.edn --result out.edn ...' \
+      '       kotoba -M verify-receipt receipt.edn --signed signed.kexe --trust trust.edn --policy policy.edn --input in.edn --result out.edn --now <epoch>' \
+      '       kotoba -M verify-chain receipts.edn' \
       '       kotoba -M verify <file>'
     exit 0
     ;;

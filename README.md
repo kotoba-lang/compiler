@@ -71,6 +71,14 @@ kotoba -M sign app.kexe --key key.edn --expires 2000000000 --output app.signed.k
 kotoba -M verify-signed app.signed.kexe --trust trust.edn
 ```
 
+Verified executions can produce `kotoba.run-receipt/v1`. Its hash binds the
+signed envelope and artifact, signer, target/entry, required effects, exact
+policy admission, input/output hashes, fuel accounting, status, time interval,
+and optional parent receipt. Verification repeats current signature, trust,
+revocation, policy, and artifact checks before accepting the evidence. The
+receipt hash is itself signed by a trusted executor key; a hash chain alone is
+not treated as proof that execution occurred.
+
 ```bash
 kotoba -M check examples/capability.kotoba \
   --policy examples/capability-policy.edn
