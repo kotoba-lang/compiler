@@ -223,7 +223,7 @@ static void install_limits(void) {
   alarm(2);
 }
 
-#if defined(__linux__)
+#if defined(__linux__) && !defined(KEXE_SANITIZER_TEST)
 #define ALLOW_SYSCALL(number) \
   BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, (number), 0, 1), \
   BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW)

@@ -85,3 +85,8 @@ also covers missing arguments, empty numbers, invalid ISAs, capability IDs and
 lists, and arity mismatches. Leak detection is disabled because the macOS ASan
 runtime does not support it; address and undefined-behavior detection remain
 fatal.
+The sanitizer build uses the compile-time-only `KEXE_SANITIZER_TEST` profile on
+Linux to omit seccomp, because sanitizer runtimes require syscalls outside the
+production allowlist. No runtime environment variable can disable seccomp in a
+production loader. The ordinary conformance job separately compiles without
+that macro and requires the filesystem `SIGSYS` probe to be denied.

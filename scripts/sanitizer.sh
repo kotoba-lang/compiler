@@ -13,6 +13,7 @@ case "$(uname -s)-$(uname -m)" in
 esac
 
 cc -std=c11 -O1 -g -Wall -Wextra -Werror \
+  -DKEXE_SANITIZER_TEST \
   -fsanitize=address,undefined -fno-omit-frame-pointer \
   "$ROOT/tools/kexe_loader.c" -o "$TMP/kexe-loader-sanitized"
 
