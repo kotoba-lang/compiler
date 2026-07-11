@@ -46,6 +46,13 @@ EDN decoder with an 8 MiB byte ceiling, depth 128, token length 4,096, decoded
 node count 200,000, and string length 1 MiB. Exactly one form is required;
 tagged literals and trailing forms fail before verifier or crypto code runs.
 
+CLI publication uses a single atomic-output boundary for Wasm, KEXE, keys,
+trust policies, results, and receipts. Bytes are written and `fsync`ed in a
+same-directory temporary file before atomic replacement, so crashes do not
+publish partial artifacts and destination symlinks are not followed. Private
+key temporaries and final files carry POSIX mode `0600`; key generation fails
+closed where owner-only permissions cannot be established.
+
 ## Current maturity
 
 The compiler is `experimental alpha`, not production-safe. KIR v3 retains

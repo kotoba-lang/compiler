@@ -1,5 +1,5 @@
 (ns kotoba.compiler.cli
-  (:require [clojure.java.io :as io]
+  (:require [kotoba.compiler.atomic-output :as atomic-output]
             [kotoba.compiler.bounded-edn :as bounded-edn]
             [kotoba.compiler.core :as compiler]
             [kotoba.compiler.native-executor :as native-executor]
@@ -20,7 +20,7 @@
     "keygen"
     (let [output (or (option args "--output") "kotoba-signing-key.edn")
           key (signing/generate-keypair)]
-      (spit output (pr-str key))
+      (atomic-output/write-edn! output key {:private? true})
       (println (pr-str {:ok true :output output :signer (:signer key)})))
     "trust-key"
     (let [key (bounded-edn/read-file (second args))
@@ -28,7 +28,7 @@
           trust {:format :kotoba.trust/v1 :trusted-signers #{(:signer key)}
                  :revoked-signers #{} :revoked-artifacts #{}
                  :revoked-runtime-sha256 #{}}]
-      (spit output (pr-str trust))
+      (atomic-output/write-edn! output trust)
       (println (pr-str {:ok true :output output :signer (:signer key)})))
     "trust-runtime"
     (let [evidence (bounded-edn/read-file (second args))
@@ -38,7 +38,7 @@
           runtime-sha (runtime-identity/identity-sha256 runtime)
           output (or (option args "--output") trust-path)
           updated (update trust :trusted-runtime-sha256 (fnil conj #{}) runtime-sha)]
-      (spit output (pr-str updated))
+      (atomic-output/write-edn! output updated)
       (println (pr-str {:ok true :output output :runtime-sha256 runtime-sha})))
     "sign"
     (let [artifact (bounded-edn/read-file (second args))
@@ -48,7 +48,7 @@
           expires (Long/parseLong (or (option args "--expires")
                                       (str (+ (quot (System/currentTimeMillis) 1000) 86400))))
           envelope (signing/sign artifact key {:not-before not-before :expires expires})]
-      (spit output (pr-str envelope))
+      (atomic-output/write-edn! output envelope)
       (println (pr-str {:ok true :output output :signer (get-in envelope [:statement :signer])})))
     "verify-signed"
     (let [envelope (bounded-edn/read-file (second args))
@@ -82,8 +82,8 @@
                   :parent parent :executor-key executor-key})
           result-path (or (option args "--result-output") "run.result.edn")
           receipt-path (or (option args "--output") "run.receipt.edn")]
-      (spit result-path (pr-str evidence))
-      (spit receipt-path (pr-str value))
+      (atomic-output/write-edn! result-path evidence)
+      (atomic-output/write-edn! receipt-path value)
       (println (pr-str {:ok (= :ok (:status evidence))
                         :status (:status evidence) :result evidence
                         :result-output result-path :output receipt-path
@@ -110,7 +110,7 @@
                   :fuel-initial (Long/parseLong (or (option args "--fuel-initial") "256"))
                   :fuel-remaining (Long/parseLong (option args "--fuel-remaining"))
                   :parent parent :executor-key executor-key})]
-      (spit output-path (pr-str value))
+      (atomic-output/write-edn! output-path value)
       (println (pr-str {:ok true :output output-path :receipt-sha256 (:receipt-sha256 value)})))
     "verify-receipt"
     (let [value (bounded-edn/read-file (second args))
@@ -142,8 +142,8 @@
           policy (if policy-path (bounded-edn/read-file policy-path) {})
           result (compiler/compile-source (bounded-edn/read-text-file input) target policy)]
       (if (= :wasm/v1 (:format result))
-        (with-open [out (io/output-stream output)] (.write out ^bytes (:bytes result)))
-        (spit output (pr-str (:artifact result))))
+        (atomic-output/write-bytes! output (:bytes result))
+        (atomic-output/write-edn! output (:artifact result)))
       (println (pr-str {:ok true :target target :output output})))
     "verify"
     (let [artifact (bounded-edn/read-file (second args))]
@@ -157,8 +157,8 @@
           export (get (:exports artifact) symbol)]
       (when-not export
         (throw (ex-info "unknown native export" {:symbol symbol :available (keys (:exports artifact))})))
-      (with-open [out (io/output-stream output)]
-        (.write out ^bytes (byte-array (map unchecked-byte (:code artifact)))))
+      (atomic-output/write-bytes!
+       output (byte-array (map unchecked-byte (:code artifact))))
       (println (pr-str (merge {:ok true :output output :symbol symbol} export))))
     (do (binding [*out* *err*] (println "usage: kotoba -M check <file> [--policy policy.edn] | kotoba -M compile <file> --target wasm32|x86_64|aarch64 --output <file> | kotoba -M verify <file>"))
         (System/exit 2))))

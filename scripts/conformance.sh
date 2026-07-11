@@ -46,6 +46,11 @@ grep -q 'capability policy denies required effects' "$TMP/capability-deny.out"
 "$ROOT/bin/kotoba" -M verify "$TMP/aarch64.kexe"
 
 "$ROOT/bin/kotoba" -M keygen --output "$TMP/signing-key.edn"
+case "$(uname -s)" in
+  Darwin) KEY_MODE=$(stat -f '%Lp' "$TMP/signing-key.edn") ;;
+  Linux) KEY_MODE=$(stat -c '%a' "$TMP/signing-key.edn") ;;
+esac
+[ "$KEY_MODE" = 600 ] || { echo "signing key permissions expected 600, got $KEY_MODE" >&2; exit 1; }
 "$ROOT/bin/kotoba" -M trust-key "$TMP/signing-key.edn" --output "$TMP/trust.edn"
 "$ROOT/bin/kotoba" -M sign "$TMP/x86_64.kexe" --key "$TMP/signing-key.edn" \
   --not-before 1000 --expires 2000 --output "$TMP/x86_64.signed.kexe"

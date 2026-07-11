@@ -24,6 +24,9 @@ Security invariants:
 9. Source size is not the only compilation budget: function, ABI arity,
    binding, expression-node, and post-`let` lowering costs are bounded before
    backend allocation or code emission.
+10. CLI outputs never expose partial artifacts through their final path;
+    destination symlinks are not followed, and generated private keys require
+    owner-only filesystem permissions.
 
 Arithmetic is specified independently of the JVM compiler host: i64
 add/subtract/multiply wrap modulo 2^64, while invalid signed division traps. A

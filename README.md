@@ -80,6 +80,10 @@ execution inputs, and receipts—pass through one strict bounded decoder before
 verification. It accepts exactly one valid UTF-8 form and caps bytes, nesting,
 token length, decoded nodes, and strings. Source files are byte-capped while
 streaming before the frontend allocates the complete input.
+All CLI outputs are written to a same-directory temporary file, forced to disk,
+then atomically renamed. Destination symlinks are replaced
+rather than followed, and generated Ed25519 private-key files are explicitly
+owner-readable/writable only (`0600`).
 Verification requires an explicit trusted-signer set, checks signer/artifact
 revocation and time validity, then runs the normal KEXE verifier.
 
