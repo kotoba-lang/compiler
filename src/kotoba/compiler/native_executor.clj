@@ -160,6 +160,26 @@
   (when-let [[_ value] (re-find #"(?m)^KEXE_TRAP (\{.*\})$" stderr)]
     (edn/read-string value)))
 
+(defn- valid-supervisor-report? [report exit]
+  (let [status (:status report)
+        expected-keys (case status
+                        :ok #{:status :result :fuel :heap}
+                        :trap #{:status :exit :fuel :heap}
+                        nil)
+        fuel (:fuel report)
+        heap (:heap report)]
+    (and (map? report)
+         (= expected-keys (set (keys report)))
+         (= (zero? exit) (= status :ok))
+         (= #{:initial :remaining} (set (keys fuel)))
+         (= 256 (:initial fuel))
+         (integer? (:remaining fuel)) (<= 0 (:remaining fuel) 256)
+         (= #{:capacity :used} (set (keys heap)))
+         (= 4096 (:capacity heap))
+         (integer? (:used heap)) (<= 0 (:used heap) 4096)
+         (or (not= status :trap) (= exit (:exit report)))
+         (or (not= status :ok) (integer? (:result report))))))
+
 (defn execute
   "Verify and execute a signed native artifact. Returns measured supervisor evidence."
   [envelope trust policy input {:keys [now entry runtime loader-path]}]
@@ -218,10 +238,7 @@
               evidence (cond-> {:status status :runtime runtime}
                          (= status :ok) (assoc :result (:result report))
                          trap (assoc :trap trap))]
-          (when-not (and (#{:ok :trap} status)
-                         (= (zero? (:exit process)) (= status :ok))
-                         (integer? (get-in report [:fuel :initial]))
-                         (integer? (get-in report [:fuel :remaining])))
+          (when-not (valid-supervisor-report? report (:exit process))
             (throw (ex-info "malformed native supervisor evidence"
                             {:phase :execute :exit (:exit process)
                              :stdout (:stdout process) :stderr (:stderr process)})))

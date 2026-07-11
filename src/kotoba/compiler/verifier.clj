@@ -25,6 +25,7 @@
 (def ^:private max-symbol-chars 128)
 (def ^:private arithmetic '#{+ - * quot})
 (def ^:private comparisons '#{= < > <= >=})
+(def ^:private heap-operations '{pair 2 pair-first 1 pair-second 1})
 
 (defn- valid-name? [value]
   (and (simple-symbol? value) (<= (count (name value)) max-symbol-chars)))
@@ -118,6 +119,12 @@
         (do
           (when-not (= 2 (count args))
             (reject! "runtime KIR comparison arity rejected" {:operation op}))
+          (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
+
+        (contains? heap-operations op)
+        (do
+          (when-not (= (get heap-operations op) (count args))
+            (reject! "runtime KIR heap operation arity rejected" {:operation op}))
           (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
 
         (contains? signatures op)
@@ -214,11 +221,13 @@
     (let [expected-fuel-abi (case target
                               :x86_64-kotoba-v1 {:mode :hidden-context-r9 :initial 256}
                               :aarch64-kotoba-v1 {:mode :hidden-context-x7 :initial 256})
-          expected-limits {:memory-bytes 0
+          expected-limits {:memory-bytes 65536
                            :fuel 256
                            :stack-bytes 4096}
-          expected-context {:version 1 :fuel-offset 8 :allow-bitmap-offset 16
-                            :allow-bitmap-bytes 32 :cap-call-offset 48}]
+          expected-context {:version 2 :fuel-offset 8 :allow-bitmap-offset 16
+                            :allow-bitmap-bytes 32 :cap-call-offset 48
+                            :pair-new-offset 56 :pair-first-offset 64
+                            :pair-second-offset 72 :pair-capacity 4096}]
       (when-not (= expected-fuel-abi fuel-abi)
         (reject! "fuel ABI is not admitted" {:target target :fuel-abi fuel-abi}))
       (when-not (= expected-limits limits)

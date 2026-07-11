@@ -100,6 +100,24 @@
                                  'divide [1 0])
                                 (catch clojure.lang.ExceptionInfo error error))))))))
 
+(deftest bounded-pair-semantics-are-shared-and-fail-closed
+  (let [source "(defn read-pair [handle] (+ (pair-first handle) (pair-second handle)))
+                (defn main [] (read-pair (pair 20 22)))"
+        results (mapv #(compiler/compile-source source %) compiler/targets)
+        kir (:kir (first results))]
+    (is (= 42 (:oracle-value kir)))
+    (is (= 1 (count (set (map :kir results)))))
+    (is (= :heap-exhausted
+           (:trap (ex-data
+                   (try
+                     (ir/execute kir 'main [] {:pair-capacity 0})
+                     (catch clojure.lang.ExceptionInfo error error))))))
+    (is (= :invalid-pair-handle
+           (:trap (ex-data
+                   (try
+                     (ir/execute kir 'read-pair [1])
+                     (catch clojure.lang.ExceptionInfo error error))))))))
+
 (deftest wasm-recursion-is-fuel-bounded-and-native-fails-closed
   (let [source "(defn fact [n] (if (<= n 1) 1 (* n (fact (- n 1)))))
                 (defn forever [n] (forever (+ n 1)))

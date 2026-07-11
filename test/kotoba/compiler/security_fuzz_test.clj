@@ -47,7 +47,9 @@
     17 (reseal-program kexe (assoc-in (:program kexe) [:functions 0 :params]
                                       '[a b c d e f]))
     18 (reseal (assoc kexe :attacker-field true))
-    19 (reseal (update kexe :value inc))))
+    19 (reseal (update kexe :value inc))
+    20 (reseal (assoc-in kexe [:context-abi :pair-new-offset] 80))
+    21 (reseal (assoc-in kexe [:context-abi :pair-capacity] 8192))))
 
 (defn- mutate-envelope [envelope choice]
   (case choice
@@ -100,7 +102,7 @@
         (case domain
           0 (is (thrown? clojure.lang.ExceptionInfo
                          (verifier/verify-artifact!
-                          (mutate-artifact kexe (.nextInt rng 20))))
+                          (mutate-artifact kexe (.nextInt rng 22))))
                 assertion-message)
           1 (is (thrown? clojure.lang.ExceptionInfo
                          (signing/verify

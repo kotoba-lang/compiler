@@ -27,6 +27,7 @@
     (doseq [[message body]
             [[#"function effects" '(cap-call 7 1)]
              [#"operation rejected" '(attacker-op 1)]
+             [#"heap operation arity" '(pair 1)]
              [#"unbound symbol" 'attacker]]]
       (let [program (assoc-in (:program kexe) [:functions 0 :body] body)]
         (is (thrown-with-msg? clojure.lang.ExceptionInfo message

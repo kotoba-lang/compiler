@@ -25,7 +25,7 @@
           (insn 0xd4200000) (insn 0x9ac10c00)))
 
 (def ^:private fuel-charge
-  ;; context v1: fuel is qword [x7,#8].
+  ;; context v2: fuel is qword [x7,#8].
   (concat (insn 0xf94004f0) (insn 0xb5000050) (insn 0xd4200000)
           (insn 0xd1000610) (insn 0xf90004f0)))
 
@@ -96,6 +96,18 @@
           (ldr-context 16 48) (insn 0xd63f0200)   ; blr x16
           (ldr-sp 7 0) (add-sp 16)))))
 
+(defn- emit-heap-call [op args env]
+  (let [offset ({'pair 56 'pair-first 64 'pair-second 72} op)
+        values (if (= op 'pair)
+                 (concat (emit-expr (first args) env) (save-x0)
+                         (emit-expr (second args) env) (mov-reg 2 0)
+                         (restore-to 1))
+                 (concat (emit-expr (first args) env) (mov-reg 1 0)))]
+    (vec (concat values
+                 (sub-sp 16) (str-sp 7 0)
+                 (mov-reg 0 7) (ldr-context 16 offset) (insn 0xd63f0200)
+                 (ldr-sp 7 0) (add-sp 16)))))
+
 (defn emit-expr [form env]
   (cond
     (integer? form) (load-constant form)
@@ -110,6 +122,8 @@
                        then-code (branch (+ 4 (code-size else-code))) else-code)))
         (= op 'cap-call)
         (emit-cap-call (first args) (second args) env)
+        (contains? '#{pair pair-first pair-second} op)
+        (emit-heap-call op args env)
         (and (= op '-) (= 1 (count args)))
         (vec (concat (emit-expr (first args) env) (insn 0xcb0003e0)))
         (contains? '#{+ - * quot} op)

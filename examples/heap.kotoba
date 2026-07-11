@@ -1,0 +1,8 @@
+(ns examples.heap)
+
+(defn forged [handle]
+  (pair-first handle))
+
+(defn main []
+  (+ (pair-first (pair 20 99))
+     (pair-second (pair 1 22))))

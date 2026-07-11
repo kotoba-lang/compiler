@@ -3,7 +3,7 @@
 
 (def loader-source-sha256
   "Pinned identity of the reviewed native loader source."
-  "85aab0274e861d3e7f9c5dda6de5dcb92b1a2b21e427c797ea2bf991078c2b18")
+  "b3b3361712a26e69edbaa42fec47d1290a8ebb06a0baf83f54533b9a32173fdc")
 
 (def ^:private fields
   #{:format :loader-source-sha256 :loader-binary-sha256

@@ -27,12 +27,23 @@ KIR interpreter and requires sealed `:value` metadata to match; effectful KEXE
 must carry no oracle value.
 
 The current experimental slice supports pure integer functions, parameters,
-direct calls, sequential `let`, `if`, arithmetic, and comparisons. It emits
+direct calls, sequential `let`, `if`, arithmetic, comparisons, and immutable
+`pair` / `pair-first` / `pair-second` values. It emits
 executable Wasm with real runtime parameters, locals, calls, and branches, plus
 verified runtime functions for x86-64 and AArch64. KEXE seals its
 target, KIR identity, effects, resource limits, and exact code bytes with
-SHA-256. Effectful calls, allocation, indirect control flow, and OS ABI emission
-fail closed until their verifier rules exist.
+SHA-256. Pair allocation is the sole admitted heap operation; general objects,
+mutation, indirect control flow, and OS ABI emission fail closed until their
+verifier rules exist.
+
+Pair storage is a fixed 4,096-cell (64 KiB) arena per execution. Handles are
+one-based integers validated on every access; zero, negative, future, and
+out-of-range handles trap before an address is formed. Allocation is monotonic,
+immutable, and traps at capacity—there is no fallback to host allocation and no
+GC pause or unbounded growth. The normative KIR executor enforces the same
+capacity. Native code reaches only three fixed context-v2 callbacks at sealed
+offsets; the loader owns the arena. Wasm uses equivalent `kotoba:heap` imports,
+whose host implementation must enforce the same contract.
 
 Compilation has explicit structural budgets in addition to the 1 MiB source
 limit. Function count, common five-argument ABI, bindings, expression nodes, and

@@ -11,6 +11,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <stddef.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -23,7 +24,6 @@
 #include <linux/audit.h>
 #include <linux/filter.h>
 #include <linux/seccomp.h>
-#include <stddef.h>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
 #endif
@@ -32,18 +32,36 @@ typedef int64_t (*kexe_fn6)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t
 typedef int64_t (*kexe_fn8)(int64_t, int64_t, int64_t, int64_t,
                             int64_t, int64_t, int64_t, int64_t);
 
-struct kexe_context_v1 {
+#define KEXE_PAIR_CAPACITY 4096u
+
+struct kexe_context_v2 {
   uint64_t version;
   uint64_t fuel;
   uint64_t allow[4];
-  int64_t (*cap_call)(struct kexe_context_v1 *, uint64_t, int64_t);
+  int64_t (*cap_call)(struct kexe_context_v2 *, uint64_t, int64_t);
+  int64_t (*pair_new)(struct kexe_context_v2 *, int64_t, int64_t);
+  int64_t (*pair_first)(struct kexe_context_v2 *, int64_t);
+  int64_t (*pair_second)(struct kexe_context_v2 *, int64_t);
 };
 
-struct kexe_shared_v1 {
-  struct kexe_context_v1 context;
+struct kexe_pair_v1 { int64_t first; int64_t second; };
+
+struct kexe_shared_v2 {
+  struct kexe_context_v2 context;
   int64_t result;
   uint64_t completed;
+  uint64_t pair_used;
+  struct kexe_pair_v1 pairs[KEXE_PAIR_CAPACITY];
 };
+
+_Static_assert(offsetof(struct kexe_context_v2, fuel) == 8, "fuel ABI drift");
+_Static_assert(offsetof(struct kexe_context_v2, allow) == 16, "allow ABI drift");
+_Static_assert(offsetof(struct kexe_context_v2, cap_call) == 48, "cap ABI drift");
+_Static_assert(offsetof(struct kexe_context_v2, pair_new) == 56, "pair ABI drift");
+_Static_assert(offsetof(struct kexe_context_v2, pair_first) == 64, "pair ABI drift");
+_Static_assert(offsetof(struct kexe_context_v2, pair_second) == 72, "pair ABI drift");
+_Static_assert(sizeof(((struct kexe_shared_v2 *)0)->pairs) == 65536,
+               "pair arena size drift");
 
 static int parse_u64(const char *text, uint64_t *value) {
   if (text == NULL || *text < '0' || *text > '9') return -1;
@@ -79,14 +97,48 @@ static int parse_i64(const char *text, int64_t *value) {
 static volatile sig_atomic_t supervisor_timed_out = 0;
 static volatile sig_atomic_t supervised_pid = -1;
 
-static int64_t checked_cap_call(struct kexe_context_v1 *context,
+static int64_t checked_cap_call(struct kexe_context_v2 *context,
                                 uint64_t cap_id, int64_t value) {
-  if (context == NULL || context->version != 1 || cap_id > 255 ||
+  if (context == NULL || context->version != 2 || cap_id > 255 ||
       (context->allow[cap_id / 64] & (UINT64_C(1) << (cap_id % 64))) == 0) {
     raise(SIGILL);
     return 0;
   }
   return value + 1;
+}
+
+static int64_t checked_pair_new(struct kexe_context_v2 *context,
+                                int64_t first, int64_t second) {
+  struct kexe_shared_v2 *shared = (struct kexe_shared_v2 *)context;
+  if (context == NULL || context->version != 2 ||
+      shared->pair_used >= KEXE_PAIR_CAPACITY) {
+    raise(SIGILL);
+    return 0;
+  }
+  uint64_t index = shared->pair_used++;
+  shared->pairs[index].first = first;
+  shared->pairs[index].second = second;
+  return (int64_t)(index + 1);
+}
+
+static int64_t checked_pair_get(struct kexe_context_v2 *context,
+                                int64_t handle, int second) {
+  struct kexe_shared_v2 *shared = (struct kexe_shared_v2 *)context;
+  if (context == NULL || context->version != 2 || handle <= 0 ||
+      (uint64_t)handle > shared->pair_used) {
+    raise(SIGILL);
+    return 0;
+  }
+  struct kexe_pair_v1 *pair = &shared->pairs[(uint64_t)handle - 1];
+  return second ? pair->second : pair->first;
+}
+
+static int64_t checked_pair_first(struct kexe_context_v2 *context, int64_t handle) {
+  return checked_pair_get(context, handle, 0);
+}
+
+static int64_t checked_pair_second(struct kexe_context_v2 *context, int64_t handle) {
+  return checked_pair_get(context, handle, 1);
 }
 
 static int parse_allow(const char *text, uint64_t allow[4]) {
@@ -188,16 +240,17 @@ static int supervise(pid_t child) {
   return 123;
 }
 
-static void write_supervisor_report(const struct kexe_shared_v1 *shared,
+static void write_supervisor_report(const struct kexe_shared_v2 *shared,
                                     int child_status) {
   if (child_status == 0 && shared->completed == 1) {
     printf("{:status :ok :result %" PRId64
-           " :fuel {:initial 256 :remaining %" PRIu64 "}}\n",
-           shared->result, shared->context.fuel);
+           " :fuel {:initial 256 :remaining %" PRIu64
+           "} :heap {:capacity 4096 :used %" PRIu64 "}}\n",
+           shared->result, shared->context.fuel, shared->pair_used);
   } else {
     printf("{:status :trap :exit %d :fuel {:initial 256 :remaining %" PRIu64
-           "}}\n",
-           child_status, shared->context.fuel);
+           "} :heap {:capacity 4096 :used %" PRIu64 "}}\n",
+           child_status, shared->context.fuel, shared->pair_used);
   }
 }
 
@@ -374,14 +427,17 @@ int main(int argc, char **argv) {
   for (unsigned long i = 0; i < arity; i++) {
     if (parse_i64(argv[6 + i], &args[i]) != 0) return 2;
   }
-  struct kexe_shared_v1 *shared =
+  struct kexe_shared_v2 *shared =
       mmap(NULL, sizeof(*shared), PROT_READ | PROT_WRITE,
            MAP_SHARED | MAP_ANONYMOUS, -1, 0);
   if (shared == MAP_FAILED) fail("mmap shared execution state");
   memset(shared, 0, sizeof(*shared));
-  shared->context.version = 1;
+  shared->context.version = 2;
   shared->context.fuel = 256;
   shared->context.cap_call = checked_cap_call;
+  shared->context.pair_new = checked_pair_new;
+  shared->context.pair_first = checked_pair_first;
+  shared->context.pair_second = checked_pair_second;
   if (parse_allow(argv[5], shared->context.allow) != 0) return 2;
   int structured_report = getenv("KEXE_STRUCTURED_REPORT") != NULL;
 

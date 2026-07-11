@@ -49,6 +49,7 @@ grep -q 'capability policy denies required effects' "$TMP/capability-deny.out"
 "$ROOT/bin/kotoba" -M compile "$ROOT/examples/structured.kotoba" --target wasm32 --output "$TMP/program.wasm"
 "$ROOT/bin/kotoba" -M compile "$ROOT/examples/fuel.kotoba" --target wasm32 --output "$TMP/fuel.wasm"
 "$ROOT/bin/kotoba" -M compile "$ROOT/examples/i64-semantics.kotoba" --target wasm32 --output "$TMP/i64.wasm"
+"$ROOT/bin/kotoba" -M compile "$ROOT/examples/heap.kotoba" --target wasm32 --output "$TMP/heap.wasm"
 "$ROOT/bin/kotoba" -M compile "$ROOT/examples/structured.kotoba" --target x86_64 --output "$TMP/x86_64.kexe"
 "$ROOT/bin/kotoba" -M compile "$ROOT/examples/fuel.kotoba" --target x86_64 --output "$TMP/x86_64-fuel.kexe"
 "$ROOT/bin/kotoba" -M compile "$ROOT/examples/i64-semantics.kotoba" --target x86_64 --output "$TMP/x86_64-i64.kexe"
@@ -161,6 +162,35 @@ WebAssembly.instantiate(bytes, {"kotoba:cap": {call(cap, value) {
 ' "$TMP/capability.wasm"
 printf '%s\n' 'conformance: Wasm capability trampoline allowed and denied paths passed'
 
+node -e '
+const fs = require("fs");
+const cells = [];
+const checked = handle => {
+  if (typeof handle !== "bigint" || handle <= 0n || handle > BigInt(cells.length))
+    throw new WebAssembly.RuntimeError("invalid pair handle");
+  return cells[Number(handle - 1n)];
+};
+const heap = {
+  pair(first, second) {
+    if (cells.length >= 4096) throw new WebAssembly.RuntimeError("heap exhausted");
+    cells.push([first, second]);
+    return BigInt(cells.length);
+  },
+  "pair-first"(handle) { return checked(handle)[0]; },
+  "pair-second"(handle) { return checked(handle)[1]; }
+};
+WebAssembly.instantiate(fs.readFileSync(process.argv[1]), {"kotoba:heap": heap})
+  .then(({instance}) => {
+    if (instance.exports.main() !== 42n) throw new Error("pair result mismatch");
+    if (cells.length !== 2) throw new Error(`pair usage expected 2, got ${cells.length}`);
+    let forged = false;
+    try { instance.exports.forged(4096n); }
+    catch (error) { forged = error instanceof WebAssembly.RuntimeError; }
+    if (!forged) throw new Error("forged pair handle was accepted");
+  }).catch(error => { console.error(error); process.exit(1); });
+' "$TMP/heap.wasm"
+printf '%s\n' 'conformance: Wasm bounded pair arena passed; forged handle trapped'
+
 native_check() {
   ARTIFACT=$1
   ISA=$2
@@ -236,7 +266,7 @@ native_report_check() {
   META=$("$ROOT/bin/kotoba" -M extract-native "$ARTIFACT" --symbol main --output "$TMP/$ISA-report.bin")
   OFFSET=$(printf '%s' "$META" | sed -n 's/.*:offset \([0-9][0-9]*\).*/\1/p')
   REPORT=$(KEXE_STRUCTURED_REPORT=1 "$TMP/kexe-loader" "$TMP/$ISA-report.bin" "$OFFSET" 0 "$ISA" -)
-  [ "$REPORT" = '{:status :ok :result 42 :fuel {:initial 256 :remaining 253}}' ] || {
+  [ "$REPORT" = '{:status :ok :result 42 :fuel {:initial 256 :remaining 253} :heap {:capacity 4096 :used 0}}' ] || {
     echo "native $ISA supervisor report mismatch: $REPORT" >&2
     exit 1
   }

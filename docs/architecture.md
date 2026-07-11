@@ -77,10 +77,29 @@ redacted. Unexpected throwables become a generic exit-70 internal failure.
 
 The compiler is `experimental alpha`, not production-safe. KIR v3 retains
 multiple pure functions, runtime arguments, lexical `let`, `if`, integer
-arithmetic, comparisons, and direct calls. Wasm lowers that runtime KIR to real
+arithmetic, comparisons, direct calls, and immutable bounded pairs. Wasm lowers that runtime KIR to real
 locals, calls, and structured control flow. Both native backends emit general
 verified control flow for this subset and execute through the supervised W^X
-loader. Memory allocation and a production-strength OS sandbox remain absent.
+loader. General allocation, tracing GC, and a production-strength VM sandbox
+remain absent.
+
+## Bounded pair arena
+
+`pair`, `pair-first`, and `pair-second` are the first admitted heap contract.
+Each run owns exactly 4,096 immutable two-i64 cells (65,536 payload bytes).
+Allocation returns a one-based handle, never a host pointer. Every read checks
+that the handle is positive and no greater than the monotonically published
+cell count before selecting a slot. Exhaustion and invalid handles trap; cells
+cannot be mutated, freed, or reused during a run.
+
+Native context v2 retains fuel and capability offsets and adds fixed callbacks
+at 56, 64, and 72 bytes for allocation and the two projections. Both native
+backends emit calls only through those regenerated offsets. The loader
+implements the callbacks over shared bounded storage so the supervisor reports
+exact `{:capacity 4096 :used n}` accounting. Wasm modules import the equivalent
+three functions from `kotoba:heap`; conformance supplies a bounded host arena
+and checks valid allocation plus forged-handle rejection. This arena is
+deterministic bounded allocation, not a general-purpose or tracing GC.
 
 KIR v3 also has a normative bounded reference executor
 (`kotoba.compiler.ir/execute`). All values are signed i64 bit patterns.

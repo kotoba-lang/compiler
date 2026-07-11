@@ -10,6 +10,7 @@
 
 (def arithmetic '#{+ - * quot})
 (def comparisons '#{= < > <= >=})
+(def heap-operations '{pair 2 pair-first 1 pair-second 1})
 (def max-functions 1024)
 (def max-expression-nodes 50000)
 (def max-lowered-nodes 100000)
@@ -123,6 +124,11 @@
 
         (contains? comparisons op)
         (do (when-not (= 2 (count args)) (reject! "comparison requires two operands" form))
+            (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
+        (contains? heap-operations op)
+        (do (when-not (= (get heap-operations op) (count args))
+              (reject! "heap operation arity mismatch" form))
             (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
 
         (contains? functions op)

@@ -32,7 +32,7 @@
 (defn- emit-many [forms env ctx]
   (mapcat #(emit-expr % env ctx) forms))
 
-(defn emit-expr [form env {:keys [function-indices next-local] :as ctx}]
+(defn emit-expr [form env {:keys [function-indices intrinsic-indices next-local] :as ctx}]
   (cond
     (integer? form) (into [0x42] (sleb form))                    ; i64.const
     (symbol? form) [0x20 (get env form)]                         ; local.get
@@ -57,7 +57,11 @@
 
         (= op 'cap-call)
         (let [[cap-id value] args]
-          (concat [0x42] (sleb cap-id) (emit-expr value env ctx) [0x10 0]))
+          (concat [0x42] (sleb cap-id) (emit-expr value env ctx)
+                  [0x10 (get intrinsic-indices 'cap-call)]))
+
+        (contains? '#{pair pair-first pair-second} op)
+        (concat (emit-many args env ctx) [0x10 (get intrinsic-indices op)])
 
         (contains? '#{+ - * quot} op)
         (let [opcode ({'+ 0x7c '- 0x7d '* 0x7e 'quot 0x7f} op)]
@@ -77,7 +81,7 @@
 (defn- function-type [{:keys [params]}]
   (concat [0x60] (uleb (count params)) (repeat (count params) 0x7e) [1 0x7e]))
 
-(defn- function-body [function function-indices]
+(defn- function-body [function function-indices intrinsic-indices]
   (let [param-env (zipmap (:params function) (range))
         locals (local-count (:body function))
         declarations (if (zero? locals) [0] (concat [1] (uleb locals) [0x7e]))
@@ -87,6 +91,7 @@
                 0x23 0 0x42 1 0x7d 0x24 0]       ; global.get;const 1;sub;global.set
         instructions (concat charge (emit-expr (:body function) param-env
                                 {:function-indices function-indices
+                                 :intrinsic-indices intrinsic-indices
                                  :next-local (count (:params function))}))
         body (concat declarations instructions [0x0b])]
     (concat (uleb (count body)) body)))
@@ -94,13 +99,35 @@
 (defn emit [kir]
   (let [functions (:functions kir)
         has-cap? (contains? (set (map first (:effects kir))) :cap/call)
-        shift (if has-cap? 1 0)
+        heap-ops (let [found (volatile! #{})]
+                   (letfn [(walk [form]
+                             (cond
+                               (seq? form)
+                               (do
+                                 (when (contains? '#{pair pair-first pair-second} (first form))
+                                   (vswap! found conj (first form)))
+                                 (doseq [arg (rest form)] (walk arg)))
+                               (coll? form) (doseq [item form] (walk item))))]
+                     (doseq [function functions] (walk (:body function)))
+                     @found))
+        imports (vec (concat
+                      (when has-cap? [['cap-call "kotoba:cap" "call"
+                                       [0x60 2 0x7e 0x7e 1 0x7e]]])
+                      (when (seq heap-ops)
+                        [['pair "kotoba:heap" "pair" [0x60 2 0x7e 0x7e 1 0x7e]]
+                         ['pair-first "kotoba:heap" "pair-first" [0x60 1 0x7e 1 0x7e]]
+                         ['pair-second "kotoba:heap" "pair-second" [0x60 1 0x7e 1 0x7e]]])))
+        shift (count imports)
+        intrinsic-indices (into {} (map-indexed (fn [index [op]] [op index]) imports))
         indices (into {} (map-indexed (fn [i f] [(:name f) (+ i shift)]) functions))
-        cap-type [0x60 2 0x7e 0x7e 1 0x7e]
         types (concat (uleb (+ (count functions) shift))
-                      (when has-cap? cap-type) (mapcat function-type functions))
-        import-sec (when has-cap?
-                     (concat [1] (name-bytes "kotoba:cap") (name-bytes "call") [0 0]))
+                      (mapcat #(nth % 3) imports) (mapcat function-type functions))
+        import-sec (when (seq imports)
+                     (concat (uleb shift)
+                             (mapcat (fn [[_ module field _] index]
+                                       (concat (name-bytes module) (name-bytes field)
+                                               [0] (uleb index)))
+                                     imports (range))))
         function-sec (concat (uleb (count functions))
                              (mapcat uleb (range shift (+ shift (count functions)))))
         ;; (global (mut i64) (i64.const 256)); low enough to trap before the
@@ -114,10 +141,10 @@
                                              (uleb (+ index shift))))
                                    (map-indexed vector functions)))
         code-sec (concat (uleb (count functions))
-                         (mapcat #(function-body % indices) functions))]
+                         (mapcat #(function-body % indices intrinsic-indices) functions))]
     (byte-array
      (map unchecked-byte
           (concat [0 0x61 0x73 0x6d 1 0 0 0]
-                  (section 1 types) (when has-cap? (section 2 import-sec))
+                  (section 1 types) (when (seq imports) (section 2 import-sec))
                   (section 3 function-sec) (section 6 global-sec)
                   (section 7 export-sec) (section 10 code-sec))))))

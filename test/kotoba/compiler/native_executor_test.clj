@@ -45,7 +45,8 @@
     (is (every? #(re-matches #"[0-9a-f]{64}" %)
                 (vals (dissoc (get-in result [:evidence :runtime]) :format))))
     (is (= {:status :ok :result 42
-            :fuel {:initial 256 :remaining 255}}
+            :fuel {:initial 256 :remaining 255}
+            :heap {:capacity 4096 :used 0}}
            (:report result)))
     (is (<= (:started-at result) (:finished-at result)))))
 
@@ -107,3 +108,19 @@
            (get-in result [:evidence :trap])))
     (is (= 0 (get-in result [:report :fuel :remaining])))
     (is (= 120 (get-in result [:report :exit])))))
+
+(deftest bounded-pair-arena-executes-and-rejects-forged-handles
+  (let [{:keys [envelope trust]}
+        (signed "(defn bad [handle] (pair-first handle))
+                 (defn main [] (+ (pair-first (pair 20 99))
+                                  (pair-second (pair 1 22))))" {:allow #{}})
+        {:keys [trust options]} (execution-options trust)
+        result (executor/execute envelope trust {:allow #{}} {:args []} options)
+        forged (executor/execute envelope trust {:allow #{}} {:args [1]}
+                                 (assoc options :entry 'bad))
+        expected-signal (if (= (target) :aarch64-kotoba-v1) :SIGILL :SIGILL)]
+    (is (= 42 (get-in result [:evidence :result])))
+    (is (= {:capacity 4096 :used 2} (get-in result [:report :heap])))
+    (is (= :trap (get-in forged [:evidence :status])))
+    (is (= {:kind :signal :signal expected-signal}
+           (get-in forged [:evidence :trap])))))

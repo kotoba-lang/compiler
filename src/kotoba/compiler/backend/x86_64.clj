@@ -8,7 +8,7 @@
 (def ^:private param-pushes [[0x57] [0x56] [0x52] [0x51] [0x41 0x50]])
 (def ^:private arg-pops [[0x5f] [0x5e] [0x5a] [0x59] [0x41 0x58]])
 (def ^:private fuel-charge
-  ;; context v1: fuel is qword [r9+8].
+  ;; context v2: fuel is qword [r9+8].
   [0x49 0x83 0x79 0x08 0x00 0x75 0x02 0x0f 0x0b 0x49 0xff 0x49 0x08])
 
 (defn- normalize-expr [form env]
@@ -73,6 +73,20 @@
           (when align? [0x48 0x83 0xc4 0x08])
           [0x41 0x59]))))                         ; pop r9
 
+(defn- emit-heap-call [op args env {:keys [temp-depth] :as ctx}]
+  (let [offset ({'pair 56 'pair-first 64 'pair-second 72} op)
+        pair? (= op 'pair)
+        values (if pair?
+                 (concat (emit-expr (first args) env ctx) [0x50]
+                         (emit-expr (second args) env (update ctx :temp-depth inc))
+                         [0x48 0x89 0xc2 0x5e])   ; rdx=right; pop rsi=left
+                 (concat (emit-expr (first args) env ctx)
+                         [0x48 0x89 0xc6]))        ; rsi=handle
+        align? (even? temp-depth)]
+    (vec (concat values [0x41 0x51] (when align? [0x50])
+                 [0x4c 0x89 0xcf 0x41 0xff 0x51 offset]
+                 (when align? [0x48 0x83 0xc4 0x08]) [0x41 0x59]))))
+
 (defn emit-expr [form env {:keys [param-count pad? temp-depth] :as ctx}]
   (cond
     (integer? form) (into [0x48 0xb8] (le64 form))
@@ -91,6 +105,9 @@
 
         (= op 'cap-call)
         (emit-cap-call (first args) (second args) env ctx)
+
+        (contains? '#{pair pair-first pair-second} op)
+        (emit-heap-call op args env ctx)
 
         (and (= op '-) (= 1 (count args)))
         (vec (concat (emit-expr (first args) env ctx) [0x48 0xf7 0xd8]))

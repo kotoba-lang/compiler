@@ -126,6 +126,16 @@ or accepted mutation fails the job and can be replayed from those values. This
 complements, but does not replace, coverage-guided native fuzzing or an
 independent audit.
 
+The only guest heap objects currently admitted are immutable pairs. The loader
+preallocates 4,096 cells and exposes no address to generated code. Handles are
+validated against the current allocation frontier in runtime callbacks;
+negative, zero, future, and exhausted allocations trap. Context-v2 callback
+offsets, arena capacity, and the 64 KiB resource limit are sealed and
+independently rechecked before code admission. Mutation fuzzing changes these
+fields and requires rejection. This prevents host-memory corruption and
+unbounded allocation, but it is not yet a tracing collector: memory is reclaimed
+only when the entire supervised execution ends.
+
 The C loader's parser and valid execution path run under ASan and UBSan on both
 host platforms in CI. Decimal parsing resets and checks `errno` for every
 `strtoul`, `strtoull`, and `strtoll`, so values outside the declared unsigned or

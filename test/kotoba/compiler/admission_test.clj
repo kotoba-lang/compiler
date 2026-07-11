@@ -46,8 +46,10 @@
     (let [artifact (:artifact (compiler/compile-source effect-source target
                                                        {:allow #{[:cap/call 7]}}))]
       (is (= #{[:cap/call 7]} (:effects artifact)))
-      (is (= {:version 1 :fuel-offset 8 :allow-bitmap-offset 16
-              :allow-bitmap-bytes 32 :cap-call-offset 48}
+      (is (= {:version 2 :fuel-offset 8 :allow-bitmap-offset 16
+              :allow-bitmap-bytes 32 :cap-call-offset 48
+              :pair-new-offset 56 :pair-first-offset 64
+              :pair-second-offset 72 :pair-capacity 4096}
              (:context-abi artifact))))))
 
 (deftest mutual-call-effects-reach-fixpoint
