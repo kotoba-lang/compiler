@@ -112,7 +112,8 @@ native_expect_trap() {
   ARTIFACT=$1
   ISA=$2
   SYMBOL=$3
-  shift 3
+  SIGNAL=$4
+  shift 4
   META=$("$ROOT/bin/kotoba" -M extract-native "$ARTIFACT" --symbol "$SYMBOL" --output "$TMP/$ISA-$SYMBOL-trap.bin")
   OFFSET=$(printf '%s' "$META" | sed -n 's/.*:offset \([0-9][0-9]*\).*/\1/p')
   ARITY=$#
@@ -120,7 +121,7 @@ native_expect_trap() {
     echo "native $ISA $SYMBOL unexpectedly returned instead of trapping" >&2
     exit 1
   fi
-  grep -q '^KEXE_TRAP signal$' "$TMP/trap.err"
+  grep -q "^KEXE_TRAP {:kind :signal :signal :$SIGNAL}$" "$TMP/trap.err"
 }
 
 native_cap_check() {
@@ -133,7 +134,7 @@ native_cap_check() {
     echo "native $ISA capability unexpectedly bypassed runtime policy" >&2
     exit 1
   fi
-  grep -q '^KEXE_TRAP signal$' "$TMP/cap-deny.err"
+  grep -q '^KEXE_TRAP {:kind :signal :signal :SIGILL}$' "$TMP/cap-deny.err"
 }
 
 native_sandbox_probe() {
@@ -145,7 +146,7 @@ native_sandbox_probe() {
     echo "native $ISA sandbox allowed forbidden filesystem access" >&2
     exit 1
   fi
-  grep -q '^KEXE_TRAP signal$' "$TMP/sandbox-probe.err"
+  grep -q '^KEXE_TRAP {:kind :signal :signal :SIGSYS}$' "$TMP/sandbox-probe.err"
 }
 
 if [ "$(uname -s)-$(uname -m)" = "Linux-x86_64" ]; then
@@ -155,10 +156,10 @@ if [ "$(uname -s)-$(uname -m)" = "Linux-x86_64" ]; then
   native_check "$TMP/x86_64.kexe" x86_64 calc 21 20 4
   native_check "$TMP/x86_64.kexe" x86_64 relations 10 7 3
   native_check "$TMP/x86_64.kexe" x86_64 relations 13 3 3
-  native_expect_trap "$TMP/x86_64.kexe" x86_64 calc 20 0
-  native_expect_trap "$TMP/x86_64.kexe" x86_64 calc -9223372036854775808 -1
+  native_expect_trap "$TMP/x86_64.kexe" x86_64 calc SIGFPE 20 0
+  native_expect_trap "$TMP/x86_64.kexe" x86_64 calc SIGFPE -9223372036854775808 -1
   native_check "$TMP/x86_64-fuel.kexe" x86_64 fact 3628800 10
-  native_expect_trap "$TMP/x86_64-fuel.kexe" x86_64 forever 0
+  native_expect_trap "$TMP/x86_64-fuel.kexe" x86_64 forever SIGILL 0
   "$ROOT/bin/kotoba" -M compile "$ROOT/examples/capability.kotoba" --target x86_64 \
     --policy "$ROOT/examples/capability-policy.edn" --output "$TMP/x86_64-cap.kexe"
   "$ROOT/bin/kotoba" -M verify "$TMP/x86_64-cap.kexe"
@@ -173,12 +174,12 @@ case "$(uname -s)-$(uname -m)" in
     native_check "$TMP/aarch64.kexe" aarch64 calc 21 20 4
     native_check "$TMP/aarch64.kexe" aarch64 relations 10 7 3
     native_check "$TMP/aarch64.kexe" aarch64 relations 13 3 3
-    native_expect_trap "$TMP/aarch64.kexe" aarch64 calc 20 0
-    native_expect_trap "$TMP/aarch64.kexe" aarch64 calc -9223372036854775808 -1
+    native_expect_trap "$TMP/aarch64.kexe" aarch64 calc SIGTRAP 20 0
+    native_expect_trap "$TMP/aarch64.kexe" aarch64 calc SIGTRAP -9223372036854775808 -1
     "$ROOT/bin/kotoba" -M compile "$ROOT/examples/fuel.kotoba" --target aarch64 --output "$TMP/aarch64-fuel.kexe"
     "$ROOT/bin/kotoba" -M verify "$TMP/aarch64-fuel.kexe"
     native_check "$TMP/aarch64-fuel.kexe" aarch64 fact 3628800 10
-    native_expect_trap "$TMP/aarch64-fuel.kexe" aarch64 forever 0
+    native_expect_trap "$TMP/aarch64-fuel.kexe" aarch64 forever SIGTRAP 0
     "$ROOT/bin/kotoba" -M compile "$ROOT/examples/capability.kotoba" --target aarch64 \
       --policy "$ROOT/examples/capability-policy.edn" --output "$TMP/aarch64-cap.kexe"
     "$ROOT/bin/kotoba" -M verify "$TMP/aarch64-cap.kexe"

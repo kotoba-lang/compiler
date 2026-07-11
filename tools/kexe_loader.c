@@ -63,9 +63,40 @@ static void fail(const char *message) {
 }
 
 static void trap_handler(int signal_number) {
-  static const char prefix[] = "KEXE_TRAP signal\n";
-  (void)signal_number;
-  ssize_t written = write(STDERR_FILENO, prefix, sizeof(prefix) - 1);
+  static const char sigill[] = "KEXE_TRAP {:kind :signal :signal :SIGILL}\n";
+  static const char sigtrap[] = "KEXE_TRAP {:kind :signal :signal :SIGTRAP}\n";
+  static const char sigfpe[] = "KEXE_TRAP {:kind :signal :signal :SIGFPE}\n";
+  static const char sigbus[] = "KEXE_TRAP {:kind :signal :signal :SIGBUS}\n";
+  static const char sigsegv[] = "KEXE_TRAP {:kind :signal :signal :SIGSEGV}\n";
+  static const char sigxcpu[] = "KEXE_TRAP {:kind :signal :signal :SIGXCPU}\n";
+  static const char sigalrm[] = "KEXE_TRAP {:kind :signal :signal :SIGALRM}\n";
+#if defined(SIGSYS)
+  static const char sigsys[] = "KEXE_TRAP {:kind :signal :signal :SIGSYS}\n";
+#endif
+  static const char unknown[] = "KEXE_TRAP {:kind :signal :signal :unknown}\n";
+  const char *message = unknown;
+  size_t length = sizeof(unknown) - 1;
+#define SELECT_SIGNAL(number, text) \
+  case number:                       \
+    message = text;                  \
+    length = sizeof(text) - 1;       \
+    break
+  switch (signal_number) {
+    SELECT_SIGNAL(SIGILL, sigill);
+    SELECT_SIGNAL(SIGTRAP, sigtrap);
+    SELECT_SIGNAL(SIGFPE, sigfpe);
+    SELECT_SIGNAL(SIGBUS, sigbus);
+    SELECT_SIGNAL(SIGSEGV, sigsegv);
+    SELECT_SIGNAL(SIGXCPU, sigxcpu);
+    SELECT_SIGNAL(SIGALRM, sigalrm);
+#if defined(SIGSYS)
+    SELECT_SIGNAL(SIGSYS, sigsys);
+#endif
+    default:
+      break;
+  }
+#undef SELECT_SIGNAL
+  ssize_t written = write(STDERR_FILENO, message, length);
   (void)written;
   _exit(120);
 }

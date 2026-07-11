@@ -39,4 +39,7 @@ loading and changing code to RX but before guest entry. The allowlist contains
 only process exit, structured signal handling, output, unmapping, and minimal
 libc bookkeeping calls. Filesystem, network, process creation, and arbitrary
 syscalls trap as `SIGSYS`. CI deliberately attempts to open `/etc/passwd` after
-filter installation and requires a structured `KEXE_TRAP`.
+filter installation and requires the machine-readable EDN report
+`KEXE_TRAP {:kind :signal :signal :SIGSYS}`. Arithmetic, fuel, and capability
+traps likewise report their exact OS signal without calling unsafe libc code
+from the signal handler.
