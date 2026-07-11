@@ -130,13 +130,15 @@ static int supervise(pid_t child) {
   if (supervisor_timed_out) {
     static const char timeout[] =
         "KEXE_TRAP {:kind :supervisor :reason :wall-timeout}\n";
-    (void)write(STDERR_FILENO, timeout, sizeof(timeout) - 1);
+    ssize_t written = write(STDERR_FILENO, timeout, sizeof(timeout) - 1);
+    (void)written;
     return 122;
   }
   if (WIFEXITED(status)) return WEXITSTATUS(status);
   static const char signal[] =
       "KEXE_TRAP {:kind :supervisor :reason :unhandled-child-signal}\n";
-  (void)write(STDERR_FILENO, signal, sizeof(signal) - 1);
+  ssize_t written = write(STDERR_FILENO, signal, sizeof(signal) - 1);
+  (void)written;
   return 123;
 }
 
