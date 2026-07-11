@@ -9,6 +9,7 @@
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <signal.h>
 #include <unistd.h>
 
@@ -31,6 +32,9 @@ struct kexe_context_v1 {
   uint64_t allow[4];
   int64_t (*cap_call)(struct kexe_context_v1 *, uint64_t, int64_t);
 };
+
+static volatile sig_atomic_t supervisor_timed_out = 0;
+static volatile sig_atomic_t supervised_pid = -1;
 
 static int64_t checked_cap_call(struct kexe_context_v1 *context,
                                 uint64_t cap_id, int64_t value) {
@@ -99,6 +103,41 @@ static void trap_handler(int signal_number) {
   ssize_t written = write(STDERR_FILENO, message, length);
   (void)written;
   _exit(120);
+}
+
+static void supervisor_alarm_handler(int signal_number) {
+  (void)signal_number;
+  supervisor_timed_out = 1;
+  if (supervised_pid > 0) (void)kill((pid_t)supervised_pid, SIGKILL);
+}
+
+static int supervise(pid_t child) {
+  struct sigaction action;
+  memset(&action, 0, sizeof(action));
+  action.sa_handler = supervisor_alarm_handler;
+  sigemptyset(&action.sa_mask);
+  if (sigaction(SIGALRM, &action, NULL) != 0) fail("supervisor sigaction");
+  supervised_pid = (sig_atomic_t)child;
+  alarm(3);
+
+  int status = 0;
+  while (waitpid(child, &status, 0) < 0) {
+    if (errno == EINTR) continue;
+    fail("waitpid");
+  }
+  alarm(0);
+  supervised_pid = -1;
+  if (supervisor_timed_out) {
+    static const char timeout[] =
+        "KEXE_TRAP {:kind :supervisor :reason :wall-timeout}\n";
+    (void)write(STDERR_FILENO, timeout, sizeof(timeout) - 1);
+    return 122;
+  }
+  if (WIFEXITED(status)) return WEXITSTATUS(status);
+  static const char signal[] =
+      "KEXE_TRAP {:kind :supervisor :reason :unhandled-child-signal}\n";
+  (void)write(STDERR_FILENO, signal, sizeof(signal) - 1);
+  return 123;
 }
 
 /* Keep post-sandbox output independent of libc stdio's lazy initialization. */
@@ -214,8 +253,6 @@ int main(int argc, char **argv) {
   if (!end || *end || arity > 5 || argc != (int)(6 + arity)) return 2;
   const char *isa = argv[4];
   if (strcmp(isa, "x86_64") != 0 && strcmp(isa, "aarch64") != 0) return 2;
-  install_limits();
-
   FILE *file = fopen(argv[1], "rb");
   if (!file) fail("open");
   if (fseek(file, 0, SEEK_END) != 0) fail("seek");
@@ -247,6 +284,22 @@ int main(int argc, char **argv) {
       .version = 1, .fuel = 256, .allow = {0, 0, 0, 0},
       .cap_call = checked_cap_call};
   if (parse_allow(argv[5], context.allow) != 0) return 2;
+
+  pid_t child = fork();
+  if (child < 0) fail("fork");
+  if (child > 0) {
+    int child_status = supervise(child);
+    if (munmap(memory, mapped) != 0) fail("supervisor munmap");
+    return child_status;
+  }
+
+  supervised_pid = -1;
+  alarm(0);
+  if (getenv("KEXE_TIMEOUT_PROBE") != NULL) {
+    for (;;) {
+    }
+  }
+  install_limits();
   install_syscall_sandbox();
   if (getenv("KEXE_SANDBOX_PROBE") != NULL) {
     int probe = open("/etc/passwd", O_RDONLY);
@@ -269,5 +322,5 @@ int main(int argc, char **argv) {
   write_i64(result);
 
   if (munmap(memory, mapped) != 0) fail("munmap");
-  return 0;
+  _exit(0);
 }

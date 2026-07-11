@@ -106,6 +106,12 @@ again. x86-64 preserves r9 around the indirect call; AArch64 preserves x7 and
 uses `BLR` only on the slot loaded from `[x7,#48]`. The verifier regenerates all
 checks and call instructions from sealed KIR.
 
+The reference loader uses a two-process execution model. Its parent loads bytes
+into an RW mapping, seals it RX, then forks. The child alone enters generated
+code under resource limits and the platform sandbox; the parent only supervises
+termination and an independent wall-clock deadline. Guest traps and supervisor
+failures have distinct structured report kinds.
+
 ## Signed artifact admission
 
 The internal SHA-256 seal detects accidental mutation but is not authenticity:

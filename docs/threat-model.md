@@ -45,3 +45,10 @@ traps likewise report their exact OS signal without calling unsafe libc code
 from the signal handler. The native backends deliberately use their own hard
 trap instructions for generated-code policy denial: x86-64 `UD2` reports
 `SIGILL`, while AArch64 `BRK` reports `SIGTRAP`.
+
+The loader forks after loading and sealing the code mapping. Only the child
+enters guest code and receives resource limits, trap handlers, and Linux
+seccomp. The parent waits for that exact child and enforces an independent
+three-second wall deadline. A stuck child is killed and reported as
+`KEXE_TRAP {:kind :supervisor :reason :wall-timeout}`; CI tests this boundary
+on both supported host architectures.
