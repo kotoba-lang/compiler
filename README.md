@@ -22,6 +22,11 @@ target, KIR identity, effects, resource limits, and exact code bytes with
 SHA-256. Effectful calls, allocation, indirect control flow, and OS ABI emission
 fail closed until their verifier rules exist.
 
+Compilation has explicit structural budgets in addition to the 1 MiB source
+limit. Function count, common five-argument ABI, bindings, expression nodes, and
+the estimated `let`-elided lowering size are checked before backend emission;
+compact substitution chains cannot amplify into unbounded native code.
+
 ```bash
 bin/kotoba -M compile example.kotoba --target wasm32 --output app.wasm
 bin/kotoba -M compile example.kotoba --target x86_64 --output app.kexe

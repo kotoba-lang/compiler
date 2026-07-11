@@ -33,6 +33,13 @@ recursion, top-level form count is capped, expression validation is capped at
 256, and literals must fit signed i64. Host reader failures are normalized into
 the compiler's `:read` error phase.
 
+The safe profile additionally caps functions (1,024), parameters per exported
+function (5), bindings per `let` (4,096), symbol length (128), and total
+expression nodes (50,000). A separate symbolic cost pass caps the `let`-elided
+program at 100,000 nodes before native substitution occurs, preventing compact
+source from causing exponential code generation. The five-argument limit is a
+frontend ABI contract shared by Wasm and both native targets.
+
 The CLI treats serialized control-plane objects as hostile too. KEXE, signing
 keys/envelopes, trust stores, policies, inputs, and receipts share a strict UTF-8
 EDN decoder with an 8 MiB byte ceiling, depth 128, token length 4,096, decoded

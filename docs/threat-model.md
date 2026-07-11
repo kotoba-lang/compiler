@@ -21,6 +21,9 @@ Security invariants:
 8. Serialized artifacts, policies, keys, and receipts are byte- and
    structure-bounded before semantic verification; trailing forms, malformed
    UTF-8, and tagged EDN fail closed.
+9. Source size is not the only compilation budget: function, ABI arity,
+   binding, expression-node, and post-`let` lowering costs are bounded before
+   backend allocation or code emission.
 
 Arithmetic is specified independently of the JVM compiler host: i64
 add/subtract/multiply wrap modulo 2^64, while invalid signed division traps. A

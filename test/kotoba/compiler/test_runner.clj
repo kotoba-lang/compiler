@@ -3,6 +3,7 @@
             [kotoba.compiler.core-test]
             [kotoba.compiler.bounded-edn-test]
             [kotoba.compiler.frontend-fuzz-test]
+            [kotoba.compiler.frontend-limits-test]
             [kotoba.compiler.native-executor-test]
             [kotoba.compiler.admission-test]
             [kotoba.compiler.property-test]
@@ -14,6 +15,7 @@
   (let [{:keys [fail error]} (t/run-tests 'kotoba.compiler.core-test
                                           'kotoba.compiler.bounded-edn-test
                                           'kotoba.compiler.frontend-fuzz-test
+                                          'kotoba.compiler.frontend-limits-test
                                           'kotoba.compiler.admission-test
                                           'kotoba.compiler.signing-test
                                           'kotoba.compiler.native-executor-test
