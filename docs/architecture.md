@@ -191,6 +191,11 @@ Each receipt hash also carries an Ed25519 executor attestation verified against
 the current trusted/revoked signer sets. This proves which executor attested the
 evidence; it does not by itself prove hardware integrity or confidential
 execution.
+Chain verification requires a current trust policy and verifies the executor
+attestation on every node, not only the head. Its result is deliberately scoped
+as `:executor-attested-chain/v1`: artifact/policy/input/output replay remains the
+job of full per-receipt verification. Receipt creation also validates a parent
+attestation before accepting its hash as a link.
 Native result evidence is schema-checked against the pinned loader source.
 Trust policies may contain `:trusted-runtime-sha256` and
 `:revoked-runtime-sha256`; when the trusted field is present it becomes a strict

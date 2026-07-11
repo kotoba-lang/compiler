@@ -108,6 +108,12 @@ revocation, policy, and artifact checks before accepting the evidence. The
 receipt hash is itself signed by a trusted executor key; a hash chain alone is
 not treated as proof that execution occurred.
 
+`kotoba -M verify-chain chain.edn --trust trust.edn` requires every node to have
+a currently trusted, non-revoked executor signature and returns the explicit
+scope `:executor-attested-chain/v1`. It verifies provenance and linkage; full
+execution evidence still uses `verify-receipt` with the envelope, policy, input,
+and result. Creating a child receipt likewise refuses an unattested parent.
+
 ```bash
 kotoba -M check examples/capability.kotoba \
   --policy examples/capability-policy.edn

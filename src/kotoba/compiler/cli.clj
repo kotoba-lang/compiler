@@ -125,8 +125,9 @@
                                        {:now (Long/parseLong (option args "--now"))
                                         :parent parent}))))
     "verify-chain"
-    (let [receipts (bounded-edn/read-file (second args))]
-      (println (pr-str (receipt/verify-chain receipts))))
+    (let [receipts (bounded-edn/read-file (second args))
+          trust (bounded-edn/read-file (option args "--trust"))]
+      (println (pr-str (receipt/verify-chain receipts trust))))
     "check"
     (let [input (second args)
           policy-path (option args "--policy")

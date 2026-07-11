@@ -13,6 +13,25 @@
   (and (string? (:receipt-sha256 receipt))
        (= (:receipt-sha256 receipt) (receipt-hash receipt))))
 
+(defn- verify-executor! [receipt trust]
+  (signing/validate-trust! trust)
+  (let [executor (:executor receipt)
+        statement {:format :kotoba.receipt-attestation/v1
+                   :receipt-sha256 (:receipt-sha256 receipt)
+                   :executor (:signer executor)}]
+    (when-not (and (map? executor)
+                   (= #{:signer :public-key :signature} (set (keys executor)))
+                   (string? (:signer executor))
+                   (string? (:public-key executor))
+                   (string? (:signature executor))
+                   (= (:signer executor) (signing/signer-id (:public-key executor)))
+                   (contains? (:trusted-signers trust) (:signer executor))
+                   (not (contains? (:revoked-signers trust) (:signer executor)))
+                   (signing/verify-value (:public-key executor) statement
+                                         (:signature executor)))
+      (throw (ex-info "executor receipt attestation rejected" {:phase :receipt})))
+    (:signer executor)))
+
 (defn create
   [envelope trust policy input output
    {:keys [now started-at finished-at status target entry fuel-initial fuel-remaining parent
@@ -23,6 +42,7 @@
         parent-sha (when parent
                      (do (when-not (valid-hash? parent)
                            (throw (ex-info "parent receipt integrity mismatch" {:phase :receipt})))
+                         (verify-executor! parent trust)
                          (:receipt-sha256 parent)))]
     (when-let [runtime (and (map? output) (:runtime output))]
       (runtime-identity/admit! runtime trust))
@@ -72,21 +92,12 @@
         required (:effects kexe)
         policy-result (admission/check {:effects required} policy)
         expected-parent (some-> parent :receipt-sha256)
-        fuel (:fuel receipt)
-        executor (:executor receipt)
-        executor-statement {:format :kotoba.receipt-attestation/v1
-                            :receipt-sha256 (:receipt-sha256 receipt)
-                            :executor (:signer executor)}]
+        fuel (:fuel receipt)]
     (when-let [runtime (and (map? output) (:runtime output))]
       (runtime-identity/admit! runtime trust))
     (when (and parent (not (valid-hash? parent)))
       (throw (ex-info "parent receipt integrity mismatch" {:phase :receipt})))
-    (when-not (and (= (:signer executor) (signing/signer-id (:public-key executor)))
-                   (contains? (:trusted-signers trust) (:signer executor))
-                   (not (contains? (:revoked-signers trust) (:signer executor)))
-                   (signing/verify-value (:public-key executor) executor-statement
-                                         (:signature executor)))
-      (throw (ex-info "executor receipt attestation rejected" {:phase :receipt})))
+    (verify-executor! receipt trust)
     (when-not (and (= (:artifact-envelope-sha256 receipt) (artifact/sha256 envelope))
                    (= (:artifact-sha256 receipt) (:sha256 kexe))
                    (= (:signer receipt) signer)
@@ -108,7 +119,11 @@
     {:verified? true :receipt-sha256 (:receipt-sha256 receipt)
      :artifact-sha256 (:artifact-sha256 receipt) :status (:status receipt)}))
 
-(defn verify-chain [receipts]
+(defn verify-chain [receipts trust]
+  (when-not (vector? receipts)
+    (throw (ex-info "receipt chain must be a vector" {:phase :receipt})))
+  (when (empty? receipts)
+    (throw (ex-info "receipt chain must not be empty" {:phase :receipt})))
   (when (> (count receipts) 10000)
     (throw (ex-info "receipt chain exceeds verification limit" {:phase :receipt})))
   (loop [remaining receipts parent nil seen #{}]
@@ -116,9 +131,13 @@
       (do
         (when-not (valid-hash? receipt)
           (throw (ex-info "receipt chain integrity mismatch" {:phase :receipt})))
+        (when-not (= :kotoba.run-receipt/v1 (:format receipt))
+          (throw (ex-info "receipt chain format mismatch" {:phase :receipt})))
+        (verify-executor! receipt trust)
         (when-not (= (:parent receipt) (some-> parent :receipt-sha256))
           (throw (ex-info "receipt parent link mismatch" {:phase :receipt})))
         (when (contains? seen (:receipt-sha256 receipt))
           (throw (ex-info "receipt chain cycle" {:phase :receipt})))
         (recur (next remaining) receipt (conj seen (:receipt-sha256 receipt))))
-      {:verified? true :count (count receipts) :head (some-> parent :receipt-sha256)})))
+      {:verified? true :scope :executor-attested-chain/v1
+       :count (count receipts) :head (some-> parent :receipt-sha256)})))

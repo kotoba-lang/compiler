@@ -30,6 +30,9 @@ Security invariants:
 11. A valid attacker-recomputed artifact hash grants no trust to embedded KIR;
     the verifier independently checks its AST, effect closure, ABI shape, and
     resource budgets before invoking a backend for byte-for-byte regeneration.
+12. Receipt-chain verification authenticates every node against current
+    executor trust/revocation state; an unkeyed hash chain or authenticated head
+    cannot confer trust on a forged ancestor.
 
 Arithmetic is specified independently of the JVM compiler host: i64
 add/subtract/multiply wrap modulo 2^64, while invalid signed division traps. A

@@ -1,5 +1,6 @@
 (ns kotoba.compiler.receipt-test
   (:require [clojure.test :refer [deftest is]]
+            [kotoba.compiler.artifact :as artifact]
             [kotoba.compiler.core :as compiler]
             [kotoba.compiler.receipt :as receipt]
             [kotoba.compiler.runtime-identity :as runtime-identity]
@@ -57,15 +58,35 @@
                                        (assoc opts :started-at 1402 :finished-at 1403
                                               :fuel-remaining 254 :parent first-receipt
                                               :executor-key key))]
-    (is (= {:verified? true :count 2 :head (:receipt-sha256 second-receipt)}
-           (receipt/verify-chain [first-receipt second-receipt])))
+    (is (= {:verified? true :scope :executor-attested-chain/v1
+            :count 2 :head (:receipt-sha256 second-receipt)}
+           (receipt/verify-chain [first-receipt second-receipt] trust)))
     (is (:verified? (receipt/verify second-receipt envelope trust policy input 43
                                     {:now 1500 :parent first-receipt})))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"parent link mismatch"
-                          (receipt/verify-chain [second-receipt first-receipt])))
+                          (receipt/verify-chain [second-receipt first-receipt] trust)))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"evidence mismatch"
                           (receipt/verify second-receipt envelope trust policy input 43
                                           {:now 1500 :parent nil})))))
+
+(deftest receipt-chain-requires-every-executor-attestation
+  (let [{:keys [envelope key trust policy input output]} (fixture)
+        value (receipt/create envelope trust policy input output
+                              (assoc opts :executor-key key))
+        changed (assoc value :status :trap)
+        forged (assoc changed :receipt-sha256
+                      (artifact/sha256 (dissoc changed :receipt-sha256 :executor)))]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"attestation rejected"
+                          (receipt/verify-chain [forged] trust)))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"attestation rejected"
+                          (receipt/verify-chain
+                           [value] (assoc trust :revoked-signers #{(:signer key)}))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"attestation rejected"
+                          (receipt/create envelope trust policy input output
+                                          (assoc opts :parent forged
+                                                 :executor-key key))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"must not be empty"
+                          (receipt/verify-chain [] trust)))))
 
 (deftest receipt-creation-validates-accounting
   (let [{:keys [envelope key trust policy input output]} (fixture)]

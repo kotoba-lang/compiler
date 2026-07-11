@@ -69,6 +69,10 @@ printf '%s\n' '42' >"$TMP/output.edn"
   --signed "$TMP/x86_64.signed.kexe" --trust "$TMP/trust.edn" \
   --policy "$TMP/pure-policy.edn" --input "$TMP/input.edn" \
   --result "$TMP/output.edn" --now 1500 >"$TMP/receipt-verification.edn"
+printf '[%s]\n' "$(cat "$TMP/run.receipt.edn")" >"$TMP/receipt-chain.edn"
+"$ROOT/bin/kotoba" -M verify-chain "$TMP/receipt-chain.edn" \
+  --trust "$TMP/trust.edn" >"$TMP/chain-verification.edn"
+grep -q ':scope :executor-attested-chain/v1' "$TMP/chain-verification.edn"
 
 node -e '
 const fs = require("fs");
