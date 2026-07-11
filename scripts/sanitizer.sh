@@ -46,6 +46,8 @@ expect_usage_rejection() {
 
 expect_usage_rejection
 expect_usage_rejection "$TMP/program.bin" "" 0 "$ISA" -
+expect_usage_rejection "$TMP/program.bin" -1 0 "$ISA" -
+expect_usage_rejection "$TMP/program.bin" +1 0 "$ISA" -
 expect_usage_rejection "$TMP/program.bin" 18446744073709551616 0 "$ISA" -
 expect_usage_rejection "$TMP/program.bin" "$OFFSET" 18446744073709551616 "$ISA" -
 expect_usage_rejection "$TMP/program.bin" "$OFFSET" 0 invalid-isa -
@@ -53,5 +55,6 @@ expect_usage_rejection "$TMP/program.bin" "$OFFSET" 0 "$ISA" 256
 expect_usage_rejection "$TMP/program.bin" "$OFFSET" 0 "$ISA" 7,
 expect_usage_rejection "$TMP/program.bin" "$OFFSET" 1 "$ISA" - 9223372036854775808
 expect_usage_rejection "$TMP/program.bin" "$OFFSET" 1 "$ISA" - -9223372036854775809
+expect_usage_rejection "$TMP/program.bin" "$OFFSET" 1 "$ISA" - +1
 
 printf '%s\n' "sanitizer: $ISA valid execution and malformed input corpus passed"

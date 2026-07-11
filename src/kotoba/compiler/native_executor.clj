@@ -11,7 +11,7 @@
 
 (def loader-source-sha256
   "Pinned identity of the reviewed native loader source used by this executor."
-  "6bf9f49d228557ae631a51de2d89d46710588c7c96ec393aeb0262627cefda05")
+  "154900b7fd3a6dbe5761a46a840b670001e0251eac68bd04345c695b3b304b6c")
 
 (defn- raw-sha256 [bytes]
   (let [digest (.digest (MessageDigest/getInstance "SHA-256") bytes)]

@@ -39,6 +39,37 @@ struct kexe_shared_v1 {
   uint64_t completed;
 };
 
+static int parse_u64(const char *text, uint64_t *value) {
+  if (text == NULL || *text < '0' || *text > '9') return -1;
+  char *end = NULL;
+  errno = 0;
+  unsigned long long parsed = strtoull(text, &end, 10);
+  if (errno == ERANGE || end == text || *end != '\0') return -1;
+  *value = (uint64_t)parsed;
+  return 0;
+}
+
+static int parse_ulong_decimal(const char *text, unsigned long *value) {
+  if (text == NULL || *text < '0' || *text > '9') return -1;
+  char *end = NULL;
+  errno = 0;
+  unsigned long parsed = strtoul(text, &end, 10);
+  if (errno == ERANGE || end == text || *end != '\0') return -1;
+  *value = parsed;
+  return 0;
+}
+
+static int parse_i64(const char *text, int64_t *value) {
+  if (text == NULL || (*text != '-' && (*text < '0' || *text > '9')) ||
+      (*text == '-' && (text[1] < '0' || text[1] > '9'))) return -1;
+  char *end = NULL;
+  errno = 0;
+  long long parsed = strtoll(text, &end, 10);
+  if (errno == ERANGE || end == text || *end != '\0') return -1;
+  *value = (int64_t)parsed;
+  return 0;
+}
+
 static volatile sig_atomic_t supervisor_timed_out = 0;
 static volatile sig_atomic_t supervised_pid = -1;
 
@@ -56,6 +87,7 @@ static int parse_allow(const char *text, uint64_t allow[4]) {
   if (strcmp(text, "-") == 0) return 0;
   const char *cursor = text;
   while (*cursor) {
+    if (*cursor < '0' || *cursor > '9') return -1;
     char *end = NULL;
     errno = 0;
     unsigned long id = strtoul(cursor, &end, 10);
@@ -269,13 +301,10 @@ int main(int argc, char **argv) {
     fprintf(stderr, "usage: kexe-loader <raw-code> <offset> <arity> <x86_64|aarch64> <allow-csv|-> [i64 ...]\n");
     return 2;
   }
-  char *end = NULL;
-  errno = 0;
-  uint64_t offset = strtoull(argv[2], &end, 10);
-  if (errno == ERANGE || !end || end == argv[2] || *end) return 2;
-  errno = 0;
-  unsigned long arity = strtoul(argv[3], &end, 10);
-  if (errno == ERANGE || !end || end == argv[3] || *end || arity > 5 ||
+  uint64_t offset;
+  if (parse_u64(argv[2], &offset) != 0) return 2;
+  unsigned long arity;
+  if (parse_ulong_decimal(argv[3], &arity) != 0 || arity > 5 ||
       argc != (int)(6 + arity)) return 2;
   const char *isa = argv[4];
   if (strcmp(isa, "x86_64") != 0 && strcmp(isa, "aarch64") != 0) return 2;
@@ -303,9 +332,7 @@ int main(int argc, char **argv) {
 
   int64_t args[6] = {0, 0, 0, 0, 0, 0};
   for (unsigned long i = 0; i < arity; i++) {
-    errno = 0;
-    args[i] = strtoll(argv[6 + i], &end, 10);
-    if (errno == ERANGE || !end || end == argv[6 + i] || *end) return 2;
+    if (parse_i64(argv[6 + i], &args[i]) != 0) return 2;
   }
   struct kexe_shared_v1 *shared =
       mmap(NULL, sizeof(*shared), PROT_READ | PROT_WRITE,

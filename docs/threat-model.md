@@ -90,3 +90,12 @@ Linux to omit seccomp, because sanitizer runtimes require syscalls outside the
 production allowlist. No runtime environment variable can disable seccomp in a
 production loader. The ordinary conformance job separately compiles without
 that macro and requires the filesystem `SIGSYS` probe to be denied.
+
+`tools/kexe_parser_fuzz.c` includes the production parser translation unit, so
+the fuzz target cannot drift into a separate reimplementation. Linux CI runs
+libFuzzer with ASan/UBSan and a persistent seed corpus over capability lists,
+strict unsigned decimal values, arity values, and signed i64 values. macOS uses
+the same entry point with a deterministic xorshift driver under ASan/UBSan
+because its Xcode toolchain advertises but does not ship the libFuzzer runtime.
+Both modes run 20,000 cases per job; Linux additionally evolves inputs from
+coverage feedback.

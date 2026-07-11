@@ -118,5 +118,11 @@ in every Linux and macOS CI job. The sanitizer gate executes verified native
 code and a malformed CLI corpus covering empty, overflowing, invalid ISA,
 capability, arity, and i64 inputs.
 
+The same production parser implementation is compiled into a fuzz harness.
+Linux CI performs 20,000 libFuzzer coverage-guided runs from a committed seed
+corpus with ASan/UBSan enabled. macOS CI runs 20,000 deterministic sanitized
+mutations of the identical harness because the current Xcode image does not
+ship its libFuzzer runtime.
+
 See [docs/architecture.md](docs/architecture.md) and
 [docs/threat-model.md](docs/threat-model.md).

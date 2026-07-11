@@ -26,3 +26,6 @@ jobs:
           bin/kotoba -M verify /tmp/ci.kexe
       - run: scripts/conformance.sh
       - run: scripts/sanitizer.sh
+      - run: scripts/fuzz-native.sh
+        env:
+          KOTOBA_NATIVE_FUZZ_RUNS: "20000"
