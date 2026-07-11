@@ -56,6 +56,7 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 RUNS=${KOTOBA_NATIVE_FUZZ_RUNS:-20000}
+FUZZ_SEED=${KOTOBA_NATIVE_FUZZ_SEED:-424242}
 if [ "$(uname -s)" = Linux ]; then
   clang -std=c11 -O1 -g -Wall -Wextra \
     -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer \
@@ -71,7 +72,7 @@ if [ "$(uname -s)" = Linux ]; then
   if ! ASAN_OPTIONS=detect_leaks=0:abort_on_error=1 \
        UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
        "$TMP/kexe-parser-fuzz" "$TMP/corpus" "$LIMIT" -max_len=1024 \
-       -timeout=2 -artifact_prefix="$ARTIFACT_PREFIX" \
+       -timeout=2 -seed="$FUZZ_SEED" -artifact_prefix="$ARTIFACT_PREFIX" \
        -print_final_stats=1 -verbosity=1 >"$FUZZ_LOG" 2>&1; then
     cat "$FUZZ_LOG" >&2
     exit 1
@@ -103,7 +104,7 @@ if [ "$(uname -s)" = Linux ]; then
       echo "native-fuzz: coverage regression: cov=$COV/$MIN_COV features=$FEATURES/$MIN_FEATURES corpus=$CORPUS/$MIN_CORPUS" >&2
       exit 1
     }
-  SUMMARY="{:format :kotoba.fuzz-coverage/v1 :engine :libfuzzer :cov $COV :features $FEATURES :corpus $CORPUS :limit \"$LABEL\"}"
+  SUMMARY="{:format :kotoba.fuzz-coverage/v1 :engine :libfuzzer :seed $FUZZ_SEED :cov $COV :features $FEATURES :corpus $CORPUS :limit \"$LABEL\"}"
   printf '%s\n' "$SUMMARY"
   if [ -n "$OUTPUT_DIR" ]; then printf '%s\n' "$SUMMARY" >"$OUTPUT_DIR/coverage.edn"; fi
   MODE=coverage-guided

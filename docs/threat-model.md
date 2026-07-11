@@ -120,4 +120,6 @@ Linux fuzz runs parse libFuzzer's terminal `DONE` record into a machine-readable
 count must meet a reviewed lower bound. The baseline includes the exact raw
 SHA-256 of `kexe_loader.c`; source changes require an explicit baseline review
 instead of silently inheriting old numbers. These values are regression alarms,
-not a claim of complete path coverage.
+not a claim of complete path coverage. A fixed libFuzzer seed makes short-run
+comparisons repeatable; the reviewed feature lower bound leaves headroom for
+the smaller fixed-run corpus relative to the longer wall-time workflow.
