@@ -113,5 +113,10 @@ A failure can be replayed locally:
 KOTOBA_FUZZ_SEED=5426643073673934426 KOTOBA_FUZZ_CASES=1000 clojure -M:test
 ```
 
+The C loader is also compiled with AddressSanitizer and UndefinedBehaviorSanitizer
+in every Linux and macOS CI job. The sanitizer gate executes verified native
+code and a malformed CLI corpus covering empty, overflowing, invalid ISA,
+capability, arity, and i64 inputs.
+
 See [docs/architecture.md](docs/architecture.md) and
 [docs/threat-model.md](docs/threat-model.md).

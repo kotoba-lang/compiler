@@ -76,3 +76,12 @@ signatures. CI records the seed and case count; any unexpected exception type
 or accepted mutation fails the job and can be replayed from those values. This
 complements, but does not replace, coverage-guided native fuzzing or an
 independent audit.
+
+The C loader's parser and valid execution path run under ASan and UBSan on both
+host platforms in CI. Decimal parsing resets and checks `errno` for every
+`strtoul`, `strtoull`, and `strtoll`, so values outside the declared unsigned or
+i64 domains are rejected instead of silently saturating. The malformed corpus
+also covers missing arguments, empty numbers, invalid ISAs, capability IDs and
+lists, and arity mismatches. Leak detection is disabled because the macOS ASan
+runtime does not support it; address and undefined-behavior detection remain
+fatal.

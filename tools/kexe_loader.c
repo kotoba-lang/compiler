@@ -57,8 +57,10 @@ static int parse_allow(const char *text, uint64_t allow[4]) {
   const char *cursor = text;
   while (*cursor) {
     char *end = NULL;
+    errno = 0;
     unsigned long id = strtoul(cursor, &end, 10);
-    if (end == cursor || id > 255 || (*end != ',' && *end != '\0')) return -1;
+    if (errno == ERANGE || end == cursor || id > 255 ||
+        (*end != ',' && *end != '\0')) return -1;
     allow[id / 64] |= UINT64_C(1) << (id % 64);
     if (*end == '\0') return 0;
     cursor = end + 1;
@@ -268,10 +270,13 @@ int main(int argc, char **argv) {
     return 2;
   }
   char *end = NULL;
+  errno = 0;
   uint64_t offset = strtoull(argv[2], &end, 10);
-  if (!end || *end) return 2;
+  if (errno == ERANGE || !end || end == argv[2] || *end) return 2;
+  errno = 0;
   unsigned long arity = strtoul(argv[3], &end, 10);
-  if (!end || *end || arity > 5 || argc != (int)(6 + arity)) return 2;
+  if (errno == ERANGE || !end || end == argv[3] || *end || arity > 5 ||
+      argc != (int)(6 + arity)) return 2;
   const char *isa = argv[4];
   if (strcmp(isa, "x86_64") != 0 && strcmp(isa, "aarch64") != 0) return 2;
   FILE *file = fopen(argv[1], "rb");
@@ -298,8 +303,9 @@ int main(int argc, char **argv) {
 
   int64_t args[6] = {0, 0, 0, 0, 0, 0};
   for (unsigned long i = 0; i < arity; i++) {
+    errno = 0;
     args[i] = strtoll(argv[6 + i], &end, 10);
-    if (!end || *end) return 2;
+    if (errno == ERANGE || !end || end == argv[6 + i] || *end) return 2;
   }
   struct kexe_shared_v1 *shared =
       mmap(NULL, sizeof(*shared), PROT_READ | PROT_WRITE,
