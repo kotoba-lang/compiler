@@ -114,3 +114,10 @@ review path. Explicit `--apply` first replays the entire imported corpus through
 the sanitized harness, deduplicates against all existing seed contents, and
 stores new inputs under their SHA-256 names. A CI self-test exercises filename,
 symlink, size, and empty-corpus rejection.
+
+Linux fuzz runs parse libFuzzer's terminal `DONE` record into a machine-readable
+`:kotoba.fuzz-coverage/v1` artifact. Edge coverage, feature count, and corpus
+count must meet a reviewed lower bound. The baseline includes the exact raw
+SHA-256 of `kexe_loader.c`; source changes require an explicit baseline review
+instead of silently inheriting old numbers. These values are regression alarms,
+not a claim of complete path coverage.

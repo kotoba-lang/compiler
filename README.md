@@ -142,5 +142,11 @@ enforces aggregate limits, rejects untrusted filenames, deduplicates by content
 SHA-256, and reruns the sanitized fuzz harness before copying new inputs under
 canonical SHA-256 names.
 
+Linux libFuzzer emits `:kotoba.fuzz-coverage/v1` summaries containing edge
+coverage, feature count, and corpus count. CI compares them with the reviewed
+baseline in `fuzz/baselines/native-parser.edn`. The baseline is bound to the raw
+loader-source SHA-256, so a C change cannot silently reuse stale coverage
+expectations. Current minimums are cov 60, features 120, and corpus 20.
+
 See [docs/architecture.md](docs/architecture.md) and
 [docs/threat-model.md](docs/threat-model.md).

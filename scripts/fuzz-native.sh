@@ -85,6 +85,24 @@ if [ "$(uname -s)" = Linux ]; then
     echo "native-fuzz: unable to parse libFuzzer coverage summary" >&2
     exit 1
   }
+  BASELINE=$ROOT/fuzz/baselines/native-parser.edn
+  MIN_COV=$(sed -n 's/.*:min-cov \([0-9][0-9]*\).*/\1/p' "$BASELINE")
+  MIN_FEATURES=$(sed -n 's/.*:min-features \([0-9][0-9]*\).*/\1/p' "$BASELINE")
+  MIN_CORPUS=$(sed -n 's/.*:min-corpus \([0-9][0-9]*\).*/\1/p' "$BASELINE")
+  EXPECTED_SOURCE=$(sed -n 's/.*:loader-source-sha256 "\([0-9a-f][0-9a-f]*\)".*/\1/p' "$BASELINE")
+  ACTUAL_SOURCE=$(sha256sum "$ROOT/tools/kexe_loader.c" | awk '{print $1}')
+  [ -n "$MIN_COV" ] && [ -n "$MIN_FEATURES" ] && [ -n "$MIN_CORPUS" ] &&
+    [ ${#EXPECTED_SOURCE} -eq 64 ] || {
+      echo "native-fuzz: malformed reviewed coverage baseline" >&2; exit 1;
+    }
+  [ "$ACTUAL_SOURCE" = "$EXPECTED_SOURCE" ] || {
+    echo "native-fuzz: coverage baseline does not match loader source" >&2; exit 1;
+  }
+  [ "$COV" -ge "$MIN_COV" ] && [ "$FEATURES" -ge "$MIN_FEATURES" ] &&
+    [ "$CORPUS" -ge "$MIN_CORPUS" ] || {
+      echo "native-fuzz: coverage regression: cov=$COV/$MIN_COV features=$FEATURES/$MIN_FEATURES corpus=$CORPUS/$MIN_CORPUS" >&2
+      exit 1
+    }
   SUMMARY="{:format :kotoba.fuzz-coverage/v1 :engine :libfuzzer :cov $COV :features $FEATURES :corpus $CORPUS :limit \"$LABEL\"}"
   printf '%s\n' "$SUMMARY"
   if [ -n "$OUTPUT_DIR" ]; then printf '%s\n' "$SUMMARY" >"$OUTPUT_DIR/coverage.edn"; fi
