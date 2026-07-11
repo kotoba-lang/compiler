@@ -80,6 +80,21 @@
                           (executor/execute envelope trust {:allow #{}} {:args []}
                                             (assoc options :loader-path (.getPath changed)))))))
 
+(deftest host-process-boundary-is-time-and-output-bounded
+  (let [run-process @#'executor/run-process
+        normal (run-process ["/bin/sh" "-c" "printf ok"] {}
+                            {:timeout-ms 1000 :output-limit 1024})
+        timeout (run-process ["/bin/sh" "-c" "sleep 10"] {}
+                             {:timeout-ms 100 :output-limit 1024})
+        flood (run-process ["/bin/sh" "-c" "yes x"] {}
+                           {:timeout-ms 2000 :output-limit 1024})]
+    (is (= {:exit 0 :stdout "ok" :stderr "" :timed-out? false
+            :output-exceeded? false}
+           normal))
+    (is (:timed-out? timeout))
+    (is (:output-exceeded? flood))
+    (is (<= (count (:stdout flood)) 1024))))
+
 (deftest native-trap-is-returned-as-measured-evidence
   (let [{:keys [envelope trust]}
         (signed "(defn forever [x] (forever x)) (defn main [] 0)" {:allow #{}})

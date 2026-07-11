@@ -185,6 +185,11 @@ compiler identity. Native execution always requires an explicit
 runtime. Runtime revocation uses `:revoked-runtime-sha256`. Measurement is a
 deliberate provisioning operation and still executes the local toolchain, so it
 belongs in a controlled build environment rather than on an exposed executor.
+Every spawned process has a Java-side wall deadline and separately bounded
+stdout/stderr capture. A hanging or output-flooding compiler or loader is killed
+together with its descendants. Toolchain builds allow 30 seconds and 1 MiB per
+stream; admitted execution allows 5 seconds and 64 KiB per stream in addition
+to the loader's internal three-second supervisor deadline.
 
 Security mutation fuzzing runs in every CI job with a recorded seed. It mutates
 sealed native artifacts (including attacker-resealed KIR/code/ABI fields),

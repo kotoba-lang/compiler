@@ -110,6 +110,12 @@ Linux build IDs are disabled, while macOS uses the deterministic UUID produced
 for an identical output identity. This is not yet a hermetic or independently
 reproduced binary build; compromise of the host compiler remains in scope for
 the next supply-chain layer.
+The bootstrap nevertheless treats every invoked process as potentially
+unresponsive or noisy. Version queries and loader executions have five-second
+Java deadlines, builds have thirty-second deadlines, and output capture is
+capped at 1 MiB per stream (64 KiB for execution). Crossing either boundary
+forcibly terminates the process and descendants. These host limits are
+independent of the guest loader's internal supervisor and OS resource limits.
 
 The verifier boundary has a deterministic mutation-fuzz corpus. Mutators cover
 raw and attacker-resealed code changes, KIR identity/body divergence, exports,

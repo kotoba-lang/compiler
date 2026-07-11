@@ -6,9 +6,12 @@
             [kotoba.compiler.runtime-identity :as runtime-identity]
             [kotoba.compiler.signing :as signing])
   (:import [java.nio.file Files]
+           [java.lang ProcessHandle]
            [java.nio.charset StandardCharsets]
            [java.nio.file.attribute FileAttribute]
-           [java.security MessageDigest]))
+           [java.io ByteArrayOutputStream]
+           [java.security MessageDigest]
+           [java.util.concurrent TimeUnit]))
 
 (def loader-source-sha256 runtime-identity/loader-source-sha256)
 
@@ -36,20 +39,56 @@
     []
     ["-Wl,--build-id=none"]))
 
-(defn- run-process [command env]
+(def ^:private max-process-output-bytes (* 1024 1024))
+
+(defn- terminate-process-tree! [^Process process]
+  (let [handle (.toHandle process)]
+    (with-open [descendants (.descendants handle)]
+      (doseq [child (reverse (iterator-seq (.iterator descendants)))]
+        (.destroyForcibly ^ProcessHandle child)))
+    (.destroyForcibly handle)))
+
+(defn- read-bounded [stream limit overflow!]
+  (with-open [input stream
+              output (ByteArrayOutputStream.)]
+    (let [buffer (byte-array 8192)]
+      (loop [total 0]
+        (let [read (.read input buffer)]
+          (cond
+            (neg? read) (.toString output "UTF-8")
+            (> (+ total read) limit)
+            (do (overflow!) (.toString output "UTF-8"))
+            :else
+            (do (.write output buffer 0 read)
+                (recur (+ total read)))))))))
+
+(defn- run-process [command env {:keys [timeout-ms output-limit]
+                                 :or {timeout-ms 5000
+                                      output-limit max-process-output-bytes}}]
   (let [builder (ProcessBuilder. ^java.util.List (mapv str command))
         _ (.putAll (.environment builder) env)
         process (.start builder)
         stdout (atom nil)
         stderr (atom nil)
-        stdout-reader (doto (Thread. #(reset! stdout (slurp (.getInputStream process))))
+        output-exceeded? (atom false)
+        overflow! #(when (compare-and-set! output-exceeded? false true)
+                     (terminate-process-tree! process))
+        stdout-reader (doto (Thread. #(reset! stdout
+                                               (read-bounded (.getInputStream process)
+                                                             output-limit overflow!)))
                         (.setDaemon true) (.start))
-        stderr-reader (doto (Thread. #(reset! stderr (slurp (.getErrorStream process))))
+        stderr-reader (doto (Thread. #(reset! stderr
+                                               (read-bounded (.getErrorStream process)
+                                                             output-limit overflow!)))
                         (.setDaemon true) (.start))
-        exit (.waitFor process)]
+        completed? (.waitFor process timeout-ms TimeUnit/MILLISECONDS)
+        _ (when-not completed? (terminate-process-tree! process))
+        _ (.waitFor process)
+        exit (.exitValue process)]
     (.join stdout-reader)
     (.join stderr-reader)
-    {:exit exit :stdout @stdout :stderr @stderr}))
+    {:exit exit :stdout @stdout :stderr @stderr
+     :timed-out? (not completed?) :output-exceeded? @output-exceeded?}))
 
 (defn- delete-tree! [file]
   (when (.exists ^java.io.File file)
@@ -72,8 +111,10 @@
       (throw (ex-info "native loader source identity mismatch"
                       {:phase :execute :expected loader-source-sha256
                        :actual actual-source-sha})))
-    (let [compiler (run-process ["cc" "--version"] {})
-          _ (when-not (zero? (:exit compiler))
+    (let [compiler (run-process ["cc" "--version"] {} {:timeout-ms 5000})
+          _ (when-not (and (zero? (:exit compiler))
+                           (not (:timed-out? compiler))
+                           (not (:output-exceeded? compiler)))
               (throw (ex-info "native C compiler identity query failed"
                               {:phase :execute :stderr (:stderr compiler)})))
           compiler-text (str (:stdout compiler) (:stderr compiler))
@@ -82,10 +123,12 @@
                                 ["cc" "-std=c11" "-O2" "-Wall" "-Wextra" "-Werror"]
                                 (deterministic-linker-flags)
                                 [(.getPath loader-source) "-o" (.getPath loader)])))
-          build (run-process (build-command) {})
+          build (run-process (build-command) {} {:timeout-ms 30000})
           first-loader-sha (when (zero? (:exit build)) (file-sha256 loader))
-          reproduced-build (run-process (build-command) {})]
-      (when-not (and (zero? (:exit build)) (zero? (:exit reproduced-build)))
+          reproduced-build (run-process (build-command) {} {:timeout-ms 30000})]
+      (when-not (and (zero? (:exit build)) (zero? (:exit reproduced-build))
+                     (not-any? #(or (:timed-out? %) (:output-exceeded? %))
+                               [build reproduced-build]))
         (throw (ex-info "native loader build failed"
                         {:phase :execute :stderr (str (:stderr build)
                                                      (:stderr reproduced-build))})))
@@ -166,7 +209,8 @@
                              (str (:offset export)) (str (:arity export)) isa allow]
                             (map str args))
               started-at (quot (System/currentTimeMillis) 1000)
-              process (run-process command {"KEXE_STRUCTURED_REPORT" "1"})
+              process (run-process command {"KEXE_STRUCTURED_REPORT" "1"}
+                                   {:timeout-ms 5000 :output-limit 65536})
               finished-at (quot (System/currentTimeMillis) 1000)
               report (edn/read-string (str/trim (:stdout process)))
               trap (trap-value (:stderr process))
