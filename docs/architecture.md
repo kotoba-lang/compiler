@@ -118,6 +118,13 @@ an EDN value containing status, result, and initial/remaining fuel.
 Fuel is read after all transitive generated calls return, so it records the
 actual dynamic charge count rather than a caller-supplied estimate.
 
+The public `kotoba -M run` path accepts only a signed envelope plus current
+trust, local policy, typed argument input, and an executor key. It verifies and
+admits before extracting bytes, rejects a target/host or entry/arity mismatch,
+and converts only the supervisor report into result evidence. That evidence and
+its measured interval and fuel counters are passed directly to receipt signing;
+there are no CLI flags for supplying those fields.
+
 ## Signed artifact admission
 
 The internal SHA-256 seal detects accidental mutation but is not authenticity:

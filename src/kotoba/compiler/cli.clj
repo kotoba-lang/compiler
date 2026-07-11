@@ -2,6 +2,7 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [kotoba.compiler.core :as compiler]
+            [kotoba.compiler.native-executor :as native-executor]
             [kotoba.compiler.receipt :as receipt]
             [kotoba.compiler.signing :as signing]
             [kotoba.compiler.verifier :as verifier])
@@ -44,6 +45,38 @@
                                   (str (quot (System/currentTimeMillis) 1000))))
           result (signing/verify envelope trust now)]
       (println (pr-str (dissoc result :artifact))))
+    "run"
+    (let [envelope (edn/read-string (slurp (second args)))
+          trust (edn/read-string (slurp (option args "--trust")))
+          policy (edn/read-string (slurp (option args "--policy")))
+          input (edn/read-string (slurp (option args "--input")))
+          executor-key (edn/read-string (slurp (option args "--executor-key")))
+          now (Long/parseLong (or (option args "--now")
+                                  (str (quot (System/currentTimeMillis) 1000))))
+          parent-path (option args "--parent")
+          parent (when parent-path (edn/read-string (slurp parent-path)))
+          entry (symbol (or (option args "--entry") "main"))
+          execution (native-executor/execute envelope trust policy input
+                                              {:now now :entry entry})
+          report (:report execution)
+          evidence (:evidence execution)
+          value (receipt/create
+                 envelope trust policy input evidence
+                 {:now now :started-at (:started-at execution)
+                  :finished-at (:finished-at execution)
+                  :status (:status evidence) :target (:target execution)
+                  :entry entry :fuel-initial (get-in report [:fuel :initial])
+                  :fuel-remaining (get-in report [:fuel :remaining])
+                  :parent parent :executor-key executor-key})
+          result-path (or (option args "--result-output") "run.result.edn")
+          receipt-path (or (option args "--output") "run.receipt.edn")]
+      (spit result-path (pr-str evidence))
+      (spit receipt-path (pr-str value))
+      (println (pr-str {:ok (= :ok (:status evidence))
+                        :status (:status evidence) :result evidence
+                        :result-output result-path :output receipt-path
+                        :receipt-sha256 (:receipt-sha256 value)}))
+      (when-not (= :ok (:status evidence)) (System/exit 120)))
     "receipt"
     (let [envelope (edn/read-string (slurp (option args "--signed")))
           trust (edn/read-string (slurp (option args "--trust")))

@@ -1,6 +1,7 @@
 (ns kotoba.compiler.test-runner
   (:require [clojure.test :as t]
             [kotoba.compiler.core-test]
+            [kotoba.compiler.native-executor-test]
             [kotoba.compiler.admission-test]
             [kotoba.compiler.property-test]
             [kotoba.compiler.receipt-test]
@@ -10,6 +11,7 @@
   (let [{:keys [fail error]} (t/run-tests 'kotoba.compiler.core-test
                                           'kotoba.compiler.admission-test
                                           'kotoba.compiler.signing-test
+                                          'kotoba.compiler.native-executor-test
                                           'kotoba.compiler.receipt-test
                                           'kotoba.compiler.property-test)]
     (when (pos? (+ fail error)) (System/exit 1))))

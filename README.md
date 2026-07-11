@@ -93,5 +93,12 @@ After putting `bin/kotoba` on `PATH`, the public command is simply
 not part of the compiler CLI contract and can be replaced by the self-hosted
 Kotoba driver without changing user commands.
 
+`kotoba -M run` is the admitted native execution path. It verifies the signed
+KEXE envelope and current trust/revocation state, checks local capability
+policy, requires host ISA and entry arity to match, then invokes the supervised
+loader. The command writes the measured result separately and creates an
+executor-signed receipt using the supervisor's actual post-execution fuel
+counter; callers cannot supply result, status, timing, or fuel values.
+
 See [docs/architecture.md](docs/architecture.md) and
 [docs/threat-model.md](docs/threat-model.md).

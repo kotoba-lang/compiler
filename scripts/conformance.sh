@@ -32,7 +32,7 @@ grep -q 'capability policy denies required effects' "$TMP/capability-deny.out"
 "$ROOT/bin/kotoba" -M verify-signed "$TMP/x86_64.signed.kexe" \
   --trust "$TMP/trust.edn" --now 1500 >"$TMP/signature-verification.edn"
 printf '%s\n' '{:allow #{}}' >"$TMP/pure-policy.edn"
-printf '%s\n' '{:argv []}' >"$TMP/input.edn"
+printf '%s\n' '{:args []}' >"$TMP/input.edn"
 printf '%s\n' '42' >"$TMP/output.edn"
 "$ROOT/bin/kotoba" -M receipt --signed "$TMP/x86_64.signed.kexe" \
   --trust "$TMP/trust.edn" --policy "$TMP/pure-policy.edn" \
@@ -172,10 +172,27 @@ native_report_check() {
   }
 }
 
+attested_run_check() {
+  SIGNED=$1 ISA=$2
+  "$ROOT/bin/kotoba" -M run "$SIGNED" --trust "$TMP/trust.edn" \
+    --policy "$TMP/pure-policy.edn" --input "$TMP/input.edn" \
+    --executor-key "$TMP/signing-key.edn" --now 1500 \
+    --result-output "$TMP/$ISA-run-result.edn" --output "$TMP/$ISA-run-receipt.edn" \
+    >"$TMP/$ISA-run-summary.edn"
+  "$ROOT/bin/kotoba" -M verify-receipt "$TMP/$ISA-run-receipt.edn" \
+    --signed "$SIGNED" --trust "$TMP/trust.edn" --policy "$TMP/pure-policy.edn" \
+    --input "$TMP/input.edn" --result "$TMP/$ISA-run-result.edn" --now 1500 \
+    >"$TMP/$ISA-run-verification.edn"
+  grep -q '^{:status :ok, :result 42}$' "$TMP/$ISA-run-result.edn"
+  grep -q ':remaining 253' "$TMP/$ISA-run-receipt.edn"
+  grep -q ':verified? true' "$TMP/$ISA-run-verification.edn"
+}
+
 if [ "$(uname -s)-$(uname -m)" = "Linux-x86_64" ]; then
   cc -std=c11 -O2 -Wall -Wextra -Werror "$ROOT/tools/kexe_loader.c" -o "$TMP/kexe-loader"
   native_timeout_probe "$TMP/x86_64.kexe" x86_64
   native_report_check "$TMP/x86_64.kexe" x86_64
+  attested_run_check "$TMP/x86_64.signed.kexe" x86_64
   native_sandbox_probe "$TMP/x86_64.kexe" x86_64
   native_check "$TMP/x86_64.kexe" x86_64 score 12 -7 2
   native_check "$TMP/x86_64.kexe" x86_64 calc 21 20 4
@@ -197,6 +214,9 @@ case "$(uname -s)-$(uname -m)" in
     cc -std=c11 -O2 -Wall -Wextra -Werror "$ROOT/tools/kexe_loader.c" -o "$TMP/kexe-loader"
     native_timeout_probe "$TMP/aarch64.kexe" aarch64
     native_report_check "$TMP/aarch64.kexe" aarch64
+    "$ROOT/bin/kotoba" -M sign "$TMP/aarch64.kexe" --key "$TMP/signing-key.edn" \
+      --not-before 1000 --expires 2000 --output "$TMP/aarch64.signed.kexe"
+    attested_run_check "$TMP/aarch64.signed.kexe" aarch64
     native_check "$TMP/aarch64.kexe" aarch64 score 12 -7 2
     native_check "$TMP/aarch64.kexe" aarch64 calc 21 20 4
     native_check "$TMP/aarch64.kexe" aarch64 relations 10 7 3

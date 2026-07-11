@@ -1,0 +1,110 @@
+(ns kotoba.compiler.native-executor
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
+            [clojure.string :as str]
+            [kotoba.compiler.admission :as admission]
+            [kotoba.compiler.signing :as signing])
+  (:import [java.nio.file Files]
+           [java.nio.file.attribute FileAttribute]))
+
+(defn- host-target []
+  (let [os (str/lower-case (System/getProperty "os.name"))
+        arch (str/lower-case (System/getProperty "os.arch"))]
+    (when-not (or (str/includes? os "linux") (str/includes? os "mac"))
+      (throw (ex-info "native execution is unsupported on this OS"
+                      {:phase :execute :os os})))
+    (cond
+      (contains? #{"amd64" "x86_64"} arch) :x86_64-kotoba-v1
+      (contains? #{"aarch64" "arm64"} arch) :aarch64-kotoba-v1
+      :else (throw (ex-info "native execution is unsupported on this architecture"
+                            {:phase :execute :arch arch})))))
+
+(defn- run-process [command env]
+  (let [builder (ProcessBuilder. ^java.util.List (mapv str command))
+        _ (.putAll (.environment builder) env)
+        process (.start builder)
+        stdout (atom nil)
+        stderr (atom nil)
+        stdout-reader (doto (Thread. #(reset! stdout (slurp (.getInputStream process))))
+                        (.setDaemon true) (.start))
+        stderr-reader (doto (Thread. #(reset! stderr (slurp (.getErrorStream process))))
+                        (.setDaemon true) (.start))
+        exit (.waitFor process)]
+    (.join stdout-reader)
+    (.join stderr-reader)
+    {:exit exit :stdout @stdout :stderr @stderr}))
+
+(defn- delete-tree! [file]
+  (when (.exists ^java.io.File file)
+    (doseq [child (reverse (file-seq file))] (io/delete-file child true))))
+
+(defn- allowed-capabilities [policy]
+  (->> (:allow policy #{})
+       (keep (fn [effect]
+               (when (and (vector? effect) (= :cap/call (first effect))
+                          (integer? (second effect)))
+                 (second effect))))
+       sort
+       (str/join ",")))
+
+(defn- trap-value [stderr]
+  (when-let [[_ value] (re-find #"(?m)^KEXE_TRAP (\{.*\})$" stderr)]
+    (edn/read-string value)))
+
+(defn execute
+  "Verify and execute a signed native artifact. Returns measured supervisor evidence."
+  [envelope trust policy input {:keys [now entry]}]
+  (let [{artifact :artifact signer :signer} (signing/verify envelope trust now)
+        target (host-target)
+        entry (or entry 'main)
+        export (get (:exports artifact) entry)
+        args (:args input)]
+    (admission/check {:effects (:effects artifact)} policy)
+    (when-not (= target (:target artifact))
+      (throw (ex-info "artifact target does not match execution host"
+                      {:phase :execute :artifact-target (:target artifact)
+                       :host-target target})))
+    (when-not export
+      (throw (ex-info "unknown native entry" {:phase :execute :entry entry})))
+    (when-not (and (map? input) (vector? args) (every? integer? args)
+                   (every? #(<= Long/MIN_VALUE % Long/MAX_VALUE) args)
+                   (= (:arity export) (count args)) (<= (count args) 5))
+      (throw (ex-info "execution input does not match entry arity"
+                      {:phase :execute :entry entry :arity (:arity export)})))
+    (let [directory (.toFile (Files/createTempDirectory
+                              "kotoba-native-" (make-array FileAttribute 0)))
+          code-file (io/file directory "program.bin")
+          loader (io/file directory "kexe-loader")]
+      (try
+        (with-open [out (io/output-stream code-file)]
+          (.write out ^bytes (byte-array (map unchecked-byte (:code artifact)))))
+        (let [build (run-process ["cc" "-std=c11" "-O2" "-Wall" "-Wextra" "-Werror"
+                                  "tools/kexe_loader.c" "-o" (.getPath loader)] {})]
+          (when-not (zero? (:exit build))
+            (throw (ex-info "native loader build failed"
+                            {:phase :execute :stderr (:stderr build)}))))
+        (let [isa (if (= target :x86_64-kotoba-v1) "x86_64" "aarch64")
+              allow (let [ids (allowed-capabilities policy)] (if (empty? ids) "-" ids))
+              command (into [(.getPath loader) (.getPath code-file)
+                             (str (:offset export)) (str (:arity export)) isa allow]
+                            (map str args))
+              started-at (quot (System/currentTimeMillis) 1000)
+              process (run-process command {"KEXE_STRUCTURED_REPORT" "1"})
+              finished-at (quot (System/currentTimeMillis) 1000)
+              report (edn/read-string (str/trim (:stdout process)))
+              trap (trap-value (:stderr process))
+              status (:status report)
+              evidence (cond-> {:status status}
+                         (= status :ok) (assoc :result (:result report))
+                         trap (assoc :trap trap))]
+          (when-not (and (#{:ok :trap} status)
+                         (= (zero? (:exit process)) (= status :ok))
+                         (integer? (get-in report [:fuel :initial]))
+                         (integer? (get-in report [:fuel :remaining])))
+            (throw (ex-info "malformed native supervisor evidence"
+                            {:phase :execute :exit (:exit process)
+                             :stdout (:stdout process) :stderr (:stderr process)})))
+          {:artifact artifact :signer signer :target target :entry entry
+           :input input :evidence evidence :report report
+           :started-at started-at :finished-at finished-at})
+        (finally (delete-tree! directory))))))
