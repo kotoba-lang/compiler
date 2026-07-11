@@ -64,3 +64,10 @@ import, export, or replenish the counter. Conformance executes factorial and an
 unbounded recursive function, requiring the former to return and the latter to
 trap. Native recursive lowering remains fail-closed until the corresponding
 hidden fuel register/context ABI is implemented.
+
+x86-64 now implements that ABI as `:hidden-context-r9`: the sixth SysV integer
+register is removed from the source ABI and carries a loader-owned pointer to a
+256-unit counter. Each function entry checks and decrements `*r9`; zero executes
+`UD2`. Direct calls are emitted as verified `CALL rel32` relocations and forward
+the same r9 unchanged, allowing bounded direct and mutual recursion. Source
+functions therefore accept at most five integer parameters on x86-64 v1.

@@ -61,7 +61,7 @@ int main(int argc, char **argv) {
   uint64_t offset = strtoull(argv[2], &end, 10);
   if (!end || *end) return 2;
   unsigned long arity = strtoul(argv[3], &end, 10);
-  if (!end || *end || arity > 6 || argc != (int)(4 + arity)) return 2;
+  if (!end || *end || arity > 5 || argc != (int)(4 + arity)) return 2;
   install_limits();
 
   FILE *file = fopen(argv[1], "rb");
@@ -92,7 +92,9 @@ int main(int argc, char **argv) {
     if (!end || *end) return 2;
   }
   kexe_fn6 fn = (kexe_fn6)((uint8_t *)memory + offset);
-  int64_t result = fn(args[0], args[1], args[2], args[3], args[4], args[5]);
+  uint64_t fuel = 256;
+  int64_t result = fn(args[0], args[1], args[2], args[3], args[4],
+                      (int64_t)(uintptr_t)&fuel);
   printf("%" PRId64 "\n", result);
 
   if (munmap(memory, mapped) != 0) fail("munmap");

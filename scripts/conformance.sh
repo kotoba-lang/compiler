@@ -9,8 +9,10 @@ mkdir -p "$TMP"
 "$ROOT/bin/kotoba" -M compile "$ROOT/examples/structured.kotoba" --target wasm32 --output "$TMP/program.wasm"
 "$ROOT/bin/kotoba" -M compile "$ROOT/examples/fuel.kotoba" --target wasm32 --output "$TMP/fuel.wasm"
 "$ROOT/bin/kotoba" -M compile "$ROOT/examples/structured.kotoba" --target x86_64 --output "$TMP/x86_64.kexe"
+"$ROOT/bin/kotoba" -M compile "$ROOT/examples/fuel.kotoba" --target x86_64 --output "$TMP/x86_64-fuel.kexe"
 "$ROOT/bin/kotoba" -M compile "$ROOT/examples/structured.kotoba" --target aarch64 --output "$TMP/aarch64.kexe"
 "$ROOT/bin/kotoba" -M verify "$TMP/x86_64.kexe"
+"$ROOT/bin/kotoba" -M verify "$TMP/x86_64-fuel.kexe"
 "$ROOT/bin/kotoba" -M verify "$TMP/aarch64.kexe"
 
 node -e '
@@ -79,6 +81,8 @@ if [ "$(uname -s)-$(uname -m)" = "Linux-x86_64" ]; then
   native_check "$TMP/x86_64.kexe" x86_64 relations 13 3 3
   native_expect_trap "$TMP/x86_64.kexe" x86_64 calc 20 0
   native_expect_trap "$TMP/x86_64.kexe" x86_64 calc -9223372036854775808 -1
+  native_check "$TMP/x86_64-fuel.kexe" x86_64 fact 3628800 10
+  native_expect_trap "$TMP/x86_64-fuel.kexe" x86_64 forever 0
   printf '%s\n' 'conformance: native x86_64 runtime vector passed under W^X loader'
 fi
 

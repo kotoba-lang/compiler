@@ -29,8 +29,13 @@
                        :lowering (case target
                                    :x86_64-kotoba-v1 :runtime-sysv-v1
                                    :aarch64-kotoba-v1 :runtime-aapcs64-v1)
+                       :fuel-abi (case target
+                                   :x86_64-kotoba-v1 {:mode :hidden-context-r9 :initial 256}
+                                   :aarch64-kotoba-v1 {:mode :process-limit-only})
                        :effects #{}
-                       :limits {:memory-bytes 0 :fuel (count code) :stack-bytes 4096}
+                       :limits {:memory-bytes 0
+                                :fuel (if (= target :x86_64-kotoba-v1) 256 (count code))
+                                :stack-bytes 4096}
                        :code (mapv #(bit-and (int %) 0xff) code)
                        :program program :exports (:exports emitted)})]
         (verifier/verify-artifact! artifact)

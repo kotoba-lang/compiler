@@ -10,7 +10,7 @@
   {:x86_64-kotoba-v1 {:lowering :runtime-sysv-v1 :emit x86-64/emit-program}
    :aarch64-kotoba-v1 {:lowering :runtime-aapcs64-v1 :emit aarch64/emit-program}})
 
-(defn- verify-runtime! [{:keys [target program code exports lowering limits]}]
+(defn- verify-runtime! [{:keys [target program code exports lowering limits fuel-abi]}]
   (let [{expected-lowering :lowering emit :emit} (get target-contracts target)]
     (when-not emit (reject! "not a native verifier target" {:target target}))
     (when-not (= expected-lowering lowering)
@@ -27,8 +27,16 @@
         (reject! "native export table rejected" {:target target}))
       (when-not (= (:code expected) code)
         (reject! "native instruction stream rejected" {:target target})))
-    (when-not (= {:memory-bytes 0 :fuel (count code) :stack-bytes 4096} limits)
-      (reject! "resource limits are not admitted" {:target target :limits limits}))))
+    (let [expected-fuel-abi (case target
+                              :x86_64-kotoba-v1 {:mode :hidden-context-r9 :initial 256}
+                              :aarch64-kotoba-v1 {:mode :process-limit-only})
+          expected-limits {:memory-bytes 0
+                           :fuel (if (= target :x86_64-kotoba-v1) 256 (count code))
+                           :stack-bytes 4096}]
+      (when-not (= expected-fuel-abi fuel-abi)
+        (reject! "fuel ABI is not admitted" {:target target :fuel-abi fuel-abi}))
+      (when-not (= expected-limits limits)
+        (reject! "resource limits are not admitted" {:target target :limits limits})))))
 
 (defn verify-artifact! [{:keys [format target code effects kir-sha256] :as kexe}]
   (when-not (= :kotoba.kexe/v1 format) (reject! "unknown artifact format" {}))
