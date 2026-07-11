@@ -25,6 +25,13 @@ grep -q 'capability policy denies required effects' "$TMP/capability-deny.out"
 "$ROOT/bin/kotoba" -M verify "$TMP/x86_64-fuel.kexe"
 "$ROOT/bin/kotoba" -M verify "$TMP/aarch64.kexe"
 
+"$ROOT/bin/kotoba" -M keygen --output "$TMP/signing-key.edn"
+"$ROOT/bin/kotoba" -M trust-key "$TMP/signing-key.edn" --output "$TMP/trust.edn"
+"$ROOT/bin/kotoba" -M sign "$TMP/x86_64.kexe" --key "$TMP/signing-key.edn" \
+  --not-before 1000 --expires 2000 --output "$TMP/x86_64.signed.kexe"
+"$ROOT/bin/kotoba" -M verify-signed "$TMP/x86_64.signed.kexe" \
+  --trust "$TMP/trust.edn" --now 1500 >"$TMP/signature-verification.edn"
+
 node -e '
 const fs = require("fs");
 WebAssembly.instantiate(fs.readFileSync(process.argv[1])).then(({instance}) => {

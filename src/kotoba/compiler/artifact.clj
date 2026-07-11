@@ -16,6 +16,9 @@
                         (.getBytes (pr-str (canonical value)) StandardCharsets/UTF_8))]
     (apply str (map #(format "%02x" (bit-and (int %) 0xff)) digest))))
 
+(defn canonical-bytes [value]
+  (.getBytes (pr-str (canonical value)) StandardCharsets/UTF_8))
+
 (defn seal [artifact]
   (let [payload (dissoc artifact :sha256)]
     (assoc payload :sha256 (sha256 payload))))

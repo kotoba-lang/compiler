@@ -59,6 +59,18 @@ Native targets carry a sealed context-v1 layout. Generated code checks its
 256-bit allow bitmap before calling the single fixed callback slot; the callback
 checks the same bitmap again. x86-64 keeps the context in r9 and AArch64 in x7.
 
+KEXE authenticity uses a separate Ed25519 envelope. The signed statement binds
+the artifact SHA-256, signer fingerprint/public key, not-before, and expiry.
+Verification requires an explicit trusted-signer set, checks signer/artifact
+revocation and time validity, then runs the normal KEXE verifier.
+
+```bash
+kotoba -M keygen --output key.edn
+kotoba -M trust-key key.edn --output trust.edn
+kotoba -M sign app.kexe --key key.edn --expires 2000000000 --output app.signed.kexe
+kotoba -M verify-signed app.signed.kexe --trust trust.edn
+```
+
 ```bash
 kotoba -M check examples/capability.kotoba \
   --policy examples/capability-policy.edn

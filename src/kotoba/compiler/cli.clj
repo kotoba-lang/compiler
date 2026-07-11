@@ -2,6 +2,7 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [kotoba.compiler.core :as compiler]
+            [kotoba.compiler.signing :as signing]
             [kotoba.compiler.verifier :as verifier])
   (:gen-class))
 
@@ -13,6 +14,35 @@
 
 (defn -main [& args]
   (case (first args)
+    "keygen"
+    (let [output (or (option args "--output") "kotoba-signing-key.edn")
+          key (signing/generate-keypair)]
+      (spit output (pr-str key))
+      (println (pr-str {:ok true :output output :signer (:signer key)})))
+    "trust-key"
+    (let [key (edn/read-string (slurp (second args)))
+          output (or (option args "--output") "kotoba-trust.edn")
+          trust {:format :kotoba.trust/v1 :trusted-signers #{(:signer key)}
+                 :revoked-signers #{} :revoked-artifacts #{}}]
+      (spit output (pr-str trust))
+      (println (pr-str {:ok true :output output :signer (:signer key)})))
+    "sign"
+    (let [artifact (edn/read-string (slurp (second args)))
+          key (edn/read-string (slurp (option args "--key")))
+          output (or (option args "--output") "program.signed.kexe")
+          not-before (Long/parseLong (or (option args "--not-before") "0"))
+          expires (Long/parseLong (or (option args "--expires")
+                                      (str (+ (quot (System/currentTimeMillis) 1000) 86400))))
+          envelope (signing/sign artifact key {:not-before not-before :expires expires})]
+      (spit output (pr-str envelope))
+      (println (pr-str {:ok true :output output :signer (get-in envelope [:statement :signer])})))
+    "verify-signed"
+    (let [envelope (edn/read-string (slurp (second args)))
+          trust (edn/read-string (slurp (option args "--trust")))
+          now (Long/parseLong (or (option args "--now")
+                                  (str (quot (System/currentTimeMillis) 1000))))
+          result (signing/verify envelope trust now)]
+      (println (pr-str (dissoc result :artifact))))
     "check"
     (let [input (second args)
           policy-path (option args "--policy")

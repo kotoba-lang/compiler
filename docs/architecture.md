@@ -105,3 +105,13 @@ the host callback receives the context and checks version, range, and bitmap
 again. x86-64 preserves r9 around the indirect call; AArch64 preserves x7 and
 uses `BLR` only on the slot loaded from `[x7,#48]`. The verifier regenerates all
 checks and call instructions from sealed KIR.
+
+## Signed artifact admission
+
+The internal SHA-256 seal detects accidental mutation but is not authenticity:
+an attacker can recompute it. `kotoba.signed-kexe/v1` therefore carries an
+Ed25519 statement over artifact SHA, signer fingerprint and X.509 public key,
+not-before, and expiry. Admission verifies the signature, explicit trusted
+signer membership, signer/artifact revocation sets, and the validity interval,
+then invokes the ordinary KEXE verifier. Revocation remains outside immutable
+artifact identity and can change without rewriting the artifact.

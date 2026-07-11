@@ -18,6 +18,10 @@ case "${1-}" in
     printf '%s\n' \
       'usage: kotoba -M compile <file> --target wasm32|x86_64|aarch64 [--policy policy.edn] --output <file>' \
       '       kotoba -M check <file> [--policy policy.edn]' \
+      '       kotoba -M keygen --output key.edn' \
+      '       kotoba -M trust-key key.edn --output trust.edn' \
+      '       kotoba -M sign program.kexe --key key.edn --expires <epoch> --output signed.kexe' \
+      '       kotoba -M verify-signed signed.kexe --trust trust.edn [--now <epoch>]' \
       '       kotoba -M verify <file>'
     exit 0
     ;;
