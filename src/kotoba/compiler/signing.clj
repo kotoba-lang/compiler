@@ -27,11 +27,13 @@
     (b64 (.sign signer))))
 
 (defn verify-value [public-key value signature]
-  (let [public (.generatePublic (KeyFactory/getInstance "Ed25519")
-                                (X509EncodedKeySpec. (unb64 public-key)))
-        checker (doto (Signature/getInstance "Ed25519") (.initVerify public)
-                  (.update (artifact/canonical-bytes value)))]
-    (.verify checker (unb64 signature))))
+  (try
+    (let [public (.generatePublic (KeyFactory/getInstance "Ed25519")
+                                  (X509EncodedKeySpec. (unb64 public-key)))
+          checker (doto (Signature/getInstance "Ed25519") (.initVerify public)
+                    (.update (artifact/canonical-bytes value)))]
+      (.verify checker (unb64 signature)))
+    (catch Exception _ false)))
 
 (defn generate-keypair []
   (let [pair (.generateKeyPair (KeyPairGenerator/getInstance "Ed25519"))
