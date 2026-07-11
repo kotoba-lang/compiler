@@ -1,5 +1,6 @@
 (ns kotoba.compiler.verifier
-  (:require [kotoba.compiler.artifact :as artifact]
+  (:require [clojure.set :as set]
+            [kotoba.compiler.artifact :as artifact]
             [kotoba.compiler.backend.aarch64 :as aarch64]
             [kotoba.compiler.backend.x86-64 :as x86-64]))
 
@@ -10,6 +11,183 @@
   {:x86_64-kotoba-v1 {:lowering :runtime-sysv-v1 :emit x86-64/emit-program}
    :aarch64-kotoba-v1 {:lowering :runtime-aapcs64-v1 :emit aarch64/emit-program}})
 
+(def max-functions 1024)
+(def max-expression-nodes 50000)
+(def max-lowered-nodes 100000)
+(def ^:private max-depth 256)
+(def ^:private max-bindings 4096)
+(def ^:private max-parameters 5)
+(def ^:private max-symbol-chars 128)
+(def ^:private arithmetic '#{+ - * quot})
+(def ^:private comparisons '#{= < > <= >=})
+
+(defn- valid-name? [value]
+  (and (simple-symbol? value) (<= (count (name value)) max-symbol-chars)))
+
+(defn- valid-effect? [effect]
+  (and (vector? effect) (= 2 (count effect)) (= :cap/call (first effect))
+       (integer? (second effect)) (<= 0 (second effect) 255)))
+
+(defn- bounded-sum [values]
+  (reduce (fn [total value] (min (inc max-lowered-nodes) (+ total value)))
+          0 values))
+
+(defn- lowered-cost [form env]
+  (cond
+    (integer? form) 1
+    (symbol? form) (get env form 1)
+    :else
+    (let [[op & args] form]
+      (if (= op 'let)
+        (let [[bindings body] args
+              env' (reduce (fn [current [name value]]
+                             (assoc current name (lowered-cost value current)))
+                           env (partition 2 bindings))]
+          (lowered-cost body env'))
+        (bounded-sum (cons 1 (map #(lowered-cost % env) args)))))))
+
+(declare verify-expr!)
+
+(defn- verify-bindings! [bindings locals signatures depth nodes facts]
+  (when-not (and (vector? bindings) (even? (count bindings))
+                 (<= (quot (count bindings) 2) max-bindings))
+    (reject! "runtime KIR let bindings rejected" {}))
+  (let [names (take-nth 2 bindings)]
+    (when-not (= (count names) (count (distinct names)))
+      (reject! "runtime KIR duplicate binding rejected" {})))
+  (loop [pairs (partition 2 bindings) env locals]
+    (if-let [[name value] (first pairs)]
+      (do
+        (when-not (valid-name? name)
+          (reject! "runtime KIR local name rejected" {:name name}))
+        (verify-expr! value env signatures (inc depth) nodes facts)
+        (recur (next pairs) (conj env name)))
+      env)))
+
+(defn- verify-expr! [form locals signatures depth nodes facts]
+  (when (> (vswap! nodes inc) max-expression-nodes)
+    (reject! "runtime KIR expression budget exhausted" {}))
+  (when (> depth max-depth)
+    (reject! "runtime KIR expression depth rejected" {:depth depth}))
+  (cond
+    (integer? form)
+    (when-not (<= Long/MIN_VALUE form Long/MAX_VALUE)
+      (reject! "runtime KIR integer is outside i64" {:value form}))
+
+    (symbol? form)
+    (when-not (contains? locals form)
+      (reject! "runtime KIR contains an unbound symbol" {:symbol form}))
+
+    (seq? form)
+    (let [[op & args] form]
+      (when-not (simple-symbol? op)
+        (reject! "runtime KIR computed call rejected" {:operation op}))
+      (cond
+        (= op 'let)
+        (let [[bindings & body] args]
+          (when-not (= 1 (count body))
+            (reject! "runtime KIR let arity rejected" {}))
+          (verify-expr! (first body)
+                        (verify-bindings! bindings locals signatures depth nodes facts)
+                        signatures (inc depth) nodes facts))
+
+        (= op 'if)
+        (do
+          (when-not (= 3 (count args)) (reject! "runtime KIR if arity rejected" {}))
+          (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
+
+        (= op 'cap-call)
+        (let [[cap-id value :as call-args] args]
+          (when-not (and (= 2 (count call-args)) (integer? cap-id) (<= 0 cap-id 255))
+            (reject! "runtime KIR capability call rejected" {}))
+          (vswap! facts update :effects conj [:cap/call cap-id])
+          (verify-expr! value locals signatures (inc depth) nodes facts))
+
+        (contains? arithmetic op)
+        (do
+          (when (or (empty? args) (and (= op 'quot) (not= 2 (count args))))
+            (reject! "runtime KIR arithmetic arity rejected" {:operation op}))
+          (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
+
+        (contains? comparisons op)
+        (do
+          (when-not (= 2 (count args))
+            (reject! "runtime KIR comparison arity rejected" {:operation op}))
+          (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
+
+        (contains? signatures op)
+        (do
+          (when-not (= (count (get signatures op)) (count args))
+            (reject! "runtime KIR call arity rejected" {:function op}))
+          (vswap! facts update :calls conj op)
+          (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
+
+        :else (reject! "runtime KIR operation rejected" {:operation op})))
+
+    :else (reject! "runtime KIR value type rejected" {:value form})))
+
+(defn- infer-effects [direct]
+  (loop [inferred (into {} (map (fn [[name facts]] [name (:effects facts)]) direct))]
+    (let [next-effects
+          (into {} (map (fn [[name {:keys [effects calls]}]]
+                          [name (reduce set/union effects (map #(get inferred % #{}) calls))])
+                        direct))]
+      (if (= inferred next-effects) inferred (recur next-effects)))))
+
+(defn- verify-program! [program]
+  (when-not (and (map? program)
+                 (= #{:format :entry :signature :effects :functions} (set (keys program)))
+                 (= :kotoba.kir/v3 (:format program))
+                 (= 'main (:entry program))
+                 (= {:params [] :result :i64} (:signature program))
+                 (set? (:effects program))
+                 (every? valid-effect? (:effects program))
+                 (vector? (:functions program))
+                 (<= 1 (count (:functions program)) max-functions))
+    (reject! "runtime KIR module shape rejected" {}))
+  (let [functions (:functions program)
+        signatures
+        (into {}
+              (map (fn [function]
+                     (when-not (and (map? function)
+                                    (= #{:name :params :result :effects :body}
+                                       (set (keys function)))
+                                    (valid-name? (:name function))
+                                    (vector? (:params function))
+                                    (<= (count (:params function)) max-parameters)
+                                    (every? valid-name? (:params function))
+                                    (= (count (:params function))
+                                       (count (distinct (:params function))))
+                                    (= :i64 (:result function))
+                                    (set? (:effects function))
+                                    (every? valid-effect? (:effects function)))
+                       (reject! "runtime KIR function shape rejected" {:function (:name function)}))
+                     [(:name function) (:params function)]))
+              functions)]
+    (when-not (and (= (count functions) (count signatures)) (contains? signatures 'main)
+                   (empty? (get signatures 'main)))
+      (reject! "runtime KIR entry or function identity rejected" {}))
+    (let [nodes (volatile! 0)
+          direct
+          (into {}
+                (map (fn [function]
+                       (let [facts (volatile! {:effects #{} :calls #{}})]
+                         (verify-expr! (:body function) (set (:params function))
+                                       signatures 0 nodes facts)
+                         [(:name function) @facts])))
+                functions)
+          inferred (infer-effects direct)
+          declared (into {} (map (juxt :name :effects) functions))
+          total (reduce set/union #{} (vals inferred))
+          cost (bounded-sum (map #(lowered-cost (:body %) {}) functions))]
+      (when-not (= inferred declared)
+        (reject! "runtime KIR function effects rejected" {}))
+      (when-not (= total (:effects program))
+        (reject! "runtime KIR module effects rejected" {}))
+      (when (> cost max-lowered-nodes)
+        (reject! "runtime KIR lowering budget exhausted" {:cost cost}))))
+  program)
+
 (defn- verify-runtime! [{:keys [target program code exports lowering limits fuel-abi context-abi]}]
   (let [{expected-lowering :lowering emit :emit} (get target-contracts target)]
     (when-not emit (reject! "not a native verifier target" {:target target}))
@@ -19,6 +197,7 @@
     (when-not (= :kotoba.kir/v3 (:format program))
       (reject! "native artifact requires runtime KIR v3"
                {:target target :program-format (:format program)}))
+    (verify-program! program)
     (let [expected (try (emit program)
                         (catch Exception e
                           (reject! "runtime KIR cannot be safely lowered"

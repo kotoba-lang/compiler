@@ -11,6 +11,13 @@ Every artifact records its target, KIR digest, declared effects, limits, and
 code bytes. A structurally independent target verifier decodes all emitted
 instructions before admission.
 
+Native verification does not trust a sealed KIR merely because its hash is
+valid. Before re-emission, an independent KIR profile checker validates exact
+module/function shapes, i64 AST operations and arities, lexical bindings, call
+targets, function/module effect closure, expression depth/count, and symbolic
+post-`let` lowering cost. Thus an attacker-resealed KEXE cannot bypass frontend
+budgets or hide a capability call inside falsely pure KIR.
+
 Targets are versioned contracts:
 
 - `wasm32-kotoba-v1`: portable sandbox target and conformance oracle.

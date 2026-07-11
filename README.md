@@ -14,6 +14,12 @@ or a Wasm runtime. Native output is deliberately a sealed `KEXE` object rather
 than an OS executable: an aiueos loader must verify it, map code W^X, and expose
 only policy-derived capability trampolines.
 
+The native verifier treats embedded KIR as hostile even when an attacker has
+recomputed every unkeyed hash. It independently validates the KIR AST, lexical
+scope, call arities, transitive capability effects, ABI limits, node/depth
+budgets, and `let` expansion cost before regenerating and comparing machine
+code.
+
 The current experimental slice supports pure integer functions, parameters,
 direct calls, sequential `let`, `if`, arithmetic, and comparisons. It emits
 executable Wasm with real runtime parameters, locals, calls, and branches, plus

@@ -10,7 +10,8 @@
             [kotoba.compiler.property-test]
             [kotoba.compiler.receipt-test]
             [kotoba.compiler.security-fuzz-test]
-            [kotoba.compiler.signing-test]))
+            [kotoba.compiler.signing-test]
+            [kotoba.compiler.verifier-profile-test]))
 
 (defn -main [& _]
   (let [{:keys [fail error]} (t/run-tests 'kotoba.compiler.atomic-output-test
@@ -23,5 +24,6 @@
                                           'kotoba.compiler.native-executor-test
                                           'kotoba.compiler.receipt-test
                                           'kotoba.compiler.security-fuzz-test
+                                          'kotoba.compiler.verifier-profile-test
                                           'kotoba.compiler.property-test)]
     (when (pos? (+ fail error)) (System/exit 1))))

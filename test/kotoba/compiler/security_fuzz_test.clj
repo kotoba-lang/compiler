@@ -19,6 +19,8 @@
   (str (if (= \0 (first value)) \1 \0) (subs value 1)))
 
 (defn- reseal [value] (artifact/seal (dissoc value :sha256)))
+(defn- reseal-program [kexe program]
+  (reseal (assoc kexe :program program :kir-sha256 (artifact/sha256 program))))
 
 (defn- mutate-artifact [kexe choice]
   (case choice
@@ -37,7 +39,13 @@
     11 (reseal (assoc-in kexe [:code 0] -1))
     12 (reseal (assoc kexe :format :kotoba.kexe/unknown))
     13 (reseal (assoc kexe :kir-sha256 "not-a-hash"))
-    14 (reseal (assoc-in kexe [:program :effects] #{[:cap/call 7]}))))
+    14 (reseal (assoc-in kexe [:program :effects] #{[:cap/call 7]}))
+    15 (reseal-program kexe (assoc-in (:program kexe) [:functions 0 :body]
+                                      '(cap-call 7 1)))
+    16 (reseal-program kexe (assoc-in (:program kexe) [:functions 0 :body]
+                                      '(attacker-op 1)))
+    17 (reseal-program kexe (assoc-in (:program kexe) [:functions 0 :params]
+                                      '[a b c d e f]))))
 
 (defn- mutate-envelope [envelope choice]
   (case choice
@@ -87,7 +95,7 @@
         (case domain
           0 (is (thrown? clojure.lang.ExceptionInfo
                          (verifier/verify-artifact!
-                          (mutate-artifact kexe (.nextInt rng 15))))
+                          (mutate-artifact kexe (.nextInt rng 18))))
                 assertion-message)
           1 (is (thrown? clojure.lang.ExceptionInfo
                          (signing/verify

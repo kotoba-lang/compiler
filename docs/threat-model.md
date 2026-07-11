@@ -27,6 +27,9 @@ Security invariants:
 10. CLI outputs never expose partial artifacts through their final path;
     destination symlinks are not followed, and generated private keys require
     owner-only filesystem permissions.
+11. A valid attacker-recomputed artifact hash grants no trust to embedded KIR;
+    the verifier independently checks its AST, effect closure, ABI shape, and
+    resource budgets before invoking a backend for byte-for-byte regeneration.
 
 Arithmetic is specified independently of the JVM compiler host: i64
 add/subtract/multiply wrap modulo 2^64, while invalid signed division traps. A
