@@ -15,9 +15,11 @@
     "test-browser-host": "nbb scripts/test-browser-host.cljs",
     "test-worker-host": "nbb scripts/test-worker-host.cljs",
     "test-wasi-host": "nbb scripts/test-wasi-host.cljs",
+    "test-wasi-service": "nbb scripts/test-wasi-service.cljs",
     "test-wasmtime": "nbb scripts/test-wasmtime.cljs",
     "test-android-ndk": "nbb scripts/android-ndk-conformance.cljs",
     "test-ios-aot": "nbb scripts/ios-aot-conformance.cljs",
+    "test-kind-server": "nbb scripts/kind-server-conformance.cljs",
     "test-browsers": "nbb scripts/browser-matrix.cljs",
     "test-safari": "nbb scripts/safari-matrix.cljs",
     "test-windows-profile": "nbb scripts/windows-profile-conformance.cljs"
