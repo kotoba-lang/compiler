@@ -25,8 +25,8 @@
       readelf (.join path bin "llvm-readelf")
       nm (.join path bin "llvm-nm")
       tmp (.mkdtempSync fs (.join path (.tmpdir os) "kotoba-android-ndk-"))
-      first (.join path tmp "libkotoba-host-first.so")
-      second (.join path tmp "libkotoba-host-second.so")
+      first-lib (.join path tmp "libkotoba-host-first.so")
+      second-lib (.join path tmp "libkotoba-host-second.so")
       source (.join path lib/root "runtime" "android" "kotoba_android_host.c")
       include (.join path lib/root "runtime" "android")
       build! (fn [output]
@@ -36,14 +36,14 @@
                             "-shared" (str "-I" include) source "-o" output
                             "-Wl,-z,relro,-z,now,-z,noexecstack,--build-id=none"]))]
   (try
-    (build! first)
-    (build! second)
-    (lib/ensure! (= (lib/sha256 first) (lib/sha256 second))
+    (build! first-lib)
+    (build! second-lib)
+    (lib/ensure! (= (lib/sha256 first-lib) (lib/sha256 second-lib))
                  "android-ndk: host library build is not reproducible")
-    (let [header (.-stdout (run! readelf ["-h" first]))
-          program (.-stdout (run! readelf ["-lW" first]))
-          dynamic (.-stdout (run! readelf ["-dW" first]))
-          exports (->> (str/split-lines (.-stdout (run! nm ["-D" "--defined-only" first])))
+    (let [header (.-stdout (run! readelf ["-h" first-lib]))
+          program (.-stdout (run! readelf ["-lW" first-lib]))
+          dynamic (.-stdout (run! readelf ["-dW" first-lib]))
+          exports (->> (str/split-lines (.-stdout (run! nm ["-D" "--defined-only" first-lib])))
                        (remove str/blank?) vec)]
       (lib/ensure! (.includes header "AArch64") "android-ndk: ELF machine is not AArch64")
       (lib/ensure! (and (.includes program "GNU_STACK")
