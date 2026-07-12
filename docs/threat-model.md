@@ -332,8 +332,8 @@ Android and iOS are distinct sealed AArch64 targets even when their admitted
 machine-code bytes match. The verifier reconstructs the named OS, ABI, and
 runtime profile, so resealing Android code as iOS or the reverse fails. This
 does not authorize execution: there is no integrated Android isolated-process
-product or iOS signed static embedding yet, and desktop measured runtimes cannot admit
-either mobile profile. A first Android NDK library now enforces RW-to-RX,
+product or iOS signed static embedding yet, and desktop measured runtimes
+cannot admit either mobile profile. A first Android NDK library now enforces RW-to-RX,
 target identity, code/arity limits, and the fixed callback context, but it
 accepts bytes already extracted by a verifier and intentionally lets a guest
 trap terminate its process. KEXE authentication/regeneration, Android
@@ -358,7 +358,9 @@ exactly one canonical `kotoba.target` section naming
 and immutable-pair functions; `wasi_snapshot_preview1` and every other import
 namespace fail admission. Target-byte substitution is tested independently of
 module validation. This establishes the authority boundary but does not yet
-prove component-model composition, service cancellation, Kubernetes isolation,
-or production observability. Node/V8 and digest-pinned Wasmtime do execute the
-same pure ABI and fuel traps as independent engine evidence; neither result
-expands the admitted import set.
+prove component-model composition, service cancellation, production-cluster
+diversity, or production observability. Kind CI requires two non-root replicas,
+read-only filesystems, RuntimeDefault seccomp, no Linux capabilities or
+service-account token, resource limits, and recovery after pod deletion.
+Node/V8 and digest-pinned Wasmtime execute the same pure ABI and fuel traps as
+independent engine evidence; neither result expands the admitted import set.

@@ -86,6 +86,15 @@ execution under the W^X loader, sanitizer vectors, architecture-specific
 libFuzzer coverage floors, the WASI host, and Wasmtime all run without CPU
 emulation.
 
+The WASI profile also ships a bounded HTTP service adapter and a digest-pinned
+multi-architecture Node container. Each request receives a fresh Wasm instance
+and private fuel/heap; input is limited to 4 KiB, five canonical decimal i64
+arguments, and eight concurrent executions. Kind CI deploys two replicas as
+non-root with a read-only root filesystem, RuntimeDefault seccomp, all Linux
+capabilities dropped, no service-account token, and explicit CPU/memory limits.
+Health and execution identities are checked before and after forced pod
+replacement.
+
 The first Windows supervisor slice now executes verifier-extracted x86-64 KEXE
 code on the Windows CI runner. It maps code RW, copies it, transitions it to RX,
 flushes the instruction cache, then prohibits further dynamic code. A Clang

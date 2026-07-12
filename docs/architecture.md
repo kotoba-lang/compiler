@@ -226,6 +226,15 @@ must agree with the product host vectors. Linux x86-64, Linux Arm64, and macOS
 Arm64 are distinct CI execution profiles; the Linux Arm64 profile additionally
 executes the native AArch64 loader and sanitizer/fuzz boundaries.
 
+`runtime/wasi-service.mjs` is the first service lifecycle adapter. Startup
+admits the sealed module digest and target; every request instantiates a fresh
+module so the private fuel global and pair arena cannot leak across tenants.
+The HTTP schema is exact and bounded. The Kubernetes profile fixes two replicas,
+rolling availability, non-root IDs, read-only rootfs, RuntimeDefault seccomp,
+zero Linux capabilities, no mounted service-account credentials, probes, and
+resource requests/limits. CI deletes a serving pod and requires replacement
+plus continued deterministic execution.
+
 x86-64 now implements that ABI as `:hidden-context-r9`: the sixth SysV integer
 register is removed from the source ABI and carries a loader-owned pointer to a
 256-unit counter. Each function entry checks and decrements `*r9`; zero executes

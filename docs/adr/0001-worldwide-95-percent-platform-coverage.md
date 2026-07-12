@@ -215,8 +215,11 @@ programs and rejects a substituted target plus a forged
 `wasi_snapshot_preview1` import. Pinned Wasmtime independently executes pure
 results, arguments, and fuel exhaustion on Linux x86-64, Linux Arm64, and
 macOS Arm64. The native Linux Arm64 runner also passes the AArch64 W^X loader,
-sanitizer corpus, and 20,000-run architecture-bound libFuzzer gate. Kubernetes,
-cancellation, observability, and provenance gates remain.
+sanitizer corpus, and 20,000-run architecture-bound libFuzzer gate. A
+digest-pinned container is deployed to a two-replica hardened Kind cluster;
+CI checks sealed execution and recovery after forced pod deletion. Production
+cluster diversity, cancellation, observability, rollout policy, and provenance
+gates remain.
 
 - Stabilize Linux x86-64 and AArch64 distribution and container profiles.
 - Add `wasm32-wasi-kotoba-v1` with an exact capability adapter rather than
