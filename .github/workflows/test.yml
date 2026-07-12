@@ -58,6 +58,7 @@ jobs:
       - run: npm run test-worker-host
       - run: npm run test-wasi-host
       - run: npm run test-wasi-service
+      - run: npm run test-release
       - run: npm run test-wasmtime
       - if: matrix.os == 'macos-14'
         run: npm run test-ios-aot

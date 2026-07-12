@@ -368,5 +368,12 @@ The metrics endpoint has a fixed series set and never includes request entries,
 arguments, results, or raw errors, preventing guest-controlled cardinality or
 data exfiltration through labels. External collector identity and transport are
 not yet part of the trusted profile.
+
+Release SBOM input is not accepted by extension or declared digest alone. The
+verifier regenerates canonical SPDX from the measured artifact and requires
+byte equality before checking the signed statement. The statement binds the
+artifact and SBOM names, raw digests, sizes, target profile, builder, signer,
+and validity window under existing trust and revocation policy. Registry
+identity, transparency logs, and external key custody remain out of scope.
 Node/V8 and digest-pinned Wasmtime execute the same pure ABI and fuel traps as
 independent engine evidence; neither result expands the admitted import set.

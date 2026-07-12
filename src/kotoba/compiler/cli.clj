@@ -8,6 +8,7 @@
             [kotoba.compiler.ios-aot :as ios-aot]
             [kotoba.compiler.native-executor :as native-executor]
             [kotoba.compiler.receipt :as receipt]
+            [kotoba.compiler.release :as release]
             [kotoba.compiler.runtime-identity :as runtime-identity]
             [kotoba.compiler.signing :as signing]
             [kotoba.compiler.target :as target-profile]
@@ -249,6 +250,31 @@
       (atomic-output/write-edn! manifest-output (:manifest packaged))
       (println (pr-str {:ok true :target (:target input) :entry entry
                         :output output :manifest-output manifest-output})))
+    "sbom"
+    (let [input (second args)
+          output (or (option args "--output") (str input ".spdx"))]
+      (atomic-output/write-bytes! output (release/sbom-bytes input))
+      (println (pr-str {:ok true :format :spdx/v2.3 :output output})))
+    "attest-release"
+    (let [input (second args)
+          sbom (option args "--sbom")
+          key (bounded-edn/read-file (option args "--key"))
+          target (parse-target (option args "--target"))
+          not-before (Long/parseLong (option args "--not-before"))
+          expires (Long/parseLong (option args "--expires"))
+          output (or (option args "--output") (str input ".attestation.edn"))
+          envelope (release/attest input sbom target key not-before expires)]
+      (atomic-output/write-edn! output envelope)
+      (println (pr-str {:ok true :target target :output output
+                        :subject-sha256 (get-in envelope [:statement :subject :sha256])})))
+    "verify-release"
+    (let [envelope (bounded-edn/read-file (second args))
+          input (option args "--artifact")
+          sbom (option args "--sbom")
+          trust (bounded-edn/read-file (option args "--trust"))
+          now (Long/parseLong (option args "--now"))
+          result (release/verify! envelope input sbom trust now)]
+      (println (pr-str (assoc result :ok true))))
     "verify"
     (let [artifact (bounded-edn/read-file (second args))]
       (verifier/verify-artifact! artifact)

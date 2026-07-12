@@ -243,6 +243,13 @@ No attacker-controlled entry name, argument, result, error text, or capability
 value becomes a label. Kind conformance checks the module digest and worker
 gauge through this endpoint.
 
+The release layer emits deterministic SPDX 2.3 tag/value with a fixed creation
+epoch and content-derived namespace. A release statement binds raw artifact and
+SBOM names, SHA-256 digests, sizes, exact target profile, builder identity,
+signer, and validity interval. Ed25519 covers the canonical statement. Admission
+regenerates SPDX from the artifact rather than trusting an arbitrary file with
+an `.spdx` suffix, then applies signer/artifact revocation.
+
 x86-64 now implements that ABI as `:hidden-context-r9`: the sixth SysV integer
 register is removed from the source ABI and carries a loader-owned pointer to a
 256-unit counter. Each function entry checks and decrements `*r9`; zero executes

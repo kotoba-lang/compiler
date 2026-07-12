@@ -102,6 +102,22 @@ engine-hang containment vector.
 rejection, guest deadlines, active workers, and the sealed module identity;
 arguments and guest results are never labels or logs.
 
+Release artifacts can now carry deterministic SPDX 2.3 and signed provenance:
+
+```bash
+kotoba -M sbom service.wasm --output service.spdx
+kotoba -M attest-release service.wasm --sbom service.spdx \
+  --target wasm32-wasi --key release-key.edn \
+  --not-before 1000 --expires 2000 --output service.release.edn
+kotoba -M verify-release service.release.edn --artifact service.wasm \
+  --sbom service.spdx --trust trust.edn --now 1500
+```
+
+Verification regenerates the canonical SBOM, checks both raw file digests and
+sizes, reconstructs the exact target profile, and applies Ed25519 trust,
+revocation, and validity windows. Artifact, SBOM, target, or statement mutation
+fails closed.
+
 The first Windows supervisor slice now executes verifier-extracted x86-64 KEXE
 code on the Windows CI runner. It maps code RW, copies it, transitions it to RX,
 flushes the instruction cache, then prohibits further dynamic code. A Clang
