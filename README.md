@@ -296,14 +296,18 @@ being lost with the runner.
 Downloaded corpus artifacts are reviewed in dry-run mode before promotion:
 
 ```bash
-scripts/review-fuzz-corpus.sh path/to/artifact/corpus --dry-run
-scripts/review-fuzz-corpus.sh path/to/artifact/corpus --apply
+npx nbb scripts/review-fuzz-corpus.cljs path/to/artifact/corpus --dry-run
+npx nbb scripts/review-fuzz-corpus.cljs path/to/artifact/corpus --apply
 ```
 
 Promotion accepts only non-symlink regular files no larger than 1024 bytes,
 enforces aggregate limits, rejects untrusted filenames, deduplicates by content
 SHA-256, and reruns the sanitized fuzz harness before copying new inputs under
 canonical SHA-256 names.
+
+All repository build, conformance, sanitizer, fuzz, and corpus-review
+orchestration is implemented in NBB/ClojureScript. No POSIX shell script is a
+project execution boundary.
 
 Linux libFuzzer emits `:kotoba.fuzz-coverage/v1` summaries containing edge
 coverage, feature count, and corpus count. CI compares them with the reviewed

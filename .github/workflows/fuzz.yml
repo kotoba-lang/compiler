@@ -19,11 +19,12 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - run: npm ci
       - name: Run coverage-guided native parser fuzzing
         env:
           KOTOBA_NATIVE_FUZZ_SECONDS: ${{ inputs.seconds || '300' }}
           KOTOBA_FUZZ_ARTIFACT_DIR: fuzz-results
-        run: scripts/fuzz-native.sh
+        run: npx nbb scripts/fuzz-native.cljs
       - name: Preserve evolved corpus and crash inputs
         if: always()
         uses: actions/upload-artifact@v4

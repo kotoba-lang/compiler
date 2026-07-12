@@ -215,7 +215,7 @@ timeout, and leak artifacts even for failed runs. Artifacts are retained for 30
 days. Promoting useful evolved inputs into the reviewed repository corpus is a
 deliberate human change; CI never commits unreviewed bytes automatically.
 
-`review-fuzz-corpus.sh` treats downloaded artifacts as hostile. It rejects
+`review-fuzz-corpus.cljs` runs under pinned NBB and treats downloaded artifacts as hostile. It rejects
 symlinks, non-regular files, unknown named seeds, inputs over 1024 bytes, more
 than 10,000 files, and aggregate content over 1 MiB. Dry-run is the default
 review path. Explicit `--apply` first replays the entire imported corpus through

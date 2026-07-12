@@ -5,6 +5,10 @@
     "nbb": "1.4.208"
   },
   "scripts": {
-    "conformance": "nbb scripts/conformance.cljs"
+    "conformance": "nbb scripts/conformance.cljs",
+    "sanitizer": "nbb scripts/sanitizer.cljs",
+    "fuzz": "nbb scripts/fuzz-native.cljs",
+    "review-fuzz": "nbb scripts/review-fuzz-corpus.cljs",
+    "test-review-fuzz": "nbb scripts/test-review-fuzz-corpus.cljs"
   }
 }

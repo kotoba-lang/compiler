@@ -26,8 +26,8 @@ jobs:
           bin/kotoba -M compile /tmp/ci.kotoba --target x86_64 --output /tmp/ci.kexe
           bin/kotoba -M verify /tmp/ci.kexe
       - run: npx nbb scripts/conformance.cljs
-      - run: scripts/sanitizer.sh
-      - run: scripts/fuzz-native.sh
+      - run: npx nbb scripts/sanitizer.cljs
+      - run: npx nbb scripts/fuzz-native.cljs
         env:
           KOTOBA_NATIVE_FUZZ_RUNS: "20000"
-      - run: scripts/test-review-fuzz-corpus.sh
+      - run: npx nbb scripts/test-review-fuzz-corpus.cljs
