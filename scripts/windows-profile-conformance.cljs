@@ -111,8 +111,15 @@
                "--policy" (artifact "policy.edn") "--input" (artifact "input.edn")
                "--executor-key" (artifact "key.edn") "--now" "1500"
                "--result-output" (artifact "result.edn") "--output" (artifact "receipt.edn")])
-      (lib/ensure! (= "42" (.trim (.readFileSync fs (artifact "result.edn") "utf8")))
-                   "windows-profile: measured product run result mismatch")
+      (run-k! ["verify-receipt" (artifact "receipt.edn")
+               "--signed" (artifact "signed.kexe") "--trust" (artifact "runtime-trust.edn")
+               "--policy" (artifact "policy.edn") "--input" (artifact "input.edn")
+               "--result" (artifact "result.edn") "--now" "1500"])
+      (let [result (.readFileSync fs (artifact "result.edn") "utf8")]
+        (lib/ensure! (and (.includes result ":status :ok")
+                          (.includes result ":result 42")
+                          (.includes result ":format :kotoba.native-runtime/v6"))
+                     "windows-profile: measured product evidence mismatch"))
       (lib/ensure! (.includes (.readFileSync fs (artifact "runtime.edn") "utf8")
                               ":runtime :kotoba-windows-supervisor-v1")
                    "windows-profile: measured runtime profile mismatch")
