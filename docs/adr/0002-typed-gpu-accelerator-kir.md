@@ -17,7 +17,8 @@ effects. Invalid names, types, effects, operators, workgroups or bounds are
 rejected before code generation. Arbitrary shader text and ambient GPU access
 are not admitted.
 
-The compiler deterministically lowers one KIR to WGSL or CUDA C. A sealed
+The compiler deterministically lowers one KIR to WGSL, CUDA C or Metal Shading
+Language. A sealed
 `:kotoba.gpu-artifact/v1` binds target, complete KIR, KIR SHA-256, emitted code,
 code SHA-256 and resource limits. Verification treats the artifact as hostile:
 it validates KIR, re-lowers it and requires exact code/hash equality even when
@@ -30,7 +31,7 @@ compiler revision and consumes verified artifacts.
 
 ## Consequences
 
-- WGSL and CUDA kernels share one admitted meaning and identity.
+- WGSL, CUDA and MSL kernels share one admitted meaning and identity.
 - Compiler receipts can later bind GPU driver/NVRTC pipeline evidence without
   weakening existing CPU/native artifact verification.
 - cuBLAS/cuSPARSE remain reviewed external calls; generated kernels initially

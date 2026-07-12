@@ -21,7 +21,7 @@ The multi-target, deny-by-default compiler for the safe Kotoba language.
 GPU compilation now begins with a separate typed accelerator KIR rather than
 allowing arbitrary shaders into scalar CPU KIR. `kotoba.compiler.accelerator`
 validates bounded f32 elementwise/reduction kernels and deterministically emits
-WGSL or CUDA C. Sealed GPU artifacts bind KIR/code hashes and are independently
+WGSL, CUDA C or Metal Shading Language. Sealed GPU artifacts bind KIR/code hashes and are independently
 re-lowered during verification, including against attacker-resealed code. This
 is the shared GPU compiler contract consumed by `kotoba-lang/num`; see
 ADR-0002.

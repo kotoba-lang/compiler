@@ -4,7 +4,7 @@
 
 (def kir-format :kotoba.accelerator-kir/v1)
 (def artifact-format :kotoba.gpu-artifact/v1)
-(def targets #{:wgsl-v1 :cuda-v1})
+(def targets #{:wgsl-v1 :cuda-v1 :msl-v1})
 (def dtypes #{:f32})
 (def ewise-operators #{:add :sub :mul :div})
 (def reduction-operators #{:sum :max :min})
@@ -88,10 +88,30 @@
              " for(unsigned int d=blockDim.x/2;d>0;d>>=1){if(l<d){float a=s[l],b=s[l+d];s[l]=" combine ";}__syncthreads();}\n"
              " if(l==0)parts[blockIdx.x]=s[0];\n}\n")))))
 
+(defn- emit-msl [kir]
+  (let [op (:kernel/op kir) operator (:kernel/operator kir) name (:kernel/name kir)]
+    (case op
+      :ewise
+      (str "#include <metal_stdlib>\nusing namespace metal;\n"
+           "kernel void " name "(device const float* x [[buffer(0)]],device const float* y [[buffer(1)]],"
+           "device float* z [[buffer(2)]],constant uint& n [[buffer(3)]],uint i [[thread_position_in_grid]]){\n"
+           " if(i<n) z[i]=" (second (expression operator)) ";\n}\n")
+      :reduce
+      (let [identity ({:sum "0.0f" :max "-3.402823466e+38f" :min "3.402823466e+38f"} operator)
+            combine ({:sum "a+b" :max "max(a,b)" :min "min(a,b)"} operator)]
+        (str "#include <metal_stdlib>\nusing namespace metal;\n"
+             "kernel void " name "(device const float* x [[buffer(0)]],device float* parts [[buffer(1)]],"
+             "constant uint& n [[buffer(2)]],threadgroup float* s [[threadgroup(0)]],"
+             "uint i [[thread_position_in_grid]],uint l [[thread_index_in_threadgroup]],"
+             "uint g [[threadgroup_position_in_grid]],uint width [[threads_per_threadgroup]]){\n"
+             " s[l]=i<n?x[i]:" identity "; threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+             " for(uint d=width/2;d>0;d>>=1){if(l<d){float a=s[l],b=s[l+d];s[l]=" combine ";}threadgroup_barrier(mem_flags::mem_threadgroup);}\n"
+             " if(l==0)parts[g]=s[0];\n}\n")))))
+
 (defn lower [kir target]
   (validate! kir)
   (when-not (targets target) (throw (ex-info "unsupported accelerator target" {:target target :supported targets})))
-  ((case target :wgsl-v1 emit-wgsl :cuda-v1 emit-cuda) kir))
+  ((case target :wgsl-v1 emit-wgsl :cuda-v1 emit-cuda :msl-v1 emit-msl) kir))
 
 (defn compile-kernel [kir target]
   (let [code (lower kir target)

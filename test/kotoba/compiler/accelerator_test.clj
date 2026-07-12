@@ -6,14 +6,18 @@
 (deftest typed-kir-lowers-deterministically-to-wgsl-and-cuda
   (let [kir (accelerator/kernel "ewise_add_f32" :ewise :add {:workgroup-size 256})
         wgsl (accelerator/compile-kernel kir :wgsl-v1)
-        cuda (accelerator/compile-kernel kir :cuda-v1)]
+        cuda (accelerator/compile-kernel kir :cuda-v1)
+        msl (accelerator/compile-kernel kir :msl-v1)]
     (is (= :kotoba.gpu-artifact/v1 (:format wgsl)))
     (is (= (:kir-sha256 wgsl) (:kir-sha256 cuda)))
+    (is (= (:kir-sha256 wgsl) (:kir-sha256 msl)))
     (is (not= (:code-sha256 wgsl) (:code-sha256 cuda)))
     (is (re-find #"@compute @workgroup_size\(256\)" (:code wgsl)))
     (is (re-find #"extern \"C\" __global__" (:code cuda)))
+    (is (re-find #"#include <metal_stdlib>" (:code msl)))
     (is (= wgsl (accelerator/verify-artifact! wgsl)))
     (is (= cuda (accelerator/verify-artifact! cuda)))
+    (is (= msl (accelerator/verify-artifact! msl)))
     (is (= wgsl (accelerator/compile-kernel kir :wgsl-v1)))))
 
 (deftest reduction-lowering-is-bounded-and-target-specific
@@ -21,9 +25,11 @@
     (let [kir (accelerator/kernel (str "reduce_" (name operator) "_f32") :reduce operator
                                   {:workgroup-size 128})
           wgsl (accelerator/compile-kernel kir :wgsl-v1)
-          cuda (accelerator/compile-kernel kir :cuda-v1)]
+          cuda (accelerator/compile-kernel kir :cuda-v1)
+          msl (accelerator/compile-kernel kir :msl-v1)]
       (is (re-find #"workgroupBarrier" (:code wgsl)))
       (is (re-find #"extern __shared__ float" (:code cuda)))
+      (is (re-find #"threadgroup float" (:code msl)))
       (is (= 128 (get-in cuda [:limits :workgroup-size]))))))
 
 (deftest invalid-or-tampered-kernels-fail-closed
