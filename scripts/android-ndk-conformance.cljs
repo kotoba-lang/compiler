@@ -52,7 +52,7 @@
       (lib/ensure! (.includes program "GNU_RELRO") "android-ndk: RELRO is absent")
       (lib/ensure! (.includes dynamic "BIND_NOW") "android-ndk: immediate binding is absent")
       (lib/ensure! (and (= 1 (count exports))
-                        (.endsWith (first exports) " kotoba_android_execute_verified_v1"))
+                        (str/ends-with? (first exports) " kotoba_android_execute_verified_v1"))
                    (str "android-ndk: export surface rejected: " exports)))
     (let [nbb-cli (.join path lib/root "node_modules" "nbb" "cli.js")
           kotoba (.join path lib/root "bin" "kotoba")
