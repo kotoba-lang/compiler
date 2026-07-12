@@ -44,10 +44,10 @@ verified. Native execution and release evidence still fail closed until the
 measured Windows supervisor is trusted for the current host; Windows is not yet
 counted as release coverage.
 
-The Android and iOS names currently establish compile/verify identity only.
+The Android and iOS names begin with distinct compile/verify identities.
 They produce equal reviewed AArch64 instructions but distinct sealed artifact
 digests and runtime contracts. Android isolated-process loading and iOS signed
-static/AOT embedding are still required before either target is executable or
+static/AOT product embedding are still required before either target is executable or
 counted as native mobile coverage.
 
 Android now also has a first NDK host-library boundary. Pinned NDK
@@ -58,6 +58,19 @@ flushes the instruction cache, installs the fixed fuel/capability/pair context,
 and requires the Android target identity. It deliberately expects an Android
 isolated process to contain guest traps. No emulator or physical-device
 execution is claimed yet.
+
+iOS now has a static AOT packaging command:
+
+```bash
+kotoba -M package-ios program.kexe --entry main \
+  --output program.S --manifest-output program.edn
+```
+
+It reverifies the explicit iOS KEXE, emits canonical AArch64 bytes directly in
+Mach-O `__TEXT,__text`, and binds artifact, code, entry, and assembly digests in
+the manifest. Pinned Xcode 16.2 CI builds the text object and a no-JIT static
+host archive twice byte-identically. Device code signing, app embedding, trap
+isolation, and physical iPhone/iPad execution remain release gates.
 
 `wasm32-wasi` is the first server/component profile. Its Wasm custom section
 seals `wasm32-wasi-kotoba-v1`; the dependency-free host rejects missing or

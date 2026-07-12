@@ -187,6 +187,11 @@ byte-identically and checks its hardened ELF and single-function export surface.
 This remains build-boundary progress only: no mobile execution or endpoint
 coverage is claimed until KEXE admission integration, isolated-process
 packaging, lifecycle, and physical-device gates pass.
+The iOS path now additionally reverifies KEXE and emits a digest-bound static
+AOT manifest plus canonical Mach-O text. Pinned Xcode 16.2 builds the Arm64 text
+object and no-JIT host archive twice byte-identically. App integration,
+codesigning, store-compatible packaging, trap isolation, and physical iPhone/
+iPad execution remain required.
 
 - Implement Android AArch64 as an NDK host library with isolated-process and
   application-sandbox integration.

@@ -62,6 +62,15 @@ exports. Code transitions RW to RX and never uses RWX. The library does not
 authenticate or independently regenerate KEXE and must run inside a separately
 configured Android isolated process; those are product integration gates.
 
+The iOS AOT packager first runs the independent KEXE verifier, then converts the
+admitted code vector into canonical assembly in `__TEXT,__text`. A separate
+`__TEXT,__const` symbol carries the exact iOS target identity. The sealed
+manifest binds artifact, code, entry offset/arity, and assembly digests. The
+static C host owns the same context v2 callbacks and calls only the link-time
+entry symbol; it contains no `mmap`, `mprotect`, JIT entitlement, or writable
+code transition. Xcode CI verifies deterministic Arm64 Mach-O objects and
+archives, but final app signing and device execution are outside this gate.
+
 KEXE is not mapped by this compiler. The loader must reverify, compare the
 policy/artifact digest, allocate writable non-executable memory, copy code,
 change it to read+execute, and never map it writable again. No generated code

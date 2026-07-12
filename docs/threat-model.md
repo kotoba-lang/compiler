@@ -341,6 +341,15 @@ isolated-process packaging, store packaging, lifecycle bridges,
 physical-device isolation, and OS code signing remain outside the current
 trusted boundary.
 
+The iOS static path does not copy code into executable memory at runtime. Its
+packager reverifies the explicit iOS artifact and places canonical bytes in the
+linker's executable text section; a manifest seals every relevant digest and
+entry coordinate. The host references that link-time symbol and exposes no JIT
+or writable-code API. This prevents a desktop-style W-to-X transition from
+being mistaken for iOS support, but final application signing, entitlements,
+link integrity, process-level trap containment, and physical-device execution
+are not yet evidenced.
+
 ## WASI server boundary
 
 The explicit WASI profile is not ambient WASI. Each admitted module must carry
