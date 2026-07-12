@@ -50,6 +50,7 @@
             [[(.join path lib/root "runtime" "browser-host.mjs") (.join path context "browser-host.mjs")]
              [(.join path lib/root "runtime" "wasi-host.mjs") (.join path context "wasi-host.mjs")]
              [(.join path lib/root "runtime" "wasi-service.mjs") (.join path context "wasi-service.mjs")]
+             [(.join path lib/root "runtime" "wasi-service-worker.mjs") (.join path context "wasi-service-worker.mjs")]
              [(.join path lib/root "deploy" "server" "Dockerfile") (.join path context "Dockerfile")]]]
       (.copyFileSync fs source target))
     (let [digest (lib/sha256 wasm)

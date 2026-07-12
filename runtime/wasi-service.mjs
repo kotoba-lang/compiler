@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import http from "node:http";
 import { createHash } from "node:crypto";
+import { Worker } from "node:worker_threads";
 import { instantiateKotobaWasi } from "./wasi-host.mjs";
 
 const MAX_BODY_BYTES = 4096;
@@ -66,6 +67,32 @@ const readBody = request => new Promise((resolve, reject) => {
   request.on("error", error => { clearTimeout(timer); reject(error); });
 });
 
+const runGuest = parsed => new Promise((resolve, reject) => {
+  const worker = new Worker(new URL("./wasi-service-worker.mjs", import.meta.url), {
+    workerData: { bytes, sha256: expectedSha256, entry: parsed.entry, args: parsed.args }
+  });
+  let settled = false;
+  const finish = (callback, value) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    callback(value);
+  };
+  const timer = setTimeout(() => {
+    finish(reject, new Error("guest deadline exceeded"));
+    void worker.terminate();
+  }, 1000);
+  worker.once("message", value => {
+    if (value?.ok === true) finish(resolve, value);
+    else finish(reject, new Error("guest execution rejected"));
+    void worker.terminate();
+  });
+  worker.once("error", error => finish(reject, error));
+  worker.once("exit", code => {
+    if (code !== 0) finish(reject, new Error("guest worker exited"));
+  });
+});
+
 const server = http.createServer(async (request, response) => {
   if (request.method === "GET" && request.url === "/healthz") {
     respond(response, 200, { format: "kotoba.service-health/v1", status: "ok",
@@ -86,13 +113,9 @@ const server = http.createServer(async (request, response) => {
       throw new Error("content type rejected");
     const body = await readBody(request);
     const parsed = exactRequest(JSON.parse(body.toString("utf8")));
-    const hosted = await instantiateKotobaWasi(bytes, { expectedSha256 });
-    const fn = hosted.instance.exports[parsed.entry];
-    if (typeof fn !== "function") throw new Error("entry is not exported");
-    const result = fn(...parsed.args);
-    if (typeof result !== "bigint") throw new Error("entry result is not i64");
+    const executed = await runGuest(parsed);
     respond(response, 200, { format: "kotoba.service-result/v1", status: "ok",
-                             result: result.toString(), heap: hosted.report().heap });
+                             result: executed.result, heap: executed.heap });
   } catch {
     respond(response, 400, { format: "kotoba.service-error/v1", error: "request-rejected" });
   } finally {

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import path from "node:path";
 
 const [structuredPath, capabilityPath] = process.argv.slice(2);
 const servicePath = fileURLToPath(new URL("../runtime/wasi-service.mjs", import.meta.url));
@@ -79,12 +80,42 @@ await withService(capabilityPath, 18082, async () => {
     throw new Error("service ambient capability was granted");
 });
 
+const uleb = value => {
+  const out = [];
+  do { let byte = value & 0x7f; value >>>= 7; if (value) byte |= 0x80; out.push(byte); }
+  while (value);
+  return out;
+};
+const utf8 = value => Array.from(Buffer.from(value, "utf8"));
+const name = value => [...uleb(utf8(value).length), ...utf8(value)];
+const section = (id, value) => [id, ...uleb(value.length), ...value];
+const custom = [...name("kotoba.target"), ...utf8("wasm32-wasi-kotoba-v1")];
+const hostilePath = path.join(path.dirname(capabilityPath), "hostile-loop.wasm");
+fs.writeFileSync(hostilePath, Uint8Array.from([
+  0, 0x61, 0x73, 0x6d, 1, 0, 0, 0,
+  ...section(0, custom),
+  ...section(1, [1, 0x60, 0, 1, 0x7e]),
+  ...section(3, [1, 0]),
+  ...section(7, [1, ...name("main"), 0, 0]),
+  ...section(10, [1, 9, 0, 0x03, 0x40, 0x0c, 0, 0x0b, 0x42, 0, 0x0b])
+]));
+await withService(hostilePath, 18083, async health => {
+  const started = Date.now();
+  const cancelled = await post(18083, request("main"));
+  if (cancelled.status !== 400 || cancelled.value.error !== "request-rejected" ||
+      Date.now() - started > 2500)
+    throw new Error("service guest deadline was not enforced");
+  const after = await fetch("http://127.0.0.1:18083/healthz");
+  if (!after.ok || health.sha256 !== digest(hostilePath))
+    throw new Error("service did not survive cancelled guest");
+});
+
 const mismatch = spawn(process.execPath, [servicePath], {
   stdio: "ignore",
-  env: { ...process.env, PORT: "18083", KOTOBA_WASM_PATH: structuredPath,
+  env: { ...process.env, PORT: "18085", KOTOBA_WASM_PATH: structuredPath,
          KOTOBA_WASM_SHA256: "0".repeat(64) }
 });
 const mismatchStatus = await new Promise(resolve => mismatch.once("exit", resolve));
 if (mismatchStatus === 0) throw new Error("service module digest mismatch was accepted");
 
-console.log("wasi-service: identity, isolated execution, bounds, and capability denial passed");
+console.log("wasi-service: identity, isolated execution, deadline cancellation, bounds, and capability denial passed");
