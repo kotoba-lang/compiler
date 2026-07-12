@@ -238,6 +238,10 @@ Each execution is additionally isolated in a Worker thread. Completion,
 engine error, guest trap, abnormal worker exit, and a one-second deadline all
 converge on one bounded response; timeout termination cannot block the HTTP
 event loop or consume the next request's fuel/heap.
+Prometheus text metrics expose fixed counters/gauges and one module-info series.
+No attacker-controlled entry name, argument, result, error text, or capability
+value becomes a label. Kind conformance checks the module digest and worker
+gauge through this endpoint.
 
 x86-64 now implements that ABI as `:hidden-context-r9`: the sixth SysV integer
 register is removed from the source ABI and carries a loader-owned pointer to a

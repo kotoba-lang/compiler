@@ -98,6 +98,9 @@ Guest execution runs in a per-request Worker with a one-second deadline. A
 separately constructed sealed infinite-loop module must be terminated while the
 service process remains healthy, providing an explicit cancellation and
 engine-hang containment vector.
+`/metrics` exposes only bounded low-cardinality counters for requests, success,
+rejection, guest deadlines, active workers, and the sealed module identity;
+arguments and guest results are never labels or logs.
 
 The first Windows supervisor slice now executes verifier-extracted x86-64 KEXE
 code on the Windows CI runner. It maps code RW, copies it, transitions it to RX,

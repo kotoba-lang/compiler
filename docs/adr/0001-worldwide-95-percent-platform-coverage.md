@@ -220,7 +220,9 @@ digest-pinned container is deployed to a two-replica hardened Kind cluster;
 CI checks sealed execution and recovery after forced pod deletion. Per-request
 Worker isolation also terminates a sealed hostile infinite loop at a one-second
 deadline while preserving service health. Production cluster diversity,
-observability, rollout policy, and provenance gates remain.
+external metrics collection, tracing/SLOs, rollout policy, and provenance gates
+remain; the service itself now exposes bounded request/success/rejection/
+deadline/worker/module metrics without guest-controlled labels.
 
 - Stabilize Linux x86-64 and AArch64 distribution and container profiles.
 - Add `wasm32-wasi-kotoba-v1` with an exact capability adapter rather than

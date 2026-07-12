@@ -364,5 +364,9 @@ read-only filesystems, RuntimeDefault seccomp, no Linux capabilities or
 service-account token, resource limits, and recovery after pod deletion. A
 per-request Worker deadline terminates a sealed infinite-loop module and the
 service must remain healthy afterward.
+The metrics endpoint has a fixed series set and never includes request entries,
+arguments, results, or raw errors, preventing guest-controlled cardinality or
+data exfiltration through labels. External collector identity and transport are
+not yet part of the trusted profile.
 Node/V8 and digest-pinned Wasmtime execute the same pure ABI and fuel traps as
 independent engine evidence; neither result expands the admitted import set.
