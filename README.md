@@ -52,6 +52,10 @@ CI also executes the sealed pure ABI and fuel traps on Wasmtime 42.0.1, fetched
 by an NBB installer that verifies the pinned official release SHA-256. This is
 independent engine evidence alongside Node/V8, not yet a Kubernetes release
 claim.
+The full test matrix includes a native `ubuntu-24.04-arm` runner: AArch64 KEXE
+execution under the W^X loader, sanitizer vectors, architecture-specific
+libFuzzer coverage floors, the WASI host, and Wasmtime all run without CPU
+emulation.
 
 The first Windows supervisor slice now executes verifier-extracted x86-64 KEXE
 code on the Windows CI runner. It maps code RW, copies it, transitions it to RX,

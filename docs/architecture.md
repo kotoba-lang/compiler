@@ -194,7 +194,9 @@ authority must be separately declared and metered in any future profile.
 The portable semantic subset is executed independently by Node/V8 and pinned
 Wasmtime. Wasmtime receives no preopened directories, environment adapter, or
 capability imports; pure results, runtime arguments, and recursive fuel traps
-must agree with the product host vectors.
+must agree with the product host vectors. Linux x86-64, Linux Arm64, and macOS
+Arm64 are distinct CI execution profiles; the Linux Arm64 profile additionally
+executes the native AArch64 loader and sanitizer/fuzz boundaries.
 
 x86-64 now implements that ABI as `:hidden-context-r9`: the sixth SysV integer
 register is removed from the source ABI and carries a loader-owned pointer to a
