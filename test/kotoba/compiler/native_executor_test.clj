@@ -39,7 +39,7 @@
         result (executor/execute envelope trust {:allow #{}} {:args []}
                                  options)]
     (is (= {:status :ok :result 42} (select-keys (:evidence result) [:status :result])))
-    (is (= :kotoba.native-runtime/v2 (get-in result [:evidence :runtime :format])))
+    (is (= :kotoba.native-runtime/v3 (get-in result [:evidence :runtime :format])))
     (is (= executor/loader-source-sha256
            (get-in result [:evidence :runtime :loader-source-sha256])))
     (is (every? #(re-matches #"[0-9a-f]{64}" %)
@@ -111,6 +111,18 @@
     (is (re-matches #"[0-9a-f]{64}" (file-sha256 (.toFile path))))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"invalid toolchain"
                           (resolve-executable "./cc")))))
+
+(deftest compiler-reported-tools-require-canonical-executable-paths
+  (let [resolve-tool @#'executor/resolve-reported-tool
+        env {"PATH" "/usr/bin:/bin"}]
+    (is (.isAbsolute (resolve-tool "/bin/sh\n" env)))
+    (is (.isAbsolute (resolve-tool "sh\n" env)))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not an executable"
+                          (resolve-tool "relative/tool\n" env)))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"malformed tool path"
+                          (resolve-tool "as\nld\n" env)))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"malformed tool path"
+                          (resolve-tool (str "as" \u0000) env)))))
 
 (deftest native-trap-is-returned-as-measured-evidence
   (let [{:keys [envelope trust]}

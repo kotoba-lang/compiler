@@ -95,9 +95,9 @@ the evidence later bound into an executor-signed receipt.
 
 The explicit `measure-runtime` provisioning step pins the reviewed loader source
 by raw SHA-256 before invoking the C toolchain. It measures the resulting binary
-and places the loader source, loader binary, resolved compiler binary, and
-compiler version hashes in
-`:kotoba.native-runtime/v2`. The loader binary is published separately with
+and places the loader source, loader binary, resolved compiler binary, compiler
+version, compiler-reported assembler, and compiler-reported linker hashes in
+`:kotoba.native-runtime/v3`. The loader binary is published separately with
 owner-only execute permission. The production `run` path requires both files,
 checks exact schemas, trust membership, revocation, and binary hash, and never
 starts `cc`. The
@@ -119,6 +119,13 @@ compiler cannot impersonate an approved runtime merely by copying a trusted
 detects persistent identity drift; a transient race, dynamically loaded
 toolchain components, and a compromised compiler remain in scope until the
 toolchain is hermetic.
+Runtime v3 also queries `-print-prog-name=as` and `-print-prog-name=ld` under the
+sanitized environment. Absolute reports and bare PATH names are accepted only
+after canonicalization to executable regular files; relative paths containing
+separators, multiline output, missing tools, and diagnostics are rejected. Both
+binaries are hashed before and after the reproducibility build. This closes
+straightforward assembler/linker shadowing, while compiler-integrated tools and
+dynamically loaded components remain covered only indirectly by output identity.
 The bootstrap also clears the complete inherited environment for every child.
 The toolchain receives only deterministic locale/time/reproducibility values and
 a minimal path rooted at the already-resolved compiler directory. The loader

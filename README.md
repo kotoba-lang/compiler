@@ -174,7 +174,8 @@ executor-signed receipt using the supervisor's actual post-execution fuel
 counter; callers cannot supply result, status, timing, or fuel values.
 The result evidence also binds the pinned loader-source hash, the exact loader
 binary hash, the resolved C compiler executable's byte hash, and its version
-output hash. A source mismatch is denied
+output hash. Runtime v3 additionally binds the compiler-reported assembler and
+linker executable byte hashes. A source mismatch is denied
 before compilation, and the executor signature makes the runtime identity part
 of the receipt's output evidence.
 
@@ -192,9 +193,12 @@ kotoba -M verify-receipt run.receipt.edn --trust pinned-trust.edn ...
 ```
 
 The pin covers the reviewed loader source, reproduced loader binary, compiler
-binary, and compiler version output. `cc` is resolved once to an absolute real
+binary/version output, assembler, and linker. `cc` is resolved once to an absolute real
 path; both builds use that path, and its bytes are re-hashed after the second
-build to detect persistent replacement during measurement. Native execution always requires an explicit
+build to detect persistent replacement during measurement. The assembler and
+linker paths reported by the compiler must resolve to regular executable files;
+their bytes are likewise measured before and after both builds. Native execution
+always requires an explicit
 `:trusted-runtime-sha256` membership; an absent or empty set denies every
 runtime. Runtime revocation uses `:revoked-runtime-sha256`. Measurement is a
 deliberate provisioning operation and still executes the local toolchain, so it

@@ -119,6 +119,46 @@
    "SOURCE_DATE_EPOCH" "0"
    "ZERO_AR_DATE" "1"})
 
+(defn- resolve-reported-tool [reported env]
+  (try
+    (let [lines (str/split-lines reported)
+          value (str/trim reported)]
+      (when-not (and (= 1 (count lines)) (seq value) (<= (count value) 4096))
+        (throw (ex-info "compiler reported a malformed tool path" {:phase :execute})))
+      (let [candidate (Paths/get value (make-array String 0))
+            resolved (cond
+                       (.isAbsolute candidate) candidate
+                       (not (str/includes? value "/"))
+                       (some (fn [entry]
+                               (let [path (.resolve
+                                           (.toAbsolutePath
+                                            (Paths/get entry (make-array String 0)))
+                                           value)]
+                                 (when (and (Files/isRegularFile path (make-array LinkOption 0))
+                                            (Files/isExecutable path)) path)))
+                             (str/split (get env "PATH" "") #":" -1))
+                       :else nil)]
+        (when-not (and resolved
+                       (Files/isRegularFile resolved (make-array LinkOption 0))
+                       (Files/isExecutable resolved))
+          (throw (ex-info "compiler-reported tool is not an executable file"
+                          {:phase :execute})))
+        (.toRealPath ^Path resolved (make-array LinkOption 0))))
+    (catch clojure.lang.ExceptionInfo error (throw error))
+    (catch Exception error
+      (throw (ex-info "compiler reported a malformed tool path"
+                      {:phase :execute} error)))))
+
+(defn- compiler-tool [compiler-path name env]
+  (let [query (run-process [(str compiler-path) (str "-print-prog-name=" name)]
+                           env {:timeout-ms 5000 :output-limit 4096})]
+    (when-not (and (zero? (:exit query))
+                   (not (:timed-out? query))
+                   (not (:output-exceeded? query))
+                   (empty? (:stderr query)))
+      (throw (ex-info "native compiler tool query failed" {:phase :execute})))
+    (resolve-reported-tool (:stdout query) env)))
+
 (defn- delete-tree! [file]
   (when (.exists ^java.io.File file)
     (doseq [child (reverse (file-seq file))] (io/delete-file child true))))
@@ -139,6 +179,10 @@
         compiler-file (.toFile compiler-path)
         compiler-binary-sha (file-sha256 compiler-file)
         toolchain-env (toolchain-environment compiler-path)
+        assembler-path (compiler-tool compiler-path "as" toolchain-env)
+        linker-path (compiler-tool compiler-path "ld" toolchain-env)
+        assembler-sha (file-sha256 (.toFile assembler-path))
+        linker-sha (file-sha256 (.toFile linker-path))
         actual-source-sha (file-sha256 loader-source)]
     (when-not (= loader-source-sha256 actual-source-sha)
       (throw (ex-info "native loader source identity mismatch"
@@ -170,17 +214,23 @@
         (when-not (= compiler-binary-sha (file-sha256 compiler-file))
           (throw (ex-info "native C compiler changed during measurement"
                           {:phase :execute})))
+        (when-not (and (= assembler-sha (file-sha256 (.toFile assembler-path)))
+                       (= linker-sha (file-sha256 (.toFile linker-path))))
+          (throw (ex-info "native assembler or linker changed during measurement"
+                          {:phase :execute})))
         (when-not (= first-loader-sha loader-sha)
           (throw (ex-info "native loader build is not reproducible"
                           {:phase :execute :first first-loader-sha
                            :second loader-sha})))
         {:loader loader
-         :runtime {:format :kotoba.native-runtime/v2
+         :runtime {:format :kotoba.native-runtime/v3
                    :loader-source-sha256 loader-source-sha256
                    :loader-binary-sha256 loader-sha
                    :compiler-binary-sha256 compiler-binary-sha
                    :compiler-version-sha256
-                   (raw-sha256 (.getBytes compiler-text StandardCharsets/UTF_8))}}))))
+                   (raw-sha256 (.getBytes compiler-text StandardCharsets/UTF_8))
+                   :assembler-binary-sha256 assembler-sha
+                   :linker-binary-sha256 linker-sha}}))))
 
 (defn measure-runtime
   "Build the reviewed loader twice and return its identity and exact bytes."
