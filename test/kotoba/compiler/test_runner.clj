@@ -3,6 +3,7 @@
             [kotoba.compiler.atomic-output-test]
             [kotoba.compiler.cli-test]
             [kotoba.compiler.core-test]
+            [kotoba.compiler.coverage-test]
             [kotoba.compiler.bounded-edn-test]
             [kotoba.compiler.frontend-fuzz-test]
             [kotoba.compiler.frontend-limits-test]
@@ -18,6 +19,7 @@
   (let [{:keys [fail error]} (t/run-tests 'kotoba.compiler.atomic-output-test
                                           'kotoba.compiler.cli-test
                                           'kotoba.compiler.core-test
+                                          'kotoba.compiler.coverage-test
                                           'kotoba.compiler.bounded-edn-test
                                           'kotoba.compiler.frontend-fuzz-test
                                           'kotoba.compiler.frontend-limits-test

@@ -104,6 +104,11 @@ policy, receipt, and trust schemas can migrate without target confusion.
 Exit gate: forged OS/ABI/profile substitutions fail verification; a coverage
 report can be reproduced byte-for-byte from committed inputs.
 
+Implementation status: the exact-schema coverage manifest, raw-dataset digest
+verification, basis-point calculator, committed first snapshot, and
+`kotoba -M coverage` command are implemented. Target identity splitting and
+signed conformance-evidence binding remain open Phase 0 work.
+
 ### Phase 1 — Web coverage
 
 - Stabilize `wasm32-browser-kotoba-v1` and its exact import schema.

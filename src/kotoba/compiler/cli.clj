@@ -2,6 +2,7 @@
   (:require [kotoba.compiler.atomic-output :as atomic-output]
             [kotoba.compiler.bounded-edn :as bounded-edn]
             [kotoba.compiler.core :as compiler]
+            [kotoba.compiler.coverage :as coverage]
             [kotoba.compiler.native-executor :as native-executor]
             [kotoba.compiler.receipt :as receipt]
             [kotoba.compiler.runtime-identity :as runtime-identity]
@@ -41,7 +42,7 @@
 (defn exit-code [phase]
   (case phase
     :usage 64
-    (:decode :read :subset :admission :ir :verify) 65
+    (:decode :read :subset :admission :ir :verify :coverage) 65
     (:signature :trust :runtime-identity) 77
     :output 74
     :execute 69
@@ -183,6 +184,10 @@
     (let [receipts (bounded-edn/read-file (second args))
           trust (bounded-edn/read-file (option args "--trust"))]
       (println (pr-str (receipt/verify-chain receipts trust))))
+    "coverage"
+    (let [manifest (bounded-edn/read-file (second args))
+          _ (coverage/verify-dataset! manifest (option args "--dataset"))]
+      (println (pr-str (coverage/report manifest))))
     "check"
     (let [input (kotoba-source! (second args))
           policy-path (option args "--policy")

@@ -4,6 +4,13 @@ The accepted [worldwide 95% platform coverage roadmap](docs/adr/0001-worldwide-9
 defines the planned native, WebAssembly, GPU, NPU, server, mobile, and IoT
 targets. It is a completion plan, not a claim of current platform support.
 
+The first reproducible coverage snapshot can be audited with:
+
+```bash
+bin/kotoba -M coverage data/coverage/interactive-2026-06.edn \
+  --dataset data/coverage/statcounter-os-worldwide-2026-06.csv
+```
+
 The multi-target, deny-by-default compiler for the safe Kotoba language.
 `.kotoba` is the sole admitted source-file format.
 

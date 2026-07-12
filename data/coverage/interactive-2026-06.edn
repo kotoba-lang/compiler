@@ -1,0 +1,19 @@
+{:format :kotoba.coverage-manifest/v1
+ :dataset {:name "StatCounter operating-system market share worldwide"
+           :url "https://gs.statcounter.com/os-market-share"
+           :retrieved-at 1783843200
+           :sha256 "4037d74aaa702d0e05c59a35ea153bb8cfdf98be6f5cb64acb334c01177c744d"}
+ :population :interactive-web
+ :period {:from "2026-06" :to "2026-06"}
+ :observations [{:platform :android :share-bps 3621}
+                {:platform :windows :share-bps 2667}
+                {:platform :ios :share-bps 1662}
+                {:platform :unknown :share-bps 1012}
+                {:platform :macos :share-bps 771}
+                {:platform :other :share-bps 267}]
+ :support [{:platform :android :status :experimental :paths #{:wasm} :evidence []}
+           {:platform :windows :status :unsupported :paths #{} :evidence []}
+           {:platform :ios :status :experimental :paths #{:wasm} :evidence []}
+           {:platform :macos :status :experimental :paths #{:native :wasm} :evidence []}
+           {:platform :other :status :unsupported :paths #{} :evidence []}]
+ :threshold-bps 9500}
