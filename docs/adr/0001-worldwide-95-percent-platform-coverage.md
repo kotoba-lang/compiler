@@ -217,9 +217,10 @@ results, arguments, and fuel exhaustion on Linux x86-64, Linux Arm64, and
 macOS Arm64. The native Linux Arm64 runner also passes the AArch64 W^X loader,
 sanitizer corpus, and 20,000-run architecture-bound libFuzzer gate. A
 digest-pinned container is deployed to a two-replica hardened Kind cluster;
-CI checks sealed execution and recovery after forced pod deletion. Production
-cluster diversity, cancellation, observability, rollout policy, and provenance
-gates remain.
+CI checks sealed execution and recovery after forced pod deletion. Per-request
+Worker isolation also terminates a sealed hostile infinite loop at a one-second
+deadline while preserving service health. Production cluster diversity,
+observability, rollout policy, and provenance gates remain.
 
 - Stabilize Linux x86-64 and AArch64 distribution and container profiles.
 - Add `wasm32-wasi-kotoba-v1` with an exact capability adapter rather than

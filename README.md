@@ -94,6 +94,10 @@ non-root with a read-only root filesystem, RuntimeDefault seccomp, all Linux
 capabilities dropped, no service-account token, and explicit CPU/memory limits.
 Health and execution identities are checked before and after forced pod
 replacement.
+Guest execution runs in a per-request Worker with a one-second deadline. A
+separately constructed sealed infinite-loop module must be terminated while the
+service process remains healthy, providing an explicit cancellation and
+engine-hang containment vector.
 
 The first Windows supervisor slice now executes verifier-extracted x86-64 KEXE
 code on the Windows CI runner. It maps code RW, copies it, transitions it to RX,
