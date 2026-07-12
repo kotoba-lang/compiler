@@ -18,6 +18,7 @@
   (case s "wasm32" :wasm32-kotoba-v1 "x86_64" :x86_64-kotoba-v1
         "aarch64" :aarch64-kotoba-v1
         "wasm32-browser" :wasm32-browser-kotoba-v1
+        "wasm32-wasi" :wasm32-wasi-kotoba-v1
         "x86_64-linux" :x86_64-linux-kotoba-v1
         "x86_64-macos" :x86_64-macos-kotoba-v1
         "x86_64-windows" :x86_64-windows-kotoba-v1

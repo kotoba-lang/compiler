@@ -33,7 +33,7 @@ source -> inert reader -> typed/effect HIR -> SSA-like KIR
 ```
 
 Release-oriented target identities explicitly bind execution format, ISA, OS,
-ABI, and runtime profile. Current explicit names are `wasm32-browser`,
+ABI, and runtime profile. Current explicit names are `wasm32-browser`, `wasm32-wasi`,
 `x86_64-linux`, `x86_64-macos`, `x86_64-windows`, `aarch64-linux`, and `aarch64-macos`.
 The short `wasm32`, `x86_64`, and `aarch64` names remain experimental
 compatibility aliases with `:os :unspecified`; they cannot serve as platform
@@ -42,6 +42,12 @@ whose Windows OS, internal ABI, and supervisor identity are independently
 verified. Native execution and release evidence still fail closed until the
 measured Windows supervisor is trusted for the current host; Windows is not yet
 counted as release coverage.
+
+`wasm32-wasi` is the first server/component profile. Its Wasm custom section
+seals `wasm32-wasi-kotoba-v1`; the dependency-free host rejects missing or
+substituted target identity and admits only `kotoba:cap` and `kotoba:heap`
+functions. Ambient WASI filesystem, socket, clock, random, environment, and
+process imports are rejected before instantiation.
 
 The first Windows supervisor slice now executes verifier-extracted x86-64 KEXE
 code on the Windows CI runner. It maps code RW, copies it, transitions it to RX,
@@ -108,6 +114,7 @@ compact substitution chains cannot amplify into unbounded native code.
 
 ```bash
 bin/kotoba -M compile example.kotoba --target wasm32 --output app.wasm
+bin/kotoba -M compile example.kotoba --target wasm32-wasi --output service.wasm
 bin/kotoba -M compile example.kotoba --target x86_64 --output app.kexe
 bin/kotoba -M compile example.kotoba --target x86_64-windows --output app-windows.kexe
 bin/kotoba -M verify app.kexe

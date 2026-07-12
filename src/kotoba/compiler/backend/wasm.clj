@@ -96,7 +96,7 @@
         body (concat declarations instructions [0x0b])]
     (concat (uleb (count body)) body)))
 
-(defn emit [kir]
+(defn emit [kir target]
   (let [functions (:functions kir)
         has-cap? (contains? (set (map first (:effects kir))) :cap/call)
         heap-ops (let [found (volatile! #{})]
@@ -141,10 +141,12 @@
                                              (uleb (+ index shift))))
                                    (map-indexed vector functions)))
         code-sec (concat (uleb (count functions))
-                         (mapcat #(function-body % indices intrinsic-indices) functions))]
+                         (mapcat #(function-body % indices intrinsic-indices) functions))
+        target-sec (concat (name-bytes "kotoba.target")
+                           (utf8 (name target)))]
     (byte-array
      (map unchecked-byte
-          (concat [0 0x61 0x73 0x6d 1 0 0 0]
+          (concat [0 0x61 0x73 0x6d 1 0 0 0] (section 0 target-sec)
                   (section 1 types) (when (seq imports) (section 2 import-sec))
                   (section 3 function-sec) (section 6 global-sec)
                   (section 7 export-sec) (section 10 code-sec))))))

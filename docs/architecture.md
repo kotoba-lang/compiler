@@ -28,15 +28,16 @@ metadata through the normative KIR executor; effectful programs require nil.
 Targets are versioned contracts:
 
 - `wasm32-kotoba-v1`: portable sandbox target and conformance oracle.
+- `wasm32-wasi-kotoba-v1`: sealed server target with no ambient WASI imports.
 - `x86_64-kotoba-v1`: direct x86-64 instructions in a sealed KEXE container.
 - `x86_64-windows-kotoba-v1`: the same regenerated x86-64 instruction subset,
-  sealed to Windows, the `kotoba-sysv-v1` internal ABI, and the future measured
-  Windows supervisor. This is compile/verify support, not executable support.
+  sealed to Windows, the `kotoba-sysv-v1` internal ABI, and the measured
+  Windows supervisor.
 - `aarch64-kotoba-v1`: direct AArch64 instructions in a sealed KEXE container.
 
 Each emitted result also carries `:kotoba.target-profile/v1`, binding execution
-kind, ISA, OS, ABI, and supervisor/host runtime. Explicit Linux, macOS, and
-browser target names have exact profiles; legacy ISA-only aliases use
+kind, ISA, OS, ABI, and supervisor/host runtime. Explicit Linux, macOS,
+Windows, browser, and WASI target names have exact profiles; legacy ISA-only aliases use
 `:os :unspecified`. Native verification reconstructs the expected profile from
 the target name before regenerating code. The executor additionally requires
 the sealed OS to equal its host OS. Changing only OS, ABI, or runtime and
@@ -184,6 +185,12 @@ import, export, or replenish the counter. Conformance executes factorial and an
 unbounded recursive function, requiring the former to return and the latter to
 trap. Native backends enforce the corresponding hidden fuel context described
 below.
+
+Every emitted Wasm module carries one `kotoba.target` custom section. The WASI
+host requires the canonical value `wasm32-wasi-kotoba-v1` before using the
+closed capability/heap adapter. It supplies no `wasi_snapshot_preview1`
+namespace, so filesystem, network, clock, random, environment, and process
+authority must be separately declared and metered in any future profile.
 
 x86-64 now implements that ABI as `:hidden-context-r9`: the sixth SysV integer
 register is removed from the source ABI and carries a loader-owned pointer to a

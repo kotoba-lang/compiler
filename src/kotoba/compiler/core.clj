@@ -32,7 +32,7 @@
     (if (= backend :wasm32-kotoba-v1)
       {:format :wasm/v1 :target target :target-profile profile
        :hir hir :kir kir :admission admission
-       :limits {:fuel 256 :replenishable? false} :bytes (wasm/emit kir)}
+       :limits {:fuel 256 :replenishable? false} :bytes (wasm/emit kir target)}
       (let [emitted ((case backend
                        :x86_64-kotoba-v1 x86-64/emit-program
                        :aarch64-kotoba-v1 aarch64/emit-program) kir)

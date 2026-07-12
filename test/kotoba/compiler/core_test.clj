@@ -21,7 +21,8 @@
   (let [linux (:artifact (compiler/compile-source source :x86_64-linux-kotoba-v1))
         macos (:artifact (compiler/compile-source source :x86_64-macos-kotoba-v1))
         windows (:artifact (compiler/compile-source source :x86_64-windows-kotoba-v1))
-        browser (compiler/compile-source source :wasm32-browser-kotoba-v1)]
+        browser (compiler/compile-source source :wasm32-browser-kotoba-v1)
+        wasi (compiler/compile-source source :wasm32-wasi-kotoba-v1)]
     (is (= (:code linux) (:code macos)))
     (is (= (:code linux) (:code windows)))
     (is (not= (:sha256 linux) (:sha256 macos)))
@@ -34,6 +35,10 @@
            (:target-profile windows)))
     (is (= :browser (get-in browser [:target-profile :os])))
     (is (= :wasm (get-in browser [:target-profile :execution])))
+    (is (= {:format :kotoba.target-profile/v1 :execution :wasm :isa :wasm32
+            :os :wasi :abi :wasm-mvp :runtime :kotoba-wasi-host-v1}
+           (:target-profile wasi)))
+    (is (not= (seq (:bytes browser)) (seq (:bytes wasi))))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"target profile"
                           (verifier/verify-artifact!
                            (artifact/seal

@@ -324,3 +324,14 @@ separately supervised child. Network denial is not implemented and
 Job/restricted-token behavior has only hosted-runner evidence. Windows Arm64,
 Authenticode/MSIX, SBOM, and provenance gates also remain; these omissions keep
 Windows execution out of release coverage accounting.
+
+## WASI server boundary
+
+The explicit WASI profile is not ambient WASI. Each admitted module must carry
+exactly one canonical `kotoba.target` section naming
+`wasm32-wasi-kotoba-v1`. The host then permits only the fixed Kotoba capability
+and immutable-pair functions; `wasi_snapshot_preview1` and every other import
+namespace fail admission. Target-byte substitution is tested independently of
+module validation. This establishes the authority boundary but does not yet
+prove two-engine portability, component-model composition, service
+cancellation, Kubernetes isolation, or production observability.
