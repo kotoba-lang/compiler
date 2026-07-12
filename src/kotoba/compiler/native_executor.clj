@@ -142,18 +142,26 @@
      :timed-out? (not completed?) :output-exceeded? @output-exceeded?}))
 
 (defn- toolchain-environment [^Path compiler-path]
-  (let [system-root (System/getenv "SystemRoot")]
+  (let [system-root (System/getenv "SystemRoot")
+        windows-vars (when (windows-host?)
+                       (into {}
+                             (keep (fn [name]
+                                     (when-let [value (System/getenv name)]
+                                       [name value])))
+                             ["INCLUDE" "LIB" "LIBPATH"]))]
     (cond->
-     {"PATH" (if (windows-host?)
-               (str (.getParent compiler-path) java.io.File/pathSeparator
-                    system-root "\\System32")
-               (str (.getParent compiler-path) java.io.File/pathSeparator
-                    "/usr/bin" java.io.File/pathSeparator "/bin"))
-      "LANG" "C"
-      "LC_ALL" "C"
-      "TZ" "UTC"
-      "SOURCE_DATE_EPOCH" "0"
-      "ZERO_AR_DATE" "1"}
+     (merge
+      {"PATH" (if (windows-host?)
+                (str (.getParent compiler-path) java.io.File/pathSeparator
+                     system-root "\\System32")
+                (str (.getParent compiler-path) java.io.File/pathSeparator
+                     "/usr/bin" java.io.File/pathSeparator "/bin"))
+       "LANG" "C"
+       "LC_ALL" "C"
+       "TZ" "UTC"
+       "SOURCE_DATE_EPOCH" "0"
+       "ZERO_AR_DATE" "1"}
+      windows-vars)
       system-root (assoc "SystemRoot" system-root))))
 
 (defn- resolve-reported-tool [reported env]
