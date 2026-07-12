@@ -405,7 +405,9 @@
                            (not (:timed-out? dependency-build))
                            (not (:output-exceeded? dependency-build)))
               (throw (ex-info "native compiler dependency scan failed"
-                              {:phase :execute :stderr (:stderr dependency-build)})))
+                              {:phase :execute
+                               :diagnostic (subs (:stderr dependency-build) 0
+                                                 (min 2048 (count (:stderr dependency-build))))})))
           _ (when (> (.length dependency-file) (* 1024 1024))
               (throw (ex-info "compiler dependency file exceeds byte limit"
                               {:phase :execute :limit (* 1024 1024)})))
