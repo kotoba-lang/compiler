@@ -10,7 +10,9 @@
    :x86_64-windows-kotoba-v1 {:format :kotoba.target-profile/v1 :execution :native :isa :x86_64 :os :windows :abi :kotoba-sysv-v1 :runtime :kotoba-windows-supervisor-v1}
    :aarch64-kotoba-v1 {:format :kotoba.target-profile/v1 :execution :native :isa :aarch64 :os :unspecified :abi :aapcs64 :runtime :kotoba-supervisor-v1}
    :aarch64-linux-kotoba-v1 {:format :kotoba.target-profile/v1 :execution :native :isa :aarch64 :os :linux :abi :aapcs64 :runtime :kotoba-linux-supervisor-v1}
-   :aarch64-macos-kotoba-v1 {:format :kotoba.target-profile/v1 :execution :native :isa :aarch64 :os :macos :abi :aapcs64 :runtime :kotoba-macos-supervisor-v1}})
+   :aarch64-macos-kotoba-v1 {:format :kotoba.target-profile/v1 :execution :native :isa :aarch64 :os :macos :abi :aapcs64 :runtime :kotoba-macos-supervisor-v1}
+   :aarch64-android-kotoba-v1 {:format :kotoba.target-profile/v1 :execution :native :isa :aarch64 :os :android :abi :aapcs64 :runtime :kotoba-android-isolated-host-v1}
+   :aarch64-ios-kotoba-v1 {:format :kotoba.target-profile/v1 :execution :native :isa :aarch64 :os :ios :abi :aapcs64 :runtime :kotoba-ios-static-host-v1}})
 
 (def compatibility-targets #{:wasm32-kotoba-v1 :x86_64-kotoba-v1 :aarch64-kotoba-v1})
 (defn profile [target] (get profiles target))

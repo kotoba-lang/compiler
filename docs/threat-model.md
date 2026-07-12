@@ -326,6 +326,16 @@ Job/restricted-token behavior has only hosted-runner evidence. Windows Arm64,
 Authenticode/MSIX, SBOM, and provenance gates also remain; these omissions keep
 Windows execution out of release coverage accounting.
 
+## Mobile artifact boundary
+
+Android and iOS are distinct sealed AArch64 targets even when their admitted
+machine-code bytes match. The verifier reconstructs the named OS, ABI, and
+runtime profile, so resealing Android code as iOS or the reverse fails. This
+does not authorize execution: there is no Android NDK isolated-process host or
+iOS signed static embedding yet, and desktop measured runtimes cannot admit
+either mobile profile. Store packaging, lifecycle bridges, physical-device
+isolation, and OS code signing remain outside the current trusted boundary.
+
 ## WASI server boundary
 
 The explicit WASI profile is not ambient WASI. Each admitted module must carry

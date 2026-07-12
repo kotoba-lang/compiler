@@ -178,6 +178,13 @@ supported, sandbox, signature, receipt, and runtime-identity suites.
 
 ### Phase 3 — Mobile native
 
+Implementation status: explicit `aarch64-android-kotoba-v1` and
+`aarch64-ios-kotoba-v1` compiler targets now bind Android isolated-host and iOS
+static-host identities. Independent regeneration rejects OS/runtime profile
+substitution, and equal AArch64 code still produces distinct sealed artifacts.
+This is compile/verify progress only: no mobile execution or endpoint coverage
+is claimed until the host, packaging, lifecycle, and physical-device gates pass.
+
 - Implement Android AArch64 as an NDK host library with isolated-process and
   application-sandbox integration.
 - Implement iOS/iPadOS AArch64 as signed AOT/static embedding; no runtime JIT or

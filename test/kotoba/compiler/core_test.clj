@@ -21,6 +21,8 @@
   (let [linux (:artifact (compiler/compile-source source :x86_64-linux-kotoba-v1))
         macos (:artifact (compiler/compile-source source :x86_64-macos-kotoba-v1))
         windows (:artifact (compiler/compile-source source :x86_64-windows-kotoba-v1))
+        android (:artifact (compiler/compile-source source :aarch64-android-kotoba-v1))
+        ios (:artifact (compiler/compile-source source :aarch64-ios-kotoba-v1))
         browser (compiler/compile-source source :wasm32-browser-kotoba-v1)
         wasi (compiler/compile-source source :wasm32-wasi-kotoba-v1)]
     (is (= (:code linux) (:code macos)))
@@ -33,6 +35,14 @@
     (is (= {:format :kotoba.target-profile/v1 :execution :native :isa :x86_64
             :os :windows :abi :kotoba-sysv-v1 :runtime :kotoba-windows-supervisor-v1}
            (:target-profile windows)))
+    (is (= {:format :kotoba.target-profile/v1 :execution :native :isa :aarch64
+            :os :android :abi :aapcs64 :runtime :kotoba-android-isolated-host-v1}
+           (:target-profile android)))
+    (is (= {:format :kotoba.target-profile/v1 :execution :native :isa :aarch64
+            :os :ios :abi :aapcs64 :runtime :kotoba-ios-static-host-v1}
+           (:target-profile ios)))
+    (is (= (:code android) (:code ios)))
+    (is (not= (:sha256 android) (:sha256 ios)))
     (is (= :browser (get-in browser [:target-profile :os])))
     (is (= :wasm (get-in browser [:target-profile :execution])))
     (is (= {:format :kotoba.target-profile/v1 :execution :wasm :isa :wasm32
@@ -46,7 +56,11 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"target profile"
                           (verifier/verify-artifact!
                            (artifact/seal
-                            (assoc windows :target-profile (:target-profile linux))))))))
+                            (assoc windows :target-profile (:target-profile linux))))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"target profile"
+                          (verifier/verify-artifact!
+                           (artifact/seal
+                            (assoc android :target-profile (:target-profile ios))))))))
 
 (deftest emits-real-wasm
   (let [bytes (:bytes (compiler/compile-source source :wasm32-kotoba-v1))]

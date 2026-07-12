@@ -24,6 +24,8 @@
         "x86_64-windows" :x86_64-windows-kotoba-v1
         "aarch64-linux" :aarch64-linux-kotoba-v1
         "aarch64-macos" :aarch64-macos-kotoba-v1
+        "aarch64-android" :aarch64-android-kotoba-v1
+        "aarch64-ios" :aarch64-ios-kotoba-v1
         (keyword s)))
 
 (defn- option [args flag] (second (drop-while #(not= flag %) args)))

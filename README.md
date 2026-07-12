@@ -34,7 +34,8 @@ source -> inert reader -> typed/effect HIR -> SSA-like KIR
 
 Release-oriented target identities explicitly bind execution format, ISA, OS,
 ABI, and runtime profile. Current explicit names are `wasm32-browser`, `wasm32-wasi`,
-`x86_64-linux`, `x86_64-macos`, `x86_64-windows`, `aarch64-linux`, and `aarch64-macos`.
+`x86_64-linux`, `x86_64-macos`, `x86_64-windows`, `aarch64-linux`,
+`aarch64-macos`, `aarch64-android`, and `aarch64-ios`.
 The short `wasm32`, `x86_64`, and `aarch64` names remain experimental
 compatibility aliases with `:os :unspecified`; they cannot serve as platform
 release evidence. `x86_64-windows` compilation now emits a reproducible KEXE
@@ -42,6 +43,12 @@ whose Windows OS, internal ABI, and supervisor identity are independently
 verified. Native execution and release evidence still fail closed until the
 measured Windows supervisor is trusted for the current host; Windows is not yet
 counted as release coverage.
+
+The Android and iOS names currently establish compile/verify identity only.
+They produce equal reviewed AArch64 instructions but distinct sealed artifact
+digests and runtime contracts. Android isolated-process loading and iOS signed
+static/AOT embedding are still required before either target is executable or
+counted as native mobile coverage.
 
 `wasm32-wasi` is the first server/component profile. Its Wasm custom section
 seals `wasm32-wasi-kotoba-v1`; the dependency-free host rejects missing or

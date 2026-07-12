@@ -5,7 +5,7 @@
             ["node:path" :as path]))
 
 (def usage
-  ["usage: kotoba -M compile <file.kotoba> --target wasm32-browser|wasm32-wasi|x86_64-linux|x86_64-macos|x86_64-windows|aarch64-linux|aarch64-macos [--policy policy.edn] --output <file>"
+  ["usage: kotoba -M compile <file.kotoba> --target wasm32-browser|wasm32-wasi|x86_64-linux|x86_64-macos|x86_64-windows|aarch64-linux|aarch64-macos|aarch64-android|aarch64-ios [--policy policy.edn] --output <file>"
    "       kotoba -M check <file.kotoba> [--policy policy.edn]"
    "       kotoba -M coverage <coverage-manifest.edn> --dataset <raw-dataset> [--evidence evidence.edn --trust trust.edn --now <epoch>]"
    "       kotoba -M sign-coverage-evidence <claim.edn> --key <key.edn> --output <evidence.edn>"

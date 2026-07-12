@@ -34,6 +34,10 @@ Targets are versioned contracts:
   sealed to Windows, the `kotoba-sysv-v1` internal ABI, and the measured
   Windows supervisor.
 - `aarch64-kotoba-v1`: direct AArch64 instructions in a sealed KEXE container.
+- `aarch64-android-kotoba-v1`: Android AArch64 code sealed to the future
+  isolated application host.
+- `aarch64-ios-kotoba-v1`: iOS/iPadOS AArch64 code sealed to a signed static
+  host; this profile does not imply runtime JIT permission.
 
 Each emitted result also carries `:kotoba.target-profile/v1`, binding execution
 kind, ISA, OS, ABI, and supervisor/host runtime. Explicit Linux, macOS,
@@ -42,6 +46,12 @@ Windows, browser, and WASI target names have exact profiles; legacy ISA-only ali
 the target name before regenerating code. The executor additionally requires
 the sealed OS to equal its host OS. Changing only OS, ABI, or runtime and
 re-sealing the unkeyed artifact is rejected.
+
+Android and iOS currently stop at this artifact boundary. Their regenerated
+instruction bytes are intentionally equal for the admitted AAPCS64 subset, but
+OS and runtime identity make their seals unequal. No desktop loader is allowed
+to execute either profile; mobile host libraries and physical-device admission
+remain separate gates.
 
 KEXE is not mapped by this compiler. The loader must reverify, compare the
 policy/artifact digest, allocate writable non-executable memory, copy code,
