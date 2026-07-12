@@ -20,5 +20,14 @@ jobs:
         with:
           cli: 1.12.5.1654
       - run: npm ci
-      - run: node node_modules/@playwright/test/cli.js install --with-deps chromium firefox webkit
+      - run: node node_modules/@playwright/test/cli.js install --with-deps chromium firefox webkit chrome msedge
       - run: npm run test-browsers
+        env:
+          KOTOBA_BRANDED_BROWSERS: "1"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ !cancelled() }}
+        with:
+          name: browser-evidence
+          path: test-results/browser-evidence.json
+          if-no-files-found: error
+          retention-days: 30

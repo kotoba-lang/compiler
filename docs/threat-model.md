@@ -279,3 +279,11 @@ no-referrer, nosniff, and no-store headers. Browser automation is not counted as
 a sandbox proof: a compromised browser engine remains TCB, and mobile device
 emulation does not exercise a mobile kernel, hardware, JIT policy, or vendor
 browser build.
+
+The browser evidence reporter and its output are not trusted merely because
+tests passed. A separate NBB gate requires the closed receipt schema, exact
+expected project set, version syntax, evidence classes, and GitHub commit/run
+binding before upload. The uploaded artifact is still unsigned CI output and
+can expire; it cannot satisfy platform-release evidence or the worldwide 95%
+claim. Branded Chrome/Edge on Linux do not establish their Windows behavior,
+previous-version compatibility, update-channel integrity, or mobile coverage.

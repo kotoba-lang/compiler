@@ -26,4 +26,5 @@
             "--policy" (.join path root "examples/capability-policy.edn"))
   (run! js/process.execPath [(.join path root "node_modules/@playwright/test/cli.js") "test"]
         {:KOTOBA_BROWSER_ARTIFACTS tmp})
+  (run! "nbb" [(.join path root "scripts/check-browser-evidence.cljs")] {})
   (finally (.rmSync fs tmp #js {:recursive true :force true})))

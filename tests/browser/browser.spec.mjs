@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-test("compiler-produced Wasm passes direct and Worker boundaries", async ({ page }, testInfo) => {
+test("compiler-produced Wasm passes direct and Worker boundaries", async ({ page, browser, browserName }, testInfo) => {
   const pageErrors = [];
   page.on("pageerror", error => pageErrors.push(error.message));
   await page.goto("/index.html");
@@ -15,7 +15,13 @@ test("compiler-produced Wasm passes direct and Worker boundaries", async ({ page
     forged: "invalid-pair-handle"
   });
   expect(pageErrors).toEqual([]);
-  testInfo.annotations.push({ type: "engine", description: testInfo.project.name });
+  const project = testInfo.project.name;
+  const evidenceKind = project.includes("-stable-") ? "branded-browser"
+    : project.includes("-emulation") ? "mobile-emulation" : "engine";
+  testInfo.annotations.push({
+    type: "kotoba-browser-identity",
+    description: JSON.stringify({ project, browserName, version: browser.version(), evidenceKind })
+  });
 });
 
 test("CSP without wasm-unsafe-eval blocks Wasm compilation", async ({ page }) => {

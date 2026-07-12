@@ -126,6 +126,10 @@ progress, not its exit gate. Pinned Chromium, Firefox, and WebKit engine tests
 now execute in CI, including mobile emulation and CSP denial. Branded current
 and previous browser releases, physical mobile devices, and the measured usage
 matrix below are still outstanding and cannot be inferred from engine tests.
+Current branded Chrome Stable and Edge Stable are now exercised on Linux and
+produce commit/run-bound version receipts. This narrows, but does not close,
+the exit gap: Windows/macOS branded runs, previous releases, physical Android
+and iOS, actual Safari, signed evidence, and usage-weighted accounting remain.
 
 - Stabilize `wasm32-browser-kotoba-v1` and its exact import schema.
 - Ship an ES module host, Worker host, capability-policy adapter, CSP guidance,

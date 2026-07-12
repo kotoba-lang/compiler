@@ -232,6 +232,15 @@ CSP intentionally omits `'wasm-unsafe-eval'`. The latter must receive a
 `WebAssembly.CompileError`. Engine results are kept distinct from branded
 browser, OS, and physical-device release evidence.
 
+CI conditionally adds the branded `chrome` and `msedge` Playwright channels on
+an ephemeral Linux runner. A custom reporter emits
+`kotoba.browser-engine-evidence/v1`; an independent NBB gate rejects missing or
+extra projects, malformed versions, schema drift, and commit/run identity
+mismatch. The receipt distinguishes `engine`, `mobile-emulation`, and
+`branded-browser` evidence and is retained for 30 days. It is intentionally not
+accepted by the signed worldwide-coverage manifest until browser/OS/version
+window and trust requirements are implemented.
+
 Native targets implement a sealed context-v1 ABI: version at offset 0, fuel at
 8, a 256-bit allow bitmap at 16, and the sole `cap_call` function pointer at 48.
 Generated code checks the relevant bitmap bit before loading that fixed slot;
