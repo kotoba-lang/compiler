@@ -121,12 +121,27 @@
           (let [pod-name (str/trim (.-stdout (run! "kubectl" ["get" "pods" "-l"
                                                                "app=kotoba-wasi-service"
                                                                "-o" "jsonpath={.items[-1:].metadata.name}"])))]
+            (.kill forward "SIGTERM")
             (run! "kubectl" ["delete" "pod" pod-name "--wait=false"])
             (run! "kubectl" ["rollout" "status" "deployment/kotoba-wasi-service" "--timeout=120s"])
-            (lib/ensure! (.includes (.-stdout (curl! "POST" "/v1/run"
-                                                     "{\"format\":\"kotoba.service-request/v1\",\"entry\":\"main\",\"args\":[]}"))
-                                    "\"result\":\"42\"")
-                         "kind-server: service failed after pod replacement"))
+            (let [replacement-forward
+                  (.spawn child "kubectl" #js ["port-forward" "service/kotoba-wasi-service"
+                                                "18084:8080"]
+                          #js {:cwd lib/root :stdio #js ["ignore" "pipe" "pipe"]})]
+              (try
+                (loop [attempt 0]
+                  (let [health (run! "curl" ["--silent" "--fail" "--max-time" "1"
+                                              "http://127.0.0.1:18084/healthz"] true)]
+                    (when-not (zero? (or (.-status health) 70))
+                      (lib/ensure! (< attempt 50)
+                                   "kind-server: replacement port-forward did not become ready")
+                      (sleep! 100)
+                      (recur (inc attempt)))))
+                (lib/ensure! (.includes (.-stdout (curl! "POST" "/v1/run"
+                                                         "{\"format\":\"kotoba.service-request/v1\",\"entry\":\"main\",\"args\":[]}"))
+                                        "\"result\":\"42\"")
+                             "kind-server: service failed after pod replacement")
+                (finally (.kill replacement-forward "SIGTERM")))))
           (finally (.kill forward "SIGTERM"))))
       (println "kind-server: hardened deployment, two replicas, execution, and pod replacement passed"))
     (finally
