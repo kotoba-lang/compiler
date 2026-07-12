@@ -112,7 +112,12 @@
             (lib/ensure! (and (.includes health digest) (.includes health "wasm32-wasi-kotoba-v1"))
                          "kind-server: health identity mismatch")
             (lib/ensure! (.includes result "\"result\":\"42\"")
-                         "kind-server: execution result mismatch"))
+                         "kind-server: execution result mismatch")
+            (let [metrics (.-stdout (curl! "GET" "/metrics" nil))]
+              (lib/ensure! (and (.includes metrics "kotoba_service_success_total ")
+                                (.includes metrics "kotoba_service_active_workers 0")
+                                (.includes metrics digest))
+                           "kind-server: service metrics mismatch")))
           (let [pod-name (str/trim (.-stdout (run! "kubectl" ["get" "pods" "-l"
                                                                "app=kotoba-wasi-service"
                                                                "-o" "jsonpath={.items[-1:].metadata.name}"])))]

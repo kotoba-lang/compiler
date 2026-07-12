@@ -108,6 +108,11 @@ await withService(hostilePath, 18083, async health => {
   const after = await fetch("http://127.0.0.1:18083/healthz");
   if (!after.ok || health.sha256 !== digest(hostilePath))
     throw new Error("service did not survive cancelled guest");
+  const metrics = await (await fetch("http://127.0.0.1:18083/metrics")).text();
+  if (!metrics.includes("kotoba_service_guest_deadlines_total 1") ||
+      !metrics.includes("kotoba_service_active_workers 0") ||
+      !metrics.includes(digest(hostilePath)))
+    throw new Error("service deadline metrics mismatch");
 });
 
 const mismatch = spawn(process.execPath, [servicePath], {

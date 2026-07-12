@@ -21,6 +21,7 @@ if (actualSha256 !== expectedSha256) throw new Error("sealed service module dige
 await instantiateKotobaWasi(bytes, { expectedSha256 });
 
 let active = 0;
+const metrics = { requests: 0, success: 0, rejected: 0, deadlines: 0 };
 const exactRequest = value => {
   if (value === null || typeof value !== "object" || Array.isArray(value) ||
       Object.getPrototypeOf(value) !== Object.prototype)
@@ -79,7 +80,9 @@ const runGuest = parsed => new Promise((resolve, reject) => {
     callback(value);
   };
   const timer = setTimeout(() => {
-    finish(reject, new Error("guest deadline exceeded"));
+    const error = new Error("guest deadline exceeded");
+    error.code = "guest-deadline";
+    finish(reject, error);
     void worker.terminate();
   }, 1000);
   worker.once("message", value => {
@@ -99,6 +102,26 @@ const server = http.createServer(async (request, response) => {
                              target: "wasm32-wasi-kotoba-v1", sha256: actualSha256 });
     return;
   }
+  if (request.method === "GET" && request.url === "/metrics") {
+    const body = Buffer.from(
+      `# TYPE kotoba_service_requests_total counter\n` +
+      `kotoba_service_requests_total ${metrics.requests}\n` +
+      `# TYPE kotoba_service_success_total counter\n` +
+      `kotoba_service_success_total ${metrics.success}\n` +
+      `# TYPE kotoba_service_rejected_total counter\n` +
+      `kotoba_service_rejected_total ${metrics.rejected}\n` +
+      `# TYPE kotoba_service_guest_deadlines_total counter\n` +
+      `kotoba_service_guest_deadlines_total ${metrics.deadlines}\n` +
+      `# TYPE kotoba_service_active_workers gauge\n` +
+      `kotoba_service_active_workers ${active}\n` +
+      `# TYPE kotoba_service_module_info gauge\n` +
+      `kotoba_service_module_info{target="wasm32-wasi-kotoba-v1",sha256="${actualSha256}"} 1\n`
+    );
+    response.writeHead(200, { "content-type": "text/plain; version=0.0.4; charset=utf-8",
+                              "content-length": body.length, "cache-control": "no-store" });
+    response.end(body);
+    return;
+  }
   if (request.method !== "POST" || request.url !== "/v1/run") {
     respond(response, 404, { format: "kotoba.service-error/v1", error: "not-found" });
     return;
@@ -108,15 +131,19 @@ const server = http.createServer(async (request, response) => {
     return;
   }
   active += 1;
+  metrics.requests += 1;
   try {
     if (request.headers["content-type"] !== "application/json")
       throw new Error("content type rejected");
     const body = await readBody(request);
     const parsed = exactRequest(JSON.parse(body.toString("utf8")));
     const executed = await runGuest(parsed);
+    metrics.success += 1;
     respond(response, 200, { format: "kotoba.service-result/v1", status: "ok",
                              result: executed.result, heap: executed.heap });
-  } catch {
+  } catch (error) {
+    metrics.rejected += 1;
+    if (error?.code === "guest-deadline") metrics.deadlines += 1;
     respond(response, 400, { format: "kotoba.service-error/v1", error: "request-rejected" });
   } finally {
     active -= 1;
