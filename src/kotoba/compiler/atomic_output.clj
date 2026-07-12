@@ -22,7 +22,8 @@
 (defn- set-owner-acl! [^Path path executable?]
   (let [view (Files/getFileAttributeView path AclFileAttributeView
                                          (make-array java.nio.file.LinkOption 0))
-        owner (Files/getOwner path (make-array java.nio.file.LinkOption 0))
+        lookup (.getUserPrincipalLookupService (.getFileSystem path))
+        owner (.lookupPrincipalByName lookup (System/getProperty "user.name"))
         permissions (EnumSet/of AclEntryPermission/READ_DATA
                                 (into-array AclEntryPermission
                                             (cond-> [AclEntryPermission/WRITE_DATA
@@ -42,9 +43,15 @@
                   (.build))]
     (when-not view
       (reject! "Windows ACL output permissions are unsupported" {:path (str path)} nil))
+    ;; Windows runners can create a file owned by the Administrators group even
+    ;; while the process uses a filtered, non-elevated user token.  Restricting
+    ;; that inherited owner would lock the writer out of its own temporary file.
+    ;; Make the actual process user the owner before replacing the inherited ACL.
+    (.setOwner view owner)
     (.setAcl view (Collections/singletonList entry))
     (let [actual (.getAcl view)]
       (when-not (and (= 1 (count actual))
+                     (= owner (Files/getOwner path (make-array java.nio.file.LinkOption 0)))
                      (= owner (.principal ^AclEntry (first actual)))
                      (= AclEntryType/ALLOW (.type ^AclEntry (first actual)))
                      (= permissions (.permissions ^AclEntry (first actual))))
