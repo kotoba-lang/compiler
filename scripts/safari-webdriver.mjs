@@ -97,7 +97,13 @@ try {
     url: `http://127.0.0.1:${fixturePort}/tests/browser/csp-blocked.html`
   });
   status = await element(session, "#status");
-  await waitAttribute(session, status, "data-result", "passed");
+  try {
+    await waitAttribute(session, status, "data-result", "passed");
+  } catch (error) {
+    const observed = await webdriver("GET", `/session/${session}/element/${status}/text`);
+    const safeObserved = String(observed ?? "unknown").replace(/[^A-Za-z0-9_-]/g, "?").slice(0, 64);
+    throw new Error(`Safari CSP observation: ${safeObserved}`, { cause: error });
+  }
   const text = await webdriver("GET", `/session/${session}/element/${status}/text`);
   if (text !== "wasm-blocked") throw new Error("Safari CSP denial mismatch");
 
