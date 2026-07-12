@@ -130,7 +130,8 @@ static HANDLE restricted_token(void) {
   HANDLE process_token = NULL, token = NULL;
   PSID low_sid = NULL;
   TOKEN_MANDATORY_LABEL label;
-  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_IMPERSONATE,
+  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_IMPERSONATE |
+                        TOKEN_ADJUST_DEFAULT | TOKEN_ASSIGN_PRIMARY,
                         &process_token)) fail_win("OpenProcessToken");
   if (!CreateRestrictedToken(process_token, DISABLE_MAX_PRIVILEGE | LUA_TOKEN,
                              0, NULL, 0, NULL, 0, NULL, &token))
