@@ -1,6 +1,7 @@
 #!/usr/bin/env nbb
 (ns kotoba-native-fuzz
   (:require [clojure.string :as str]
+            [cljs.reader :as reader]
             [scripts.lib :as lib]
             ["node:fs" :as fs]
             ["node:os" :as os]
@@ -70,11 +71,18 @@
           cov (number-field done #"cov: ([0-9]+)" "coverage")
           features (number-field done #"ft: ([0-9]+)" "features")
           corpus-count (number-field done #"corp: ([0-9]+)/" "corpus")
-          baseline (lib/read-text (lib/join lib/root "fuzz" "baselines" "native-parser.edn"))
-          min-cov (number-field baseline #":min-cov ([0-9]+)" "minimum coverage")
-          min-features (number-field baseline #":min-features ([0-9]+)" "minimum features")
-          min-corpus (number-field baseline #":min-corpus ([0-9]+)" "minimum corpus")
-          [_ expected] (re-find #":loader-source-sha256 \"([0-9a-f]{64})\"" baseline)
+          baseline (reader/read-string
+                    (lib/read-text (lib/join lib/root "fuzz" "baselines" "native-parser.edn")))
+          architecture (keyword (.-arch js/process))
+          profile (get-in baseline [:profiles architecture])
+          _ (lib/ensure! (and (= :kotoba.fuzz-baseline/v2 (:format baseline))
+                              (= #{:format :loader-source-sha256 :profiles} (set (keys baseline)))
+                              (= #{:x64 :arm64} (set (keys (:profiles baseline))))
+                              (= #{:min-cov :min-features :min-corpus} (set (keys profile)))
+                              (every? #(and (integer? %) (pos? %)) (vals profile)))
+                         "native-fuzz: architecture baseline rejected")
+          {:keys [min-cov min-features min-corpus]} profile
+          expected (:loader-source-sha256 baseline)
           actual (lib/sha256 (lib/join lib/root "tools" "kexe_loader.c"))]
       (lib/ensure! (= expected actual) "native-fuzz: coverage baseline does not match loader source")
       (lib/ensure! (and (>= cov min-cov) (>= features min-features)
@@ -82,7 +90,8 @@
                    (str "native-fuzz: coverage regression: cov=" cov "/" min-cov
                         " features=" features "/" min-features
                         " corpus=" corpus-count "/" min-corpus))
-      [(str "{:format :kotoba.fuzz-coverage/v1 :engine :libfuzzer :seed " seed
+      [(str "{:format :kotoba.fuzz-coverage/v1 :engine :libfuzzer :arch " architecture
+            " :seed " seed
             " :cov " cov " :features " features " :corpus " corpus-count
             " :limit \"" label "\"}") label "coverage-guided"])))
 

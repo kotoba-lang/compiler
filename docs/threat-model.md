@@ -225,7 +225,8 @@ symlink, size, and empty-corpus rejection.
 
 Linux fuzz runs parse libFuzzer's terminal `DONE` record into a machine-readable
 `:kotoba.fuzz-coverage/v1` artifact. Edge coverage, feature count, and corpus
-count must meet a reviewed lower bound. The baseline includes the exact raw
+count must meet a reviewed architecture-specific lower bound. Baseline v2
+admits only x64 and Arm64 profiles and includes the exact raw
 SHA-256 of `kexe_loader.c`; source changes require an explicit baseline review
 instead of silently inheriting old numbers. These values are regression alarms,
 not a claim of complete path coverage. A fixed libFuzzer seed makes short-run

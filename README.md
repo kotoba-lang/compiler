@@ -402,11 +402,13 @@ mutable tags, unpinned toolchains, and reintroduced `.sh` execution files.
 
 Linux libFuzzer emits `:kotoba.fuzz-coverage/v1` summaries containing edge
 coverage, feature count, and corpus count. CI compares them with the reviewed
-baseline in `fuzz/baselines/native-parser.edn`. The baseline is bound to the raw
+architecture-specific baseline in `fuzz/baselines/native-parser.edn`. Baseline
+v2 is bound to the raw
 loader-source SHA-256, so a C change cannot silently reuse stale coverage
 expectations. Linux runs use the fixed libFuzzer seed `424242`; current minimums
-are cov 60, features 100, and corpus 20. The feature threshold intentionally
-allows bounded differences between fixed-run and wall-time workflows.
+are x64 cov 60/features 100/corpus 20 and Arm64 cov 60/features 100/corpus 18.
+The separate corpus floors account for deterministic architecture-dependent
+instrumentation and minimization without weakening either coverage threshold.
 
 The managed compiler boundary also runs 600 deterministic frontend mutations:
 300 edits of a valid structured program and 300 raw grammar inputs. Any accepted
