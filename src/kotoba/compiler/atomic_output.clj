@@ -3,7 +3,9 @@
            [java.nio.channels FileChannel]
            [java.nio.charset StandardCharsets]
            [java.nio.file CopyOption Files OpenOption Path Paths StandardCopyOption StandardOpenOption]
-           [java.nio.file.attribute FileAttribute PosixFilePermissions]))
+           [java.nio.file.attribute AclEntry AclEntryPermission AclEntryType
+            AclFileAttributeView FileAttribute PosixFilePermissions]
+           [java.util Collections EnumSet]))
 
 (defn- reject! [message data cause]
   (throw (ex-info message (merge {:phase :output} data) cause)))
@@ -17,17 +19,54 @@
       (reject! "output parent must be a directory" {:path path} nil))
     target))
 
+(defn- set-owner-acl! [^Path path executable?]
+  (let [view (Files/getFileAttributeView path AclFileAttributeView
+                                         (make-array java.nio.file.LinkOption 0))
+        owner (Files/getOwner path (make-array java.nio.file.LinkOption 0))
+        permissions (EnumSet/of AclEntryPermission/READ_DATA
+                                (into-array AclEntryPermission
+                                            (cond-> [AclEntryPermission/WRITE_DATA
+                                                     AclEntryPermission/APPEND_DATA
+                                                     AclEntryPermission/READ_ATTRIBUTES
+                                                     AclEntryPermission/WRITE_ATTRIBUTES
+                                                     AclEntryPermission/READ_ACL
+                                                     AclEntryPermission/WRITE_ACL
+                                                     AclEntryPermission/WRITE_OWNER
+                                                     AclEntryPermission/DELETE
+                                                     AclEntryPermission/SYNCHRONIZE]
+                                              executable? (conj AclEntryPermission/EXECUTE))))
+        entry (-> (AclEntry/newBuilder)
+                  (.setType AclEntryType/ALLOW)
+                  (.setPrincipal owner)
+                  (.setPermissions permissions)
+                  (.build))]
+    (when-not view
+      (reject! "Windows ACL output permissions are unsupported" {:path (str path)} nil))
+    (.setAcl view (Collections/singletonList entry))
+    (let [actual (.getAcl view)]
+      (when-not (and (= 1 (count actual))
+                     (= owner (.principal ^AclEntry (first actual)))
+                     (= AclEntryType/ALLOW (.type ^AclEntry (first actual)))
+                     (= permissions (.permissions ^AclEntry (first actual))))
+        (reject! "owner-only Windows ACL could not be verified" {:path (str path)} nil)))))
+
 (defn- set-private-permissions! [^Path path]
   (try
     (Files/setPosixFilePermissions path (PosixFilePermissions/fromString "rw-------"))
     (catch UnsupportedOperationException error
-      (reject! "private output permissions are unsupported" {:path (str path)} error))))
+      (try (set-owner-acl! path false)
+           (catch clojure.lang.ExceptionInfo nested (throw nested))
+           (catch Exception nested
+             (reject! "private output permissions are unsupported" {:path (str path)} nested))))))
 
 (defn- set-executable-permissions! [^Path path]
   (try
     (Files/setPosixFilePermissions path (PosixFilePermissions/fromString "rwx------"))
     (catch UnsupportedOperationException error
-      (reject! "executable output permissions are unsupported" {:path (str path)} error))))
+      (try (set-owner-acl! path true)
+           (catch clojure.lang.ExceptionInfo nested (throw nested))
+           (catch Exception nested
+             (reject! "executable output permissions are unsupported" {:path (str path)} nested))))))
 
 (defn write-bytes!
   ([path bytes] (write-bytes! path bytes {}))
