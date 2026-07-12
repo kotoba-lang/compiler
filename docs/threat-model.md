@@ -260,3 +260,13 @@ the expected artifact digest and must not translate `unexpected-host-error`
 into attacker-visible exception details. Worker isolation, CSP, cross-origin
 isolation, browser-version testing, and denial probes remain required before the
 web target can be promoted from experimental evidence to release coverage.
+
+Worker messages are also hostile. The v1 protocol rejects unknown fields,
+unbounded or malformed correlation IDs, non-i64 arguments, unsupported
+operations, and overlapping execution. It never accepts source URLs, JavaScript
+functions, capability implementations, arbitrary export names, or diagnostic
+verbosity. The worker URL and install-time capability Map remain embedding TCB.
+The recommended CSP admits only same-origin scripts/workers and the narrower
+`'wasm-unsafe-eval'` compilation sink; it excludes blob/data workers and
+JavaScript `'unsafe-eval'`. Network fetch remains embedding authority rather
+than guest authority.

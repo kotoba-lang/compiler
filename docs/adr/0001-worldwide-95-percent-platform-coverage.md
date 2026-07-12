@@ -120,8 +120,10 @@ exact v1 import schema, optional SHA-256 artifact identity, a private bounded
 pair heap, runtime capability checks, closed options, export restrictions, and
 deterministic trap classes. Conformance executes compiler-produced Wasm through
 this product host and includes forged-import, forged-handle, policy, heap, and
-digest denial vectors. This is Phase 1 progress, not its exit gate: Worker/CSP
-packaging and the measured real-browser matrix below are still outstanding.
+digest denial vectors. The closed one-shot module Worker host and restrictive
+same-origin CSP profile are also implemented and gated. This is Phase 1
+progress, not its exit gate: automated real-browser execution and the measured
+browser matrix below are still outstanding.
 
 - Stabilize `wasm32-browser-kotoba-v1` and its exact import schema.
 - Ship an ES module host, Worker host, capability-policy adapter, CSP guidance,

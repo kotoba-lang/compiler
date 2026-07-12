@@ -11,6 +11,7 @@
     "review-fuzz": "nbb scripts/review-fuzz-corpus.cljs",
     "test-review-fuzz": "nbb scripts/test-review-fuzz-corpus.cljs",
     "check-workflows": "nbb scripts/check-workflows.cljs",
-    "test-browser-host": "nbb scripts/test-browser-host.cljs"
+    "test-browser-host": "nbb scripts/test-browser-host.cljs",
+    "test-worker-host": "nbb scripts/test-worker-host.cljs"
   }
 }

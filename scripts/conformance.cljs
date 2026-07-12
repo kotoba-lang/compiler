@@ -29,8 +29,9 @@
                               "\n" (:stderr value)))))
      value)))
 
-(defn k [& args] (run kotoba (into ["-M"] args)))
-(defn k-fail [& args] (run kotoba (into ["-M"] args) {:allow-failure? true}))
+(defn k [& args] (run "nbb" (into [kotoba "-M"] args)))
+(defn k-fail [& args]
+  (run "nbb" (into [kotoba "-M"] args) {:allow-failure? true}))
 (defn contains-text? [text needle] (not= -1 (.indexOf text needle)))
 (defn offset [artifact isa symbol suffix]
   (let [output (file (str isa "-" symbol suffix ".bin"))

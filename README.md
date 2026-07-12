@@ -134,6 +134,16 @@ const hosted = await instantiateKotoba(wasmBytes, {
 const result = hosted.instance.exports.main();
 ```
 
+`runtime/worker-host.mjs` adds a closed one-shot module-worker protocol. Each
+request binds a bounded ID, exact operation, Wasm bytes, expected digest,
+runtime capability allowlist, and at most five i64 arguments. The worker
+serializes execution, rejects unknown fields and concurrent requests, and
+returns only the result, digest, heap report, or normalized error class.
+Capability handlers are trusted install-time functions in the static worker
+entry; guest messages cannot introduce executable callbacks or ambient APIs.
+The deployment profile in `runtime/CSP.md` uses same-origin static workers and
+the narrow CSP `'wasm-unsafe-eval'` token, never JavaScript `'unsafe-eval'`.
+
 The test gate generates a deterministic 100-program property corpus across
 arithmetic, comparisons, `if`, lexical `let`, and direct calls. Every program is
 compiled to all three targets; the gate requires identical KIR, deterministic

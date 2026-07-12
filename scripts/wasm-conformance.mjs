@@ -4,6 +4,7 @@ import {
   instantiateKotoba,
   normalizeKotobaTrap
 } from "../runtime/browser-host.mjs";
+import { createKotobaWorkerHandler } from "../runtime/worker-host.mjs";
 
 const [programPath, fuelPath, i64Path, capabilityPath, heapPath, listPath] = process.argv.slice(2);
 const instantiate = async (file, options) =>
@@ -59,6 +60,24 @@ const instantiate = async (file, options) =>
   let denied;
   try { result.instance.exports.helper(41n); } catch (error) { denied = normalizeKotobaTrap(error); }
   if (denied?.code !== "capability-denied") throw new Error("runtime capability denial was bypassed");
+
+  const responses = [];
+  const worker = createKotobaWorkerHandler({
+    capabilities: new Map([[7, value => value + 1n]])
+  });
+  await worker({
+    target: { postMessage: response => responses.push(response) },
+    data: {
+      format: "kotoba.worker-request/v1",
+      id: "capability-vector",
+      op: "run",
+      wasm: bytes,
+      allowCapabilities: [7],
+      args: []
+    }
+  });
+  if (responses[0]?.status !== "ok" || responses[0]?.result !== 42n)
+    throw new Error("worker capability adapter mismatch");
 }
 
 {

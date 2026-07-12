@@ -4,11 +4,16 @@
   "type": "module",
   "sideEffects": false,
   "exports": {
-    ".": "./browser-host.mjs"
+    ".": "./browser-host.mjs",
+    "./worker": "./worker-host.mjs",
+    "./worker-entry": "./worker-entry.mjs"
   },
   "files": [
     "browser-host.mjs",
-    "README.md"
+    "worker-host.mjs",
+    "worker-entry.mjs",
+    "README.md",
+    "CSP.md"
   ],
   "license": "Apache-2.0"
 }

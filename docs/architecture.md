@@ -213,6 +213,16 @@ policy/host rejection, guest Wasm traps, and unexpected host failures without
 exposing engine messages. A Worker wrapper, CSP deployment profile, and real
 browser release matrix remain Phase 1 roadmap work.
 
+The Worker host wraps that same admission boundary in a closed
+`kotoba.worker-request/v1` one-shot protocol. It accepts only `run`, a bounded
+request ID, module bytes and digest, an allowlist, and up to five i64 `bigint`
+arguments. Execution is serialized per worker; a concurrent request is denied
+instead of creating another arena or authority set. Results use
+`kotoba.worker-response/v1` and contain no stack, engine message, source, or
+path. Capability implementations are copied from an install-time trusted Map
+inside the static worker entry. They cannot be transferred through the message
+channel. The stock entry therefore runs only pure modules.
+
 Native targets implement a sealed context-v1 ABI: version at offset 0, fuel at
 8, a 256-bit allow bitmap at 16, and the sole `cap_call` function pointer at 48.
 Generated code checks the relevant bitmap bit before loading that fixed slot;
