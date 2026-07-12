@@ -5,6 +5,7 @@
             [kotoba.compiler.core :as compiler]
             [kotoba.compiler.coverage :as coverage]
             [kotoba.compiler.coverage-evidence :as coverage-evidence]
+            [kotoba.compiler.ios-aot :as ios-aot]
             [kotoba.compiler.native-executor :as native-executor]
             [kotoba.compiler.receipt :as receipt]
             [kotoba.compiler.runtime-identity :as runtime-identity]
@@ -238,6 +239,16 @@
         (atomic-output/write-bytes! output (:bytes result))
         (atomic-output/write-edn! output (:artifact result)))
       (println (pr-str {:ok true :target target :output output})))
+    "package-ios"
+    (let [input (bounded-edn/read-file (second args))
+          entry (symbol (or (option args "--entry") "main"))
+          output (or (option args "--output") "kotoba-ios-program.S")
+          manifest-output (or (option args "--manifest-output") (str output ".edn"))
+          packaged (ios-aot/package input entry)]
+      (atomic-output/write-bytes! output (:assembly packaged))
+      (atomic-output/write-edn! manifest-output (:manifest packaged))
+      (println (pr-str {:ok true :target (:target input) :entry entry
+                        :output output :manifest-output manifest-output})))
     "verify"
     (let [artifact (bounded-edn/read-file (second args))]
       (verifier/verify-artifact! artifact)
