@@ -80,7 +80,14 @@ try {
 
   await webdriver("POST", `/session/${session}/url`, { url: `http://127.0.0.1:${fixturePort}/index.html` });
   let status = await element(session, "#status");
-  await waitAttribute(session, status, "data-result", "passed");
+  try {
+    await waitAttribute(session, status, "data-result", "passed");
+  } catch (error) {
+    const failedReport = await element(session, "#report");
+    const failed = JSON.parse(await webdriver("GET", `/session/${session}/element/${failedReport}/text`));
+    const safeStage = String(failed.stage ?? "unknown").replace(/[^A-Za-z0-9_-]/g, "?").slice(0, 64);
+    throw new Error(`Safari fixture failed at stage: ${safeStage}`, { cause: error });
+  }
   const reportElement = await element(session, "#report");
   const report = JSON.parse(await webdriver("GET", `/session/${session}/element/${reportElement}/text`));
   if (report.format !== "kotoba.browser-conformance/v1" || report.forged !== "invalid-pair-handle")
