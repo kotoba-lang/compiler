@@ -24,6 +24,7 @@ jobs:
           cli: 1.12.5.1654
       - run: npm ci
       - run: npx nbb scripts/check-workflows.cljs
+      - run: npm run test-browser-host
       - run: clojure -M:test
         env:
           KOTOBA_FUZZ_SEED: "5426643073673934426"

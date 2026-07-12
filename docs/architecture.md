@@ -188,6 +188,31 @@ already present in inferred effects and admitted policy. The runtime host still
 intersects its local allow set on every invocation; compile-time admission is
 never treated as runtime authority.
 
+## Browser Wasm host
+
+`runtime/browser-host.mjs` implements the first product host for
+`wasm32-browser-kotoba-v1`. It is a browser-native ES module because that file
+is itself the distributable runtime; repository orchestration and gates remain
+NBB programs. Admission copies at most 1 MiB of input, computes SHA-256 through
+Web Crypto, validates an optional expected digest, compiles the module, and
+examines the engine-reported import and export descriptors before instantiation.
+
+The complete admitted import identity is the tuple `(module, name, kind)` for
+`kotoba:cap/call` and the three `kotoba:heap` pair functions. Every other import
+is rejected. `main` must be a function and no memory, table, or global may be
+exported. The host creates a fresh private 4,096-cell immutable arena for each
+instance and validates every handle. Capability IDs are a unique bounded u8
+set; the host policy is checked again on every dynamic call and implementations
+must return an i64-compatible `bigint`.
+
+The API accepts only `expectedSha256`, `allowCapabilities`, and `capCall`.
+Unknown options fail closed so later additions cannot silently acquire ambient
+authority. The host does not construct imports for DOM, fetch, storage, time,
+randomness, threads, or dynamic linking. Stable trap normalization distinguishes
+policy/host rejection, guest Wasm traps, and unexpected host failures without
+exposing engine messages. A Worker wrapper, CSP deployment profile, and real
+browser release matrix remain Phase 1 roadmap work.
+
 Native targets implement a sealed context-v1 ABI: version at offset 0, fuel at
 8, a 256-bit allow bitmap at 16, and the sole `cap_call` function pointer at 48.
 Generated code checks the relevant bitmap bit before loading that fixed slot;

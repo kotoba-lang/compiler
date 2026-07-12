@@ -114,6 +114,26 @@ add/subtract/multiply wrap modulo 2^64; invalid division traps. CI compares
 boundary vectors with Wasm and the native ISA available on each runner, so
 compile-time validation cannot silently use different arithmetic semantics.
 
+`runtime/browser-host.mjs` is the dependency-free browser execution boundary
+for `wasm32-browser-kotoba-v1`. It copies and byte-caps the input, measures its
+SHA-256 with Web Crypto, optionally requires an expected digest, and admits only
+the four exact `kotoba:cap` / `kotoba:heap` function imports. It rejects exposed
+memory, tables, and globals, rechecks capabilities at every call, and owns the
+private 4,096-cell pair arena. Host errors and Wasm traps are reduced to stable,
+non-diagnostic codes. The module intentionally receives no DOM, network,
+storage, clock, randomness, or dynamic-linking authority.
+
+```js
+import { instantiateKotoba } from "./runtime/browser-host.mjs";
+
+const hosted = await instantiateKotoba(wasmBytes, {
+  expectedSha256: artifactDigest,
+  allowCapabilities: [7],
+  capCall: (id, value) => value
+});
+const result = hosted.instance.exports.main();
+```
+
 The test gate generates a deterministic 100-program property corpus across
 arithmetic, comparisons, `if`, lexical `let`, and direct calls. Every program is
 compiled to all three targets; the gate requires identical KIR, deterministic

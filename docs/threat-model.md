@@ -240,3 +240,23 @@ Rejected inputs must surface a controlled `:read`, `:subset`, `:admission`,
 scan caps delimiter depth at 512; source type and 1 MiB size are checked, and
 integer literals are restricted to the signed i64 domain. This prevents parser
 stack pressure and host big-integer values from crossing into the runtime ABI.
+
+## Browser host boundary
+
+The browser host treats Wasm bytes, expected digests, capability policy, guest
+arguments, capability results, and pair handles as attacker-controlled. Before
+instantiation it copies and caps the bytes, computes their Web Crypto SHA-256,
+checks the exact engine-reported import/export surface, and creates fresh
+per-instance capability and heap closures. Forged, stale, zero, negative, and
+future pair handles fail before indexing. Capability authority is a bounded u8
+allow set and is rechecked at the dynamic call boundary.
+
+The host deliberately provides no ambient browser object. This prevents a guest
+module from naming DOM, network, storage, clock, randomness, or module-loading
+APIs through Wasm imports. It does not claim to defend against a compromised
+JavaScript realm, browser engine, Web Crypto implementation, or embedding page:
+those are trusted computing base. The embedding application must authenticate
+the expected artifact digest and must not translate `unexpected-host-error`
+into attacker-visible exception details. Worker isolation, CSP, cross-origin
+isolation, browser-version testing, and denial probes remain required before the
+web target can be promoted from experimental evidence to release coverage.

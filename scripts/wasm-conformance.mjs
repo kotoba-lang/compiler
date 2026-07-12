@@ -1,10 +1,16 @@
 import fs from "node:fs";
+import {
+  browserProfile,
+  instantiateKotoba,
+  normalizeKotobaTrap
+} from "../runtime/browser-host.mjs";
 
 const [programPath, fuelPath, i64Path, capabilityPath, heapPath, listPath] = process.argv.slice(2);
-const instantiate = (file, imports = {}) => WebAssembly.instantiate(fs.readFileSync(file), imports);
+const instantiate = async (file, options) =>
+  (await instantiateKotoba(fs.readFileSync(file), options)).instance;
 
 {
-  const { instance } = await instantiate(programPath);
+  const instance = await instantiate(programPath);
   const e = instance.exports;
   if (e.main() !== 42n || e.score(-7n, 2n) !== 12n || e.calc(20n, 4n) !== 21n)
     throw new Error("structured Wasm result mismatch");
@@ -18,7 +24,7 @@ const instantiate = (file, imports = {}) => WebAssembly.instantiate(fs.readFileS
 }
 
 {
-  const { instance } = await instantiate(fuelPath);
+  const instance = await instantiate(fuelPath);
   if (instance.exports.fact(10n) !== 3628800n) throw new Error("finite recursion mismatch");
   let trapped = false;
   try { instance.exports.forever(0n); } catch (error) { trapped = error instanceof WebAssembly.RuntimeError; }
@@ -26,7 +32,7 @@ const instantiate = (file, imports = {}) => WebAssembly.instantiate(fs.readFileS
 }
 
 {
-  const { instance: { exports: e } } = await instantiate(i64Path);
+  const { exports: e } = await instantiate(i64Path);
   const vectors = [
     ["add", [9223372036854775807n, 1n], -9223372036854775808n],
     ["subtract", [-9223372036854775808n, 1n], 9223372036854775807n],
@@ -41,52 +47,54 @@ const instantiate = (file, imports = {}) => WebAssembly.instantiate(fs.readFileS
 
 {
   const bytes = fs.readFileSync(capabilityPath);
-  let result = await WebAssembly.instantiate(bytes, { "kotoba:cap": { call(cap, value) {
-    if (cap !== 7n) throw new Error("capability denied");
-    return value + 1n;
-  } } });
+  let result = await instantiateKotoba(bytes, {
+    allowCapabilities: [7],
+    capCall(id, value) {
+      if (id !== 7) throw new Error("unexpected capability id");
+      return value + 1n;
+    }
+  });
   if (result.instance.exports.helper(41n) !== 42n) throw new Error("capability result mismatch");
-  result = await WebAssembly.instantiate(bytes, { "kotoba:cap": { call() {
-    throw new Error("runtime capability denied");
-  } } });
-  let denied = false;
-  try { result.instance.exports.helper(41n); } catch (error) { denied = /runtime capability denied/.test(error.message); }
-  if (!denied) throw new Error("runtime capability denial was bypassed");
-}
-
-function boundedHeap() {
-  const cells = [];
-  const checked = handle => {
-    if (typeof handle !== "bigint" || handle <= 0n || handle > BigInt(cells.length))
-      throw new WebAssembly.RuntimeError("invalid pair handle");
-    return cells[Number(handle - 1n)];
-  };
-  return { cells, imports: { "kotoba:heap": {
-    pair(first, second) {
-      if (cells.length >= 4096) throw new WebAssembly.RuntimeError("heap exhausted");
-      cells.push([first, second]);
-      return BigInt(cells.length);
-    },
-    "pair-first": handle => checked(handle)[0],
-    "pair-second": handle => checked(handle)[1]
-  } } };
+  result = await instantiateKotoba(bytes, { allowCapabilities: [], capCall: () => 42n });
+  let denied;
+  try { result.instance.exports.helper(41n); } catch (error) { denied = normalizeKotobaTrap(error); }
+  if (denied?.code !== "capability-denied") throw new Error("runtime capability denial was bypassed");
 }
 
 {
-  const heap = boundedHeap();
-  const { instance } = await instantiate(heapPath, heap.imports);
-  if (instance.exports.main() !== 42n || heap.cells.length !== 2)
+  const hosted = await instantiateKotoba(fs.readFileSync(heapPath));
+  if (hosted.instance.exports.main() !== 42n || hosted.report().heap.used !== 2)
     throw new Error("bounded pair arena mismatch");
-  let forged = false;
-  try { instance.exports.forged(4096n); } catch (error) { forged = error instanceof WebAssembly.RuntimeError; }
-  if (!forged) throw new Error("forged pair handle was accepted");
+  let forged;
+  try { hosted.instance.exports.forged(4096n); } catch (error) { forged = normalizeKotobaTrap(error); }
+  if (forged?.code !== "invalid-pair-handle") throw new Error("forged pair handle was accepted");
 }
 
 {
-  const heap = boundedHeap();
-  const { instance } = await instantiate(listPath, heap.imports);
-  if (instance.exports.main() !== 42n || heap.cells.length !== 2)
+  const hosted = await instantiateKotoba(fs.readFileSync(listPath));
+  if (hosted.instance.exports.main() !== 42n || hosted.report().heap.used !== 2)
     throw new Error("persistent list mismatch");
+}
+
+{
+  const bytes = fs.readFileSync(programPath);
+  const hosted = await instantiateKotoba(bytes);
+  await instantiateKotoba(bytes, { expectedSha256: hosted.sha256 });
+  let mismatch;
+  try { await instantiateKotoba(bytes, { expectedSha256: "0".repeat(64) }); }
+  catch (error) { mismatch = normalizeKotobaTrap(error); }
+  if (mismatch?.code !== "digest-mismatch") throw new Error("module digest mismatch was accepted");
+  const forbiddenImport = Uint8Array.from([
+    0,97,115,109,1,0,0,0,
+    1,4,1,96,0,0,
+    2,13,1,4,101,118,105,108,4,99,97,108,108,0,0
+  ]);
+  let forbidden;
+  try { await instantiateKotoba(forbiddenImport); }
+  catch (error) { forbidden = normalizeKotobaTrap(error); }
+  if (forbidden?.code !== "forbidden-import") throw new Error("forbidden Wasm import was accepted");
+  if (browserProfile.pairCapacity !== 4096 || browserProfile.maxModuleBytes !== 1048576)
+    throw new Error("browser host profile limits changed");
 }
 
 console.log("conformance: Wasm runtime, fuel, i64, capability, pair, and list vectors passed");

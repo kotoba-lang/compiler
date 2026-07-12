@@ -1,0 +1,14 @@
+{
+  "name": "@kotoba-lang/browser-runtime",
+  "version": "0.1.0",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./browser-host.mjs"
+  },
+  "files": [
+    "browser-host.mjs",
+    "README.md"
+  ],
+  "license": "Apache-2.0"
+}
