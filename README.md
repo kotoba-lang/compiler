@@ -1,7 +1,7 @@
 # Kotoba Compiler
 
-The multi-target, deny-by-default compiler for safe Kotoba (`.kotoba`) and the
-portable safe `.cljc` profile.
+The multi-target, deny-by-default compiler for the safe Kotoba language.
+`.kotoba` is the sole admitted source-file format.
 
 ```text
 source -> inert reader -> typed/effect HIR -> SSA-like KIR

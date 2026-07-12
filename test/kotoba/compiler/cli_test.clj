@@ -38,3 +38,16 @@
     (is (= :kotoba.cli-error/v1 (:format report)))
     (is (= :usage (:error report)))
     (is (not (re-find #"Exception|\.clj:|Full report" stderr)))))
+
+(deftest compile-and-check-require-kotoba-source-files
+  (doseq [command ["compile" "check"]
+          path ["program.clj" "program.cljc" "program.KOTOBA" "program"]]
+    (let [status (atom nil)
+          writer (StringWriter.)]
+      (binding [cli/*exit* #(reset! status %)
+                *err* writer]
+        (cli/-main command path))
+      (let [report (edn/read-string (str writer))]
+        (is (= 64 @status))
+        (is (= :usage (:error report)))
+        (is (= "source input must use the .kotoba extension" (:message report)))))))

@@ -16,8 +16,8 @@ case "${1-}" in
   -M:compiler|-M:compile) shift ;;
   -h|--help|"")
     printf '%s\n' \
-      'usage: kotoba -M compile <file> --target wasm32|x86_64|aarch64 [--policy policy.edn] --output <file>' \
-      '       kotoba -M check <file> [--policy policy.edn]' \
+      'usage: kotoba -M compile <file.kotoba> --target wasm32|x86_64|aarch64 [--policy policy.edn] --output <file>' \
+      '       kotoba -M check <file.kotoba> [--policy policy.edn]' \
       '       kotoba -M keygen --output key.edn' \
       '       kotoba -M public-key key.edn --output verification-key.edn' \
       '       kotoba -M trust-key verification-key.edn --output trust.edn' \

@@ -6,7 +6,8 @@
             [kotoba.compiler.receipt :as receipt]
             [kotoba.compiler.runtime-identity :as runtime-identity]
             [kotoba.compiler.signing :as signing]
-            [kotoba.compiler.verifier :as verifier])
+            [kotoba.compiler.verifier :as verifier]
+            [clojure.string :as str])
   (:gen-class))
 
 (defn- parse-target [s]
@@ -16,6 +17,12 @@
 (defn- option [args flag] (second (drop-while #(not= flag %) args)))
 
 (def ^:dynamic *exit* (fn [status] (System/exit status)))
+
+(defn- kotoba-source! [path]
+  (when-not (and (string? path) (str/ends-with? path ".kotoba"))
+    (throw (ex-info "source input must use the .kotoba extension"
+                    {:phase :usage})))
+  path)
 
 (def ^:private detail-keys
   #{:phase :target :artifact-target :host-target :entry :arity :limit :status
@@ -177,7 +184,7 @@
           trust (bounded-edn/read-file (option args "--trust"))]
       (println (pr-str (receipt/verify-chain receipts trust))))
     "check"
-    (let [input (second args)
+    (let [input (kotoba-source! (second args))
           policy-path (option args "--policy")
           policy (if policy-path (bounded-edn/read-file policy-path) {})
           result (compiler/check-source (bounded-edn/read-text-file input) policy)]
@@ -185,7 +192,8 @@
                         :effects (get-in result [:hir :effects])
                         :admission (:admission result)})))
     "compile"
-    (let [input (second args) target (parse-target (or (option args "--target") "wasm32"))
+    (let [input (kotoba-source! (second args))
+          target (parse-target (or (option args "--target") "wasm32"))
           output (or (option args "--output") (str input (if (= target :wasm32-kotoba-v1) ".wasm" ".kexe")))
           policy-path (option args "--policy")
           policy (if policy-path (bounded-edn/read-file policy-path) {})
