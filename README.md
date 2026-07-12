@@ -48,6 +48,10 @@ seals `wasm32-wasi-kotoba-v1`; the dependency-free host rejects missing or
 substituted target identity and admits only `kotoba:cap` and `kotoba:heap`
 functions. Ambient WASI filesystem, socket, clock, random, environment, and
 process imports are rejected before instantiation.
+CI also executes the sealed pure ABI and fuel traps on Wasmtime 42.0.1, fetched
+by an NBB installer that verifies the pinned official release SHA-256. This is
+independent engine evidence alongside Node/V8, not yet a Kubernetes release
+claim.
 
 The first Windows supervisor slice now executes verifier-extracted x86-64 KEXE
 code on the Windows CI runner. It maps code RW, copies it, transitions it to RX,

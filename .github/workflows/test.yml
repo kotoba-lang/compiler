@@ -27,6 +27,7 @@ jobs:
       - run: npm run test-browser-host
       - run: npm run test-worker-host
       - run: npm run test-wasi-host
+      - run: npm run test-wasmtime
       - run: clojure -M:test
         env:
           KOTOBA_FUZZ_SEED: "5426643073673934426"

@@ -333,5 +333,7 @@ exactly one canonical `kotoba.target` section naming
 and immutable-pair functions; `wasi_snapshot_preview1` and every other import
 namespace fail admission. Target-byte substitution is tested independently of
 module validation. This establishes the authority boundary but does not yet
-prove two-engine portability, component-model composition, service
-cancellation, Kubernetes isolation, or production observability.
+prove component-model composition, service cancellation, Kubernetes isolation,
+or production observability. Node/V8 and digest-pinned Wasmtime do execute the
+same pure ABI and fuel traps as independent engine evidence; neither result
+expands the admitted import set.

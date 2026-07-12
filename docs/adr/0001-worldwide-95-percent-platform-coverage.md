@@ -197,8 +197,10 @@ target with a sealed `kotoba.target` custom section. The dependency-free server
 host requires that identity and the bounded Kotoba capability/heap import
 schema; it supplies no ambient WASI namespace. CI executes pure and capability
 programs and rejects a substituted target plus a forged
-`wasi_snapshot_preview1` import. Independent-engine, Linux AArch64,
-Kubernetes, cancellation, observability, and provenance gates remain.
+`wasi_snapshot_preview1` import. Pinned Wasmtime independently executes pure
+results, arguments, and fuel exhaustion on Linux x86-64 and macOS Arm64.
+Linux AArch64, Kubernetes, cancellation, observability, and provenance gates
+remain.
 
 - Stabilize Linux x86-64 and AArch64 distribution and container profiles.
 - Add `wasm32-wasi-kotoba-v1` with an exact capability adapter rather than
