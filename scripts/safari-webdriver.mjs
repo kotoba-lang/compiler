@@ -35,7 +35,10 @@ async function webdriver(method, route, body) {
     body: body === undefined ? undefined : JSON.stringify(body)
   });
   const value = await response.json();
-  if (!response.ok || value.value?.error) throw new Error(`webdriver request failed: ${route}`);
+  if (!response.ok || value.value?.error) {
+    const safe = input => String(input ?? "unknown").replace(/[^A-Za-z0-9 .:_-]/g, "?").slice(0, 240);
+    throw new Error(`webdriver request failed: ${route}: ${safe(value.value?.error)}: ${safe(value.value?.message)}`);
+  }
   return value.value;
 }
 
