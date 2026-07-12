@@ -175,7 +175,8 @@ counter; callers cannot supply result, status, timing, or fuel values.
 The result evidence also binds the pinned loader-source hash, the exact loader
 binary hash, the resolved C compiler executable's byte hash, and its version
 output hash. Runtime v3 additionally binds the compiler-reported assembler and
-linker executable byte hashes. A source mismatch is denied
+linker executable byte hashes. Runtime v4 also binds a deterministic manifest
+of the compiler's builtin include/resource directory. A source mismatch is denied
 before compilation, and the executor signature makes the runtime identity part
 of the receipt's output evidence.
 
@@ -193,7 +194,7 @@ kotoba -M verify-receipt run.receipt.edn --trust pinned-trust.edn ...
 ```
 
 The pin covers the reviewed loader source, reproduced loader binary, compiler
-binary/version output, assembler, and linker. `cc` is resolved once to an absolute real
+binary/version output, assembler, linker, and builtin compiler resources. `cc` is resolved once to an absolute real
 path; both builds use that path, and its bytes are re-hashed after the second
 build to detect persistent replacement during measurement. The assembler and
 linker paths reported by the compiler must resolve to regular executable files;
@@ -209,6 +210,11 @@ binary directories, `C` locale, UTC, and fixed reproducibility variables.
 Variables such as `CPATH`, `LIBRARY_PATH`, `SDKROOT`, `LD_PRELOAD`, and
 `DYLD_*` cannot influence measurement. The admitted loader receives only its
 explicit structured-report flag.
+The resource manifest sorts relative paths and binds each path, size, and file
+hash plus aggregate bytes. It rejects symlinks and special files, more than
+10,000 files, paths over 4,096 characters, and trees over 64 MiB before hashing
+contents, preventing the measurement step itself from becoming an unbounded
+filesystem traversal. Total directory entries are separately capped at 20,000.
 Every spawned process has a Java-side wall deadline and separately bounded
 stdout/stderr capture. A hanging or output-flooding compiler or loader is killed
 together with its descendants. Toolchain builds allow 30 seconds and 1 MiB per

@@ -257,3 +257,8 @@ builds receive a closed allowlist (`PATH`, `LANG`, `LC_ALL`, `TZ`,
 protocol flags. Ambient include/library paths, SDK overrides, preload hooks,
 credentials, proxies, and user configuration are therefore absent from both
 boundaries.
+Runtime v4 queries the compiler's builtin include directory and hashes it as a
+`kotoba.directory-manifest/v1`: sorted relative path, byte length, and content
+SHA-256 for every regular file plus aggregate bytes. Traversal rejects links,
+special files, over 20,000 entries or 10,000 files, overlong paths, and more than 64 MiB before
+reading file contents. The manifest is recomputed after the second build.

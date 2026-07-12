@@ -97,7 +97,7 @@ The explicit `measure-runtime` provisioning step pins the reviewed loader source
 by raw SHA-256 before invoking the C toolchain. It measures the resulting binary
 and places the loader source, loader binary, resolved compiler binary, compiler
 version, compiler-reported assembler, and compiler-reported linker hashes in
-`:kotoba.native-runtime/v3`. The loader binary is published separately with
+`:kotoba.native-runtime/v4`. The loader binary is published separately with
 owner-only execute permission. The production `run` path requires both files,
 checks exact schemas, trust membership, revocation, and binary hash, and never
 starts `cc`. The
@@ -126,6 +126,15 @@ separators, multiline output, missing tools, and diagnostics are rejected. Both
 binaries are hashed before and after the reproducibility build. This closes
 straightforward assembler/linker shadowing, while compiler-integrated tools and
 dynamically loaded components remain covered only indirectly by output identity.
+
+Runtime v4 additionally queries `-print-file-name=include` and requires an
+absolute compiler resource directory. A deterministic bounded manifest binds
+all builtin header/resource relative paths, sizes, and content hashes before and
+after both builds. Symlinks and special files fail closed, and file-count,
+path-length, and aggregate-byte ceilings bound hostile traversal. This detects
+changes to compiler builtin headers such as intrinsic and sanitizer definitions.
+Platform SDK/system headers outside that directory and dynamic library closure
+remain unmeasured host dependencies.
 The bootstrap also clears the complete inherited environment for every child.
 The toolchain receives only deterministic locale/time/reproducibility values and
 a minimal path rooted at the already-resolved compiler directory. The loader

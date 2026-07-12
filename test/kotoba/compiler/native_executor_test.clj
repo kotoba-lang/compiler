@@ -39,7 +39,7 @@
         result (executor/execute envelope trust {:allow #{}} {:args []}
                                  options)]
     (is (= {:status :ok :result 42} (select-keys (:evidence result) [:status :result])))
-    (is (= :kotoba.native-runtime/v3 (get-in result [:evidence :runtime :format])))
+    (is (= :kotoba.native-runtime/v4 (get-in result [:evidence :runtime :format])))
     (is (= executor/loader-source-sha256
            (get-in result [:evidence :runtime :loader-source-sha256])))
     (is (every? #(re-matches #"[0-9a-f]{64}" %)
@@ -123,6 +123,38 @@
                           (resolve-tool "as\nld\n" env)))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"malformed tool path"
                           (resolve-tool (str "as" \u0000) env)))))
+
+(deftest compiler-resource-manifest-is-deterministic-bounded-and-symlink-free
+  (let [manifest @#'executor/directory-manifest-sha256
+        delete-tree @#'executor/delete-tree!
+        root (java.nio.file.Files/createTempDirectory
+              "kotoba-resource-test-" (make-array java.nio.file.attribute.FileAttribute 0))]
+    (try
+      (let [nested (java.nio.file.Files/createDirectory
+                    (.resolve root "nested")
+                    (make-array java.nio.file.attribute.FileAttribute 0))
+            first-file (.resolve root "a.h")
+            second-file (.resolve nested "b.h")]
+        (java.nio.file.Files/writeString first-file "alpha"
+                                         (make-array java.nio.file.OpenOption 0))
+        (java.nio.file.Files/writeString second-file "beta"
+                                         (make-array java.nio.file.OpenOption 0))
+        (let [first-hash (manifest root)]
+          (is (= first-hash (manifest root)))
+          (java.nio.file.Files/writeString second-file "changed"
+                                           (make-array java.nio.file.OpenOption 0))
+          (is (not= first-hash (manifest root))))
+        (java.nio.file.Files/createSymbolicLink
+         (.resolve root "link") first-file
+         (make-array java.nio.file.attribute.FileAttribute 0))
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"contains a symlink"
+                              (manifest root)))
+        (java.nio.file.Files/delete (.resolve root "link"))
+        (with-open [large (java.io.RandomAccessFile. (.toFile (.resolve root "large")) "rw")]
+          (.setLength large (inc (* 64 1024 1024))))
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"bytes exceed limit"
+                              (manifest root))))
+      (finally (delete-tree (.toFile root))))))
 
 (deftest native-trap-is-returned-as-measured-evidence
   (let [{:keys [envelope trust]}

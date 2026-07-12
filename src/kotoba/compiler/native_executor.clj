@@ -3,6 +3,7 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [kotoba.compiler.admission :as admission]
+            [kotoba.compiler.artifact :as artifact]
             [kotoba.compiler.runtime-identity :as runtime-identity]
             [kotoba.compiler.signing :as signing])
   (:import [java.nio.file Files LinkOption Path Paths]
@@ -159,6 +160,67 @@
       (throw (ex-info "native compiler tool query failed" {:phase :execute})))
     (resolve-reported-tool (:stdout query) env)))
 
+(defn- compiler-resource-directory [compiler-path env]
+  (let [query (run-process [(str compiler-path) "-print-file-name=include"]
+                           env {:timeout-ms 5000 :output-limit 4096})
+        value (str/trim (:stdout query))]
+    (when-not (and (zero? (:exit query))
+                   (not (:timed-out? query))
+                   (not (:output-exceeded? query))
+                   (empty? (:stderr query))
+                   (= 1 (count (str/split-lines (:stdout query))))
+                   (seq value) (<= (count value) 4096))
+      (throw (ex-info "native compiler resource query failed" {:phase :execute})))
+    (try
+      (let [path (Paths/get value (make-array String 0))]
+        (when-not (and (.isAbsolute path)
+                       (Files/isDirectory path (make-array LinkOption 0)))
+          (throw (ex-info "compiler resource directory is not absolute"
+                          {:phase :execute})))
+        (.toRealPath path (make-array LinkOption 0)))
+      (catch clojure.lang.ExceptionInfo error (throw error))
+      (catch Exception error
+        (throw (ex-info "compiler reported a malformed resource directory"
+                        {:phase :execute} error))))))
+
+(defn- directory-manifest-sha256 [^Path root]
+  (with-open [stream (Files/walk root (make-array java.nio.file.FileVisitOption 0))]
+    (let [iterator (.iterator stream)
+          paths (loop [out []]
+                  (if (.hasNext iterator)
+                    (do
+                      (when (>= (count out) 20000)
+                        (throw (ex-info "compiler resource entry count exceeds limit"
+                                        {:phase :execute :limit 20000})))
+                      (recur (conj out (.next iterator))))
+                    out))]
+      (doseq [path paths]
+        (when (Files/isSymbolicLink path)
+          (throw (ex-info "compiler resource directory contains a symlink"
+                          {:phase :execute})))
+        (when-not (or (Files/isDirectory path (make-array LinkOption 0))
+                      (Files/isRegularFile path (make-array LinkOption 0)))
+          (throw (ex-info "compiler resource directory contains a special file"
+                          {:phase :execute}))))
+      (let [files (vec (filter #(Files/isRegularFile % (make-array LinkOption 0)) paths))
+            _ (when (> (count files) 10000)
+                (throw (ex-info "compiler resource file count exceeds limit"
+                                {:phase :execute :limit 10000})))
+            total (reduce + 0 (map #(Files/size ^Path %) files))
+            _ (when (> total (* 64 1024 1024))
+                (throw (ex-info "compiler resource bytes exceed limit"
+                                {:phase :execute :limit (* 64 1024 1024)})))
+            entries (mapv (fn [^Path path]
+                            (let [relative (str/replace (str (.relativize root path)) "\\" "/")
+                                  size (Files/size path)]
+                              (when (> (count relative) 4096)
+                                (throw (ex-info "compiler resource path exceeds limit"
+                                                {:phase :execute :limit 4096})))
+                              [relative size (file-sha256 (.toFile path))]))
+                          (sort-by #(str (.relativize root ^Path %)) files))]
+        (artifact/sha256 {:format :kotoba.directory-manifest/v1
+                          :files entries :total-bytes total})))))
+
 (defn- delete-tree! [file]
   (when (.exists ^java.io.File file)
     (doseq [child (reverse (file-seq file))] (io/delete-file child true))))
@@ -181,8 +243,10 @@
         toolchain-env (toolchain-environment compiler-path)
         assembler-path (compiler-tool compiler-path "as" toolchain-env)
         linker-path (compiler-tool compiler-path "ld" toolchain-env)
+        resource-path (compiler-resource-directory compiler-path toolchain-env)
         assembler-sha (file-sha256 (.toFile assembler-path))
         linker-sha (file-sha256 (.toFile linker-path))
+        resource-sha (directory-manifest-sha256 resource-path)
         actual-source-sha (file-sha256 loader-source)]
     (when-not (= loader-source-sha256 actual-source-sha)
       (throw (ex-info "native loader source identity mismatch"
@@ -218,19 +282,23 @@
                        (= linker-sha (file-sha256 (.toFile linker-path))))
           (throw (ex-info "native assembler or linker changed during measurement"
                           {:phase :execute})))
+        (when-not (= resource-sha (directory-manifest-sha256 resource-path))
+          (throw (ex-info "compiler resource directory changed during measurement"
+                          {:phase :execute})))
         (when-not (= first-loader-sha loader-sha)
           (throw (ex-info "native loader build is not reproducible"
                           {:phase :execute :first first-loader-sha
                            :second loader-sha})))
         {:loader loader
-         :runtime {:format :kotoba.native-runtime/v3
+         :runtime {:format :kotoba.native-runtime/v4
                    :loader-source-sha256 loader-source-sha256
                    :loader-binary-sha256 loader-sha
                    :compiler-binary-sha256 compiler-binary-sha
                    :compiler-version-sha256
                    (raw-sha256 (.getBytes compiler-text StandardCharsets/UTF_8))
                    :assembler-binary-sha256 assembler-sha
-                   :linker-binary-sha256 linker-sha}}))))
+                   :linker-binary-sha256 linker-sha
+                   :compiler-resource-sha256 resource-sha}}))))
 
 (defn measure-runtime
   "Build the reviewed loader twice and return its identity and exact bytes."
