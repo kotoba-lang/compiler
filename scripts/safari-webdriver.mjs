@@ -69,9 +69,17 @@ try {
   child("safaridriver", ["--port", String(driverPort)]);
   await waitFor(`http://127.0.0.1:${driverPort}/status`);
 
-  const created = await webdriver("POST", "/session", {
-    capabilities: { alwaysMatch: { browserName: "safari" } }
-  });
+  let created;
+  for (let attempt = 0; attempt < 3 && !created; attempt++) {
+    try {
+      created = await webdriver("POST", "/session", {
+        capabilities: { alwaysMatch: { browserName: "safari" } }
+      });
+    } catch (error) {
+      if (attempt === 2) throw error;
+      await delay(1000);
+    }
+  }
   session = created.sessionId;
   if (typeof session !== "string" || session.length === 0) throw new Error("missing Safari session id");
   const browserVersion = created.capabilities?.browserVersion;

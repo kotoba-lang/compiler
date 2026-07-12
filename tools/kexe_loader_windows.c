@@ -1,5 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 #define _WIN32_WINNT 0x0A00
+#define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
 #include <sddl.h>
 #include <stddef.h>
@@ -196,7 +197,7 @@ static int sandbox_probe(void) {
 
 int main(int argc, char **argv) {
   FILE *file;
-  long length;
+  long length = 0;
   size_t read_count;
   uint64_t offset, arity;
   uint8_t *source = NULL, *code = NULL;
