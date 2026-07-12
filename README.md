@@ -308,6 +308,9 @@ canonical SHA-256 names.
 All repository build, conformance, sanitizer, fuzz, and corpus-review
 orchestration is implemented in NBB/ClojureScript. No POSIX shell script is a
 project execution boundary.
+CI uses an exact Node 24 runtime and Clojure CLI version. Every third-party
+GitHub Action is pinned to a full commit SHA; an NBB workflow lint gate rejects
+mutable tags, unpinned toolchains, and reintroduced `.sh` execution files.
 
 Linux libFuzzer emits `:kotoba.fuzz-coverage/v1` summaries containing edge
 coverage, feature count, and corpus count. CI compares them with the reviewed

@@ -18,7 +18,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.3.0
+        with:
+          node-version: "24.12.0"
+          cache: npm
       - run: npm ci
       - name: Run coverage-guided native parser fuzzing
         env:
@@ -27,7 +33,7 @@ jobs:
         run: npx nbb scripts/fuzz-native.cljs
       - name: Preserve evolved corpus and crash inputs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: native-parser-fuzz-${{ github.run_id }}
           path: fuzz-results
