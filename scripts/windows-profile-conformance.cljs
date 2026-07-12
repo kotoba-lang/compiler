@@ -18,6 +18,16 @@
     (lib/ensure! (zero? (or (.-status result) 70))
                  (str "windows-profile: command failed: " (.-stderr result)))
     result))
+(defn run-k-fails! [args needle]
+  (let [result (.spawnSync child js/process.execPath (clj->js (into [nbb-cli kotoba "-M"] args))
+                           #js {:cwd lib/root :encoding "utf8" :maxBuffer 1048576})
+        status (or (.-status result) 70)
+        stderr (or (.-stderr result) "")]
+    (when (.-error result) (throw (.-error result)))
+    (lib/ensure! (not= 0 status) "windows-profile: negative vector unexpectedly succeeded")
+    (lib/ensure! (.includes stderr needle)
+                 (str "windows-profile: negative vector missed " needle ": " stderr))
+    result))
 (defn run-external
   ([command args] (run-external command args {} false))
   ([command args env allow-failure?]
@@ -123,5 +133,27 @@
       (lib/ensure! (.includes (.readFileSync fs (artifact "runtime.edn") "utf8")
                               ":runtime :kotoba-windows-supervisor-v1")
                    "windows-profile: measured runtime profile mismatch")
+      (let [run-args (fn [runtime loader suffix]
+                       ["run" (artifact "signed.kexe") "--trust" (artifact "runtime-trust.edn")
+                        "--runtime" runtime "--loader" loader
+                        "--policy" (artifact "policy.edn") "--input" (artifact "input.edn")
+                        "--executor-key" (artifact "key.edn") "--now" "1500"
+                        "--result-output" (artifact (str suffix "-result.edn"))
+                        "--output" (artifact (str suffix "-receipt.edn"))])
+            runtime-text (.readFileSync fs (artifact "runtime.edn") "utf8")
+            substituted (.replace runtime-text ":os :windows" ":os :linux")
+            loader-bytes (.readFileSync fs (artifact "measured-loader.exe"))]
+        (lib/ensure! (not= runtime-text substituted)
+                     "windows-profile: runtime profile substitution fixture missed field")
+        (.writeFileSync fs (artifact "substituted-runtime.edn") substituted)
+        (run-k-fails! (run-args (artifact "substituted-runtime.edn")
+                                (artifact "measured-loader.exe") "substituted")
+                      ":error :runtime-identity")
+        (aset loader-bytes (dec (.-length loader-bytes))
+              (bit-xor 1 (aget loader-bytes (dec (.-length loader-bytes)))))
+        (.writeFileSync fs (artifact "mutated-loader.exe") loader-bytes)
+        (run-k-fails! (run-args (artifact "runtime.edn")
+                                (artifact "mutated-loader.exe") "mutated")
+                      ":error :runtime-identity"))
       (println "windows-profile: measured trust-runtime and signed product run passed")))
   (finally (.rmSync fs tmp #js {:recursive true :force true})))
