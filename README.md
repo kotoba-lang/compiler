@@ -40,7 +40,8 @@ compatibility aliases with `:os :unspecified`; they cannot serve as platform
 release evidence. `x86_64-windows` compilation now emits a reproducible KEXE
 whose Windows OS, internal ABI, and supervisor identity are independently
 verified. Native execution and release evidence still fail closed until the
-measured Windows supervisor is implemented.
+measured Windows supervisor is trusted for the current host; Windows is not yet
+counted as release coverage.
 
 The first Windows supervisor slice now executes verifier-extracted x86-64 KEXE
 code on the Windows CI runner. It maps code RW, copies it, transitions it to RX,
@@ -49,9 +50,12 @@ flushes the instruction cache, then prohibits further dynamic code. A Clang
 low-integrity restricted impersonation token, system32-only DLL search, and
 error-mode hardening surround guest entry. Conformance covers runtime arguments,
 transitive calls, fuel reports, capability allow/deny, bounded pairs, and
-filesystem/process denial. This is not yet the measured `kotoba -M run` path:
-network denial, child trap isolation, loader measurement, signing/packaging,
-and Windows Arm64 remain required.
+filesystem/process denial. The same runner now builds the reviewed loader
+twice, seals the compiler/linker/resource/header closure into runtime identity,
+trusts it, executes a signed KEXE through `kotoba -M run`, and verifies the
+result receipt. Mutated loader bytes and a substituted OS profile fail closed.
+Network denial, child trap isolation, Authenticode/MSIX packaging, and Windows
+Arm64 remain required.
 
 WebAssembly is one backend, not the compiler architecture. Native backends emit
 machine instructions directly and never invoke an assembler, LLVM, a JVM JIT,

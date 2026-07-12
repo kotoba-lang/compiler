@@ -94,12 +94,12 @@ verified control flow for this subset and execute through the supervised W^X
 loader. General allocation, tracing GC, and a production-strength VM sandbox
 remain absent.
 
-Windows x64 has entered Phase 2 at the artifact boundary. The CLI accepts the
+Windows x64 has entered Phase 2 at the artifact and measured-runtime boundaries. The CLI accepts the
 explicit target, KEXE identity differs from Linux/macOS despite equal code
 bytes, the independent verifier regenerates it, and Windows CI requires two
-compilations to be byte-identical. Runtime identity deliberately excludes
-Windows, so `measure-runtime` / `run` cannot confuse the POSIX loader with the
-reserved Windows supervisor profile.
+compilations to be byte-identical. Runtime identity selects an OS-specific
+reviewed source digest, so `measure-runtime` / `run` cannot confuse the POSIX
+loader with the Windows supervisor profile.
 
 The reference Windows x64 supervisor has now crossed the execution boundary in
 CI without changing that product fail-closed rule. `VirtualAlloc(PAGE_READWRITE)`
@@ -114,9 +114,12 @@ Before guest entry, the loader joins a Job Object with active-process limit one,
 creates a max-privilege-disabled low-integrity restricted token, duplicates it
 as an impersonation token, and applies it to the execution thread. Windows CI
 executes arithmetic/calls, structured fuel, bounded heap, capability
-allow/deny, and fixed filesystem/process probes. The loader still consumes raw
-code extracted after verifier admission; integration into measured runtime
-identity and the signed `run` path is outstanding.
+allow/deny, and fixed filesystem/process probes. Product conformance also
+measures the compiler, assembler/linker, resource directory, and complete
+header closure; trusts that runtime; executes a signed artifact through
+`kotoba -M run`; and verifies its receipt. Loader-byte mutation and OS-profile
+substitution are rejected before guest entry. Child-process trap isolation,
+network denial, Windows Arm64, and release packaging remain outstanding.
 
 ## Bounded pair arena
 

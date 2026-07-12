@@ -314,11 +314,13 @@ callbacks use reviewed fixed slots. Job active-process limits and a
 low-integrity restricted impersonation token are checked by negative process
 and filesystem probes on the Windows runner.
 
-This boundary is not yet sufficient for release admission. Raw-code input is
-safe only because conformance invokes it after KEXE verification; the product
-loader must bind KEXE verification and measurement in one workflow. Guest traps
-currently terminate the loader process rather than a separately supervised
-child. Network denial is not implemented, Job/restricted-token behavior has
-only hosted-runner evidence, and loader binary/source identity is not yet in
-the Windows runtime trust schema. These omissions keep Windows execution out of
-coverage accounting.
+This boundary is not yet sufficient for release admission. The product command
+now admits the signed KEXE, verifies its regenerated code, binds the reviewed
+Windows source plus compiler/linker/resource/header closure into runtime trust,
+and passes only extracted code to the measured loader. Windows CI verifies the
+result receipt and rejects both loader-byte mutation and OS-profile
+substitution. Guest traps still terminate the loader process rather than a
+separately supervised child. Network denial is not implemented and
+Job/restricted-token behavior has only hosted-runner evidence. Windows Arm64,
+Authenticode/MSIX, SBOM, and provenance gates also remain; these omissions keep
+Windows execution out of release coverage accounting.

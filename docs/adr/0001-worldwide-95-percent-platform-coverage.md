@@ -156,8 +156,11 @@ cross-runner reproducibility gate are implemented. A first Windows supervisor
 also executes verified/extracted code under W^X, dynamic-code prohibition, a
 one-process Job Object, and a low-integrity restricted token. CI covers calls,
 fuel, capability allow/deny, heap accounting, and filesystem/process probes.
-Measured `kotoba -M run` integration, parent/child trap supervision, network
-denial, code signing, packaging, and Arm64 remain required before any
+The product path now performs reproducible loader construction, OS-specific
+source and toolchain-closure measurement, runtime trust, signed `kotoba -M run`,
+and receipt verification. Loader mutation and OS-profile substitution fail
+closed in Windows CI. Parent/child trap supervision, network denial,
+Authenticode signing, packaging, and Arm64 remain required before any
 Windows-native coverage is counted.
 
 - Implement x64 and Arm64 Windows KEXE loaders.
