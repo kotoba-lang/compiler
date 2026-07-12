@@ -1,0 +1,4 @@
+# Runtime source identity is measured byte-for-byte on every supported host.
+# Never allow checkout configuration to rewrite reviewed loader sources.
+tools/kexe_loader.c text eol=lf
+tools/kexe_loader_windows.c text eol=lf
