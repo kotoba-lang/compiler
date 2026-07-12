@@ -3,8 +3,18 @@
             [kotoba.compiler.target :as target]))
 
 (def loader-source-sha256
-  "Pinned identity of the reviewed native loader source."
+  "Pinned identity of the reviewed POSIX native loader source."
   "b3b3361712a26e69edbaa42fec47d1290a8ebb06a0baf83f54533b9a32173fdc")
+
+(def windows-loader-source-sha256
+  "Pinned identity of the reviewed Windows native loader source."
+  "38e626f0bc7d38b20efef218b2f746c9ee89e46a11a1c3e5777dbc2dc13d2a89")
+
+(defn loader-source-for-profile [profile]
+  (case (:os profile)
+    :windows windows-loader-source-sha256
+    (:linux :macos) loader-source-sha256
+    nil))
 
 (def ^:private fields
   #{:format :target-profile :loader-source-sha256 :loader-binary-sha256
@@ -21,8 +31,9 @@
                  (= :kotoba.native-runtime/v6 (:format runtime))
                  (contains? (set (vals target/profiles)) (:target-profile runtime))
                  (= :native (get-in runtime [:target-profile :execution]))
-                 (contains? #{:linux :macos} (get-in runtime [:target-profile :os]))
-                 (= loader-source-sha256 (:loader-source-sha256 runtime))
+                 (contains? #{:linux :macos :windows} (get-in runtime [:target-profile :os]))
+                 (= (loader-source-for-profile (:target-profile runtime))
+                    (:loader-source-sha256 runtime))
                  (sha256? (:loader-binary-sha256 runtime))
                  (sha256? (:compiler-binary-sha256 runtime))
                  (sha256? (:compiler-version-sha256 runtime))

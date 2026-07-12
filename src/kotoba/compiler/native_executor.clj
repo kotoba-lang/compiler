@@ -16,6 +16,10 @@
            [java.util.concurrent TimeUnit]))
 
 (def loader-source-sha256 runtime-identity/loader-source-sha256)
+(def windows-loader-source-sha256 runtime-identity/windows-loader-source-sha256)
+
+(defn- windows-host? [] (= :windows (let [os (str/lower-case (System/getProperty "os.name"))]
+                                      (when (str/includes? os "win") :windows))))
 
 (defn- raw-sha256 [bytes]
   (let [digest (.digest (MessageDigest/getInstance "SHA-256") bytes)]
@@ -25,15 +29,19 @@
   (raw-sha256 (Files/readAllBytes (.toPath ^java.io.File file))))
 
 (defn- resolve-executable [name]
-  (when-not (and (string? name) (seq name) (not (str/includes? name "/")))
+  (when-not (and (string? name) (seq name) (not (str/includes? name "/"))
+                 (not (str/includes? name "\\")))
     (throw (ex-info "invalid toolchain executable name" {:phase :execute})))
   (let [path (or (System/getenv "PATH") "")
-        candidates (map (fn [entry]
-                          (.resolve (if (empty? entry)
-                                      (.toAbsolutePath (Paths/get "." (make-array String 0)))
-                                      (.toAbsolutePath (Paths/get entry (make-array String 0))))
-                                    name))
-                        (str/split path #":" -1))
+        suffixes (if (windows-host?) ["" ".exe" ".cmd" ".bat"] [""])
+        candidates (for [entry (str/split path
+                                          (re-pattern (java.util.regex.Pattern/quote
+                                                       java.io.File/pathSeparator)) -1)
+                         suffix suffixes]
+                     (.resolve (if (empty? entry)
+                                 (.toAbsolutePath (Paths/get "." (make-array String 0)))
+                                 (.toAbsolutePath (Paths/get entry (make-array String 0))))
+                               (str name suffix)))
         candidate (first (filter #(and (Files/isRegularFile % (make-array LinkOption 0))
                                        (Files/isExecutable %))
                                  candidates))]
@@ -45,7 +53,8 @@
 (defn- host-target []
   (let [os (str/lower-case (System/getProperty "os.name"))
         arch (str/lower-case (System/getProperty "os.arch"))]
-    (when-not (or (str/includes? os "linux") (str/includes? os "mac"))
+    (when-not (or (str/includes? os "linux") (str/includes? os "mac")
+                  (str/includes? os "win"))
       (throw (ex-info "native execution is unsupported on this OS"
                       {:phase :execute :os os})))
     (cond
@@ -59,6 +68,7 @@
     (cond
       (str/includes? os "linux") :linux
       (str/includes? os "mac") :macos
+      (str/includes? os "win") :windows
       :else nil)))
 
 (defn- explicit-host-target []
@@ -67,13 +77,15 @@
     (case [backend os]
       [:x86_64-kotoba-v1 :linux] :x86_64-linux-kotoba-v1
       [:x86_64-kotoba-v1 :macos] :x86_64-macos-kotoba-v1
+      [:x86_64-kotoba-v1 :windows] :x86_64-windows-kotoba-v1
       [:aarch64-kotoba-v1 :linux] :aarch64-linux-kotoba-v1
       [:aarch64-kotoba-v1 :macos] :aarch64-macos-kotoba-v1
       (throw (ex-info "native host has no explicit target profile" {:phase :execute})))))
 
 (defn- deterministic-linker-flags []
-  (if (str/includes? (str/lower-case (System/getProperty "os.name")) "mac")
-    []
+  (case (host-os)
+    :macos []
+    :windows ["-fuse-ld=lld" "-Wl,/timestamp:0,/Brepro"]
     ["-Wl,--build-id=none"]))
 
 (def ^:private max-process-output-bytes (* 1024 1024))
@@ -130,13 +142,19 @@
      :timed-out? (not completed?) :output-exceeded? @output-exceeded?}))
 
 (defn- toolchain-environment [^Path compiler-path]
-  {"PATH" (str (.getParent compiler-path) java.io.File/pathSeparator
-               "/usr/bin" java.io.File/pathSeparator "/bin")
-   "LANG" "C"
-   "LC_ALL" "C"
-   "TZ" "UTC"
-   "SOURCE_DATE_EPOCH" "0"
-   "ZERO_AR_DATE" "1"})
+  (let [system-root (System/getenv "SystemRoot")]
+    (cond->
+     {"PATH" (if (windows-host?)
+               (str (.getParent compiler-path) java.io.File/pathSeparator
+                    system-root "\\System32")
+               (str (.getParent compiler-path) java.io.File/pathSeparator
+                    "/usr/bin" java.io.File/pathSeparator "/bin"))
+      "LANG" "C"
+      "LC_ALL" "C"
+      "TZ" "UTC"
+      "SOURCE_DATE_EPOCH" "0"
+      "ZERO_AR_DATE" "1"}
+      system-root (assoc "SystemRoot" system-root))))
 
 (defn- resolve-reported-tool [reported env]
   (try
@@ -155,7 +173,9 @@
                                            value)]
                                  (when (and (Files/isRegularFile path (make-array LinkOption 0))
                                             (Files/isExecutable path)) path)))
-                             (str/split (get env "PATH" "") #":" -1))
+                             (str/split (get env "PATH" "")
+                                        (re-pattern (java.util.regex.Pattern/quote
+                                                     java.io.File/pathSeparator)) -1))
                        :else nil)]
         (when-not (and resolved
                        (Files/isRegularFile resolved (make-array LinkOption 0))
@@ -244,7 +264,13 @@
                  (not (str/includes? text (str \u0000))))
     (throw (ex-info "compiler dependency file exceeds syntax limits"
                     {:phase :execute})))
-  (let [colon (.indexOf ^String text ":")]
+  (let [colon (loop [index 0]
+                (if (>= index (dec (count text)))
+                  -1
+                  (if (and (= \: (.charAt ^String text index))
+                           (Character/isWhitespace (.charAt ^String text (inc index))))
+                    index
+                    (recur (inc index)))))]
     (when (neg? colon)
       (throw (ex-info "compiler dependency file has no target separator"
                       {:phase :execute})))
@@ -322,24 +348,30 @@
        (str/join ",")))
 
 (defn- build-runtime! [directory]
-  (let [loader (io/file directory "kexe-loader")
+  (let [windows? (= :windows (host-os))
+        loader (io/file directory (if windows? "kexe-loader.exe" "kexe-loader"))
         dependency-file (io/file directory "loader.d")
         dependency-object (io/file directory "loader-deps.o")
-        loader-source (io/file "tools/kexe_loader.c")
-        compiler-path (resolve-executable "cc")
+        loader-source (io/file (if windows? "tools/kexe_loader_windows.c"
+                                   "tools/kexe_loader.c"))
+        expected-source-sha (runtime-identity/loader-source-for-profile
+                             (target-profile/profile (explicit-host-target)))
+        compiler-path (resolve-executable (if windows? "clang" "cc"))
         compiler-file (.toFile compiler-path)
         compiler-binary-sha (file-sha256 compiler-file)
         toolchain-env (toolchain-environment compiler-path)
-        assembler-path (compiler-tool compiler-path "as" toolchain-env)
-        linker-path (compiler-tool compiler-path "ld" toolchain-env)
+        assembler-path (if windows? compiler-path
+                            (compiler-tool compiler-path "as" toolchain-env))
+        linker-path (if windows? (resolve-executable "lld-link")
+                          (compiler-tool compiler-path "ld" toolchain-env))
         resource-path (compiler-resource-directory compiler-path toolchain-env)
         assembler-sha (file-sha256 (.toFile assembler-path))
         linker-sha (file-sha256 (.toFile linker-path))
         resource-sha (directory-manifest-sha256 resource-path)
         actual-source-sha (file-sha256 loader-source)]
-    (when-not (= loader-source-sha256 actual-source-sha)
+    (when-not (= expected-source-sha actual-source-sha)
       (throw (ex-info "native loader source identity mismatch"
-                      {:phase :execute :expected loader-source-sha256
+                      {:phase :execute :expected expected-source-sha
                        :actual actual-source-sha})))
     (let [compiler (run-process [(str compiler-path) "--version"] toolchain-env
                                 {:timeout-ms 5000})
@@ -349,7 +381,8 @@
               (throw (ex-info "native C compiler identity query failed"
                               {:phase :execute :stderr (:stderr compiler)})))
           compiler-text (str (:stdout compiler) (:stderr compiler))
-          common-flags [(str compiler-path) "-std=c11" "-O2" "-Wall" "-Wextra" "-Werror"]
+          common-flags (cond-> [(str compiler-path) "-std=c11" "-O2" "-Wall" "-Wextra" "-Werror"]
+                         windows? (conj "-fuse-ld=lld"))
           dependency-command (vec (concat common-flags
                                           ["-MD" "-MF" (.getPath dependency-file)
                                            "-c" (.getPath loader-source)
@@ -370,7 +403,8 @@
                           (vec (concat
                                 common-flags
                                 (deterministic-linker-flags)
-                                [(.getPath loader-source) "-o" (.getPath loader)])))
+                                [(.getPath loader-source) "-o" (.getPath loader)]
+                                (when windows? ["-ladvapi32"]))))
           build (run-process (build-command) toolchain-env {:timeout-ms 30000})
           first-loader-sha (when (zero? (:exit build)) (file-sha256 loader))
           reproduced-build (run-process (build-command) toolchain-env {:timeout-ms 30000})]
@@ -401,7 +435,7 @@
         {:loader loader
          :runtime {:format :kotoba.native-runtime/v6
                    :target-profile (target-profile/profile (explicit-host-target))
-                   :loader-source-sha256 loader-source-sha256
+                   :loader-source-sha256 expected-source-sha
                    :loader-binary-sha256 loader-sha
                    :compiler-binary-sha256 compiler-binary-sha
                    :compiler-version-sha256
@@ -497,11 +531,12 @@
       (let [directory (.toFile (Files/createTempDirectory
                                 "kotoba-native-" (make-array FileAttribute 0)))
             code-file (io/file directory "program.bin")
-            loader (io/file directory "kexe-loader")]
+            loader (io/file directory (if (= :windows host-os-value)
+                                        "kexe-loader.exe" "kexe-loader"))]
       (try
         (with-open [out (io/output-stream loader)]
           (.write out ^bytes loader-bytes))
-        (when-not (.setExecutable loader true true)
+        (when-not (or (= :windows host-os-value) (.setExecutable loader true true))
           (throw (ex-info "cannot make measured loader executable"
                           {:phase :execute})))
         (with-open [out (io/output-stream code-file)]
