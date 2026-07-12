@@ -331,10 +331,15 @@ Windows execution out of release coverage accounting.
 Android and iOS are distinct sealed AArch64 targets even when their admitted
 machine-code bytes match. The verifier reconstructs the named OS, ABI, and
 runtime profile, so resealing Android code as iOS or the reverse fails. This
-does not authorize execution: there is no Android NDK isolated-process host or
-iOS signed static embedding yet, and desktop measured runtimes cannot admit
-either mobile profile. Store packaging, lifecycle bridges, physical-device
-isolation, and OS code signing remain outside the current trusted boundary.
+does not authorize execution: there is no integrated Android isolated-process
+product or iOS signed static embedding yet, and desktop measured runtimes cannot admit
+either mobile profile. A first Android NDK library now enforces RW-to-RX,
+target identity, code/arity limits, and the fixed callback context, but it
+accepts bytes already extracted by a verifier and intentionally lets a guest
+trap terminate its process. KEXE authentication/regeneration, Android
+isolated-process packaging, store packaging, lifecycle bridges,
+physical-device isolation, and OS code signing remain outside the current
+trusted boundary.
 
 ## WASI server boundary
 

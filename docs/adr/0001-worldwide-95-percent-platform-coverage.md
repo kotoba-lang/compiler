@@ -182,8 +182,11 @@ Implementation status: explicit `aarch64-android-kotoba-v1` and
 `aarch64-ios-kotoba-v1` compiler targets now bind Android isolated-host and iOS
 static-host identities. Independent regeneration rejects OS/runtime profile
 substitution, and equal AArch64 code still produces distinct sealed artifacts.
-This is compile/verify progress only: no mobile execution or endpoint coverage
-is claimed until the host, packaging, lifecycle, and physical-device gates pass.
+A pinned NDK now also cross-builds the first Android AArch64 host library twice
+byte-identically and checks its hardened ELF and single-function export surface.
+This remains build-boundary progress only: no mobile execution or endpoint
+coverage is claimed until KEXE admission integration, isolated-process
+packaging, lifecycle, and physical-device gates pass.
 
 - Implement Android AArch64 as an NDK host library with isolated-process and
   application-sandbox integration.

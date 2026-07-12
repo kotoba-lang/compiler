@@ -50,6 +50,15 @@ digests and runtime contracts. Android isolated-process loading and iOS signed
 static/AOT embedding are still required before either target is executable or
 counted as native mobile coverage.
 
+Android now also has a first NDK host-library boundary. Pinned NDK
+27.3.13750724 cross-builds the AArch64 shared library twice byte-identically;
+CI requires AArch64 ELF identity, NX stack, RELRO, immediate binding, and one
+exported execution function. That function maps verified code RW then RX,
+flushes the instruction cache, installs the fixed fuel/capability/pair context,
+and requires the Android target identity. It deliberately expects an Android
+isolated process to contain guest traps. No emulator or physical-device
+execution is claimed yet.
+
 `wasm32-wasi` is the first server/component profile. Its Wasm custom section
 seals `wasm32-wasi-kotoba-v1`; the dependency-free host rejects missing or
 substituted target identity and admits only `kotoba:cap` and `kotoba:heap`

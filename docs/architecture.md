@@ -53,6 +53,15 @@ OS and runtime identity make their seals unequal. No desktop loader is allowed
 to execute either profile; mobile host libraries and physical-device admission
 remain separate gates.
 
+The first Android library slice exposes only
+`kotoba_android_execute_verified_v1`. Its request is closed to the Android
+target, at most 1 MiB of already-verified code, five arguments, a 256-bit
+capability bitmap, and the fixed context v2 layout. NDK CI requires a
+reproducible AArch64 ELF with NX stack, RELRO, `BIND_NOW`, and no additional
+exports. Code transitions RW to RX and never uses RWX. The library does not
+authenticate or independently regenerate KEXE and must run inside a separately
+configured Android isolated process; those are product integration gates.
+
 KEXE is not mapped by this compiler. The loader must reverify, compare the
 policy/artifact digest, allocate writable non-executable memory, copy code,
 change it to read+execute, and never map it writable again. No generated code
