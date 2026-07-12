@@ -158,7 +158,8 @@
      (merge
       {"PATH" (if (windows-host?)
                 (str (.getParent compiler-path) java.io.File/pathSeparator
-                     system-root "\\System32")
+                     system-root "\\System32" java.io.File/pathSeparator
+                     (System/getenv "PATH"))
                 (str (.getParent compiler-path) java.io.File/pathSeparator
                      "/usr/bin" java.io.File/pathSeparator "/bin"))
        "LANG" "C"
@@ -405,9 +406,7 @@
                            (not (:timed-out? dependency-build))
                            (not (:output-exceeded? dependency-build)))
               (throw (ex-info "native compiler dependency scan failed"
-                              {:phase :execute
-                               :diagnostic (subs (:stderr dependency-build) 0
-                                                 (min 2048 (count (:stderr dependency-build))))})))
+                              {:phase :execute :stderr (:stderr dependency-build)})))
           _ (when (> (.length dependency-file) (* 1024 1024))
               (throw (ex-info "compiler dependency file exceeds byte limit"
                               {:phase :execute :limit (* 1024 1024)})))

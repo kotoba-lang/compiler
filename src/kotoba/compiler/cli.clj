@@ -37,7 +37,7 @@
 
 (def ^:private detail-keys
   #{:phase :target :artifact-target :host-target :entry :arity :limit :status
-    :reason :runtime-sha256 :not-before :expires :now :diagnostic})
+    :reason :runtime-sha256 :not-before :expires :now})
 
 (defn error-report [error]
   (let [data (ex-data error)
