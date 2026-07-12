@@ -151,9 +151,9 @@ Pixel 7 and iPhone 15 profiles add viewport/input/user-agent emulation. These
 are engine and emulation conformance signals only: they are not evidence for a
 branded Chrome/Edge release, physical Android/iOS hardware, or Safari itself.
 The isolated browser CI additionally installs current Google Chrome Stable and
-Microsoft Edge Stable on Linux. Its versioned machine-readable receipt records
+Microsoft Edge Stable on Linux and Windows. Its versioned machine-readable receipt records
 the exact Playwright project, engine, browser version, evidence class, commit,
-and CI run, and is retained as a workflow artifact. It is conformance evidence,
+CI run, and host OS, and is retained as a workflow artifact. It is conformance evidence,
 not yet a trusted signed platform-release statement.
 
 The test gate generates a deterministic 100-program property corpus across

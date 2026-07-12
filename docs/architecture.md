@@ -233,9 +233,12 @@ CSP intentionally omits `'wasm-unsafe-eval'`. The latter must receive a
 browser, OS, and physical-device release evidence.
 
 CI conditionally adds the branded `chrome` and `msedge` Playwright channels on
-an ephemeral Linux runner. A custom reporter emits
+ephemeral Linux and Windows runners. Browser orchestration invokes the pinned
+NBB CLI through the pinned Node executable rather than a POSIX command shim, so
+fixture compilation, serving, and evidence validation share one cross-platform
+control path. A custom reporter emits
 `kotoba.browser-engine-evidence/v1`; an independent NBB gate rejects missing or
-extra projects, malformed versions, schema drift, and commit/run identity
+extra projects, malformed versions, schema drift, host-OS drift, and commit/run identity
 mismatch. The receipt distinguishes `engine`, `mobile-emulation`, and
 `branded-browser` evidence and is retained for 30 days. It is intentionally not
 accepted by the signed worldwide-coverage manifest until browser/OS/version

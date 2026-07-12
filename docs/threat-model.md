@@ -285,5 +285,7 @@ tests passed. A separate NBB gate requires the closed receipt schema, exact
 expected project set, version syntax, evidence classes, and GitHub commit/run
 binding before upload. The uploaded artifact is still unsigned CI output and
 can expire; it cannot satisfy platform-release evidence or the worldwide 95%
-claim. Branded Chrome/Edge on Linux do not establish their Windows behavior,
-previous-version compatibility, update-channel integrity, or mobile coverage.
+claim. Branded Chrome/Edge now run on Linux and Windows, with the runner
+platform bound into the receipt. These runs still do not establish
+previous-version compatibility, update-channel integrity, macOS behavior,
+mobile coverage, or physical-device isolation.

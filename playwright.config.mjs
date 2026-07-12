@@ -1,8 +1,9 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const platform = process.platform === "win32" ? "windows" : process.platform;
 const brandedProjects = process.env.KOTOBA_BRANDED_BROWSERS === "1" ? [
-  { name: "chrome-stable-linux", use: { ...devices["Desktop Chrome"], channel: "chrome" } },
-  { name: "edge-stable-linux", use: { ...devices["Desktop Edge"], channel: "msedge" } }
+  { name: `chrome-stable-${platform}`, use: { ...devices["Desktop Chrome"], channel: "chrome" } },
+  { name: `edge-stable-${platform}`, use: { ...devices["Desktop Edge"], channel: "msedge" } }
 ] : [];
 
 export default defineConfig({
@@ -17,7 +18,7 @@ export default defineConfig({
   ],
   use: { baseURL: "http://127.0.0.1:4173", trace: "retain-on-failure" },
   webServer: {
-    command: "nbb scripts/browser-fixture-server.cljs",
+    command: "node node_modules/nbb/cli.js scripts/browser-fixture-server.cljs",
     url: "http://127.0.0.1:4173/health",
     reuseExistingServer: false,
     stdout: "pipe",

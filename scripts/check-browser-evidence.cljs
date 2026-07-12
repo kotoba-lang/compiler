@@ -8,10 +8,12 @@
 (def evidence-file (path/join lib/root "test-results" "browser-evidence.json"))
 (lib/ensure! (.existsSync fs evidence-file) "browser evidence: receipt is missing")
 (def evidence (js->clj (js/JSON.parse (lib/read-text evidence-file)) :keywordize-keys true))
-(def expected-keys #{:format :status :commit :ciRunId :projects})
+(def expected-keys #{:format :status :commit :ciRunId :platform :projects})
 (def base-projects #{"chromium-desktop" "firefox-desktop" "webkit-desktop"
                      "chromium-mobile-emulation" "webkit-mobile-emulation"})
-(def branded-projects #{"chrome-stable-linux" "edge-stable-linux"})
+(def platform (.-platform js/process))
+(def platform-name (if (= "win32" platform) "windows" platform))
+(def branded-projects #{(str "chrome-stable-" platform-name) (str "edge-stable-" platform-name)})
 (def expected-projects
   (if (= "1" js/process.env.KOTOBA_BRANDED_BROWSERS)
     (set/union base-projects branded-projects) base-projects))
@@ -19,6 +21,7 @@
 (lib/ensure! (= expected-keys (set (keys evidence))) "browser evidence: unknown or missing receipt field")
 (lib/ensure! (= "kotoba.browser-engine-evidence/v1" (:format evidence)) "browser evidence: format mismatch")
 (lib/ensure! (= "passed" (:status evidence)) "browser evidence: suite did not pass")
+(lib/ensure! (= platform (:platform evidence)) "browser evidence: platform mismatch")
 (when js/process.env.CI
   (lib/ensure! (= js/process.env.GITHUB_SHA (:commit evidence)) "browser evidence: commit mismatch")
   (lib/ensure! (= js/process.env.GITHUB_RUN_ID (:ciRunId evidence)) "browser evidence: CI run mismatch"))

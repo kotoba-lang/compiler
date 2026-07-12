@@ -22,6 +22,7 @@ export default class KotobaBrowserEvidenceReporter {
       status: result.status,
       commit: process.env.GITHUB_SHA ?? "local",
       ciRunId: process.env.GITHUB_RUN_ID ?? "local",
+      platform: process.platform,
       projects: Array.from(this.identities.values()).sort((a, b) => a.project.localeCompare(b.project))
     };
     fs.mkdirSync(path.dirname(this.outputFile), { recursive: true });
