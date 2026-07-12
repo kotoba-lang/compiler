@@ -270,3 +270,12 @@ The recommended CSP admits only same-origin scripts/workers and the narrower
 `'wasm-unsafe-eval'` compilation sink; it excludes blob/data workers and
 JavaScript `'unsafe-eval'`. Network fetch remains embedding authority rather
 than guest authority.
+
+Browser fixture bytes are compiled during the matrix run, live in a fresh
+temporary directory, and are exposed only through a fixed route table. The
+server does not map request paths onto arbitrary filesystem paths and rejects
+non-GET methods. All successful fixture responses carry CSP, same-origin CORP,
+no-referrer, nosniff, and no-store headers. Browser automation is not counted as
+a sandbox proof: a compromised browser engine remains TCB, and mobile device
+emulation does not exercise a mobile kernel, hardware, JIT policy, or vendor
+browser build.

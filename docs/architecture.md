@@ -223,6 +223,15 @@ path. Capability implementations are copied from an install-time trusted Map
 inside the static worker entry. They cannot be transferred through the message
 channel. The stock entry therefore runs only pure modules.
 
+The browser matrix is built from compiler output on every run and served by a
+closed-route NBB HTTP fixture with the production CSP headers. Playwright drives
+pinned Chromium, Firefox, and WebKit engines plus two mobile emulation profiles.
+Every project must execute direct and Worker admission, install-time capability
+allow/deny, heap accounting, forged-handle rejection, and a negative page whose
+CSP intentionally omits `'wasm-unsafe-eval'`. The latter must receive a
+`WebAssembly.CompileError`. Engine results are kept distinct from branded
+browser, OS, and physical-device release evidence.
+
 Native targets implement a sealed context-v1 ABI: version at offset 0, fuel at
 8, a 256-bit allow bitmap at 16, and the sole `cap_call` function pointer at 48.
 Generated code checks the relevant bitmap bit before loading that fixed slot;

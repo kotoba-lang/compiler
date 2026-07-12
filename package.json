@@ -2,6 +2,7 @@
   "name": "kotoba-compiler-tooling",
   "private": true,
   "devDependencies": {
+    "@playwright/test": "1.61.1",
     "nbb": "1.4.208"
   },
   "scripts": {
@@ -12,6 +13,7 @@
     "test-review-fuzz": "nbb scripts/test-review-fuzz-corpus.cljs",
     "check-workflows": "nbb scripts/check-workflows.cljs",
     "test-browser-host": "nbb scripts/test-browser-host.cljs",
-    "test-worker-host": "nbb scripts/test-worker-host.cljs"
+    "test-worker-host": "nbb scripts/test-worker-host.cljs",
+    "test-browsers": "nbb scripts/browser-matrix.cljs"
   }
 }

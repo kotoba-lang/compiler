@@ -144,6 +144,13 @@ entry; guest messages cannot introduce executable callbacks or ambient APIs.
 The deployment profile in `runtime/CSP.md` uses same-origin static workers and
 the narrow CSP `'wasm-unsafe-eval'` token, never JavaScript `'unsafe-eval'`.
 
+`npm run test-browsers` compiles fresh `wasm32-browser` artifacts and runs the
+same direct-host, Worker, capability allow/deny, bounded-heap, forged-handle,
+and CSP-denial vectors in pinned Playwright Chromium, Firefox, and WebKit.
+Pixel 7 and iPhone 15 profiles add viewport/input/user-agent emulation. These
+are engine and emulation conformance signals only: they are not evidence for a
+branded Chrome/Edge release, physical Android/iOS hardware, or Safari itself.
+
 The test gate generates a deterministic 100-program property corpus across
 arithmetic, comparisons, `if`, lexical `let`, and direct calls. Every program is
 compiled to all three targets; the gate requires identical KIR, deterministic

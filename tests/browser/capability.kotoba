@@ -1,0 +1,4 @@
+(ns tests.browser.capability)
+
+(defn main []
+  (cap-call 7 41))

@@ -122,8 +122,10 @@ deterministic trap classes. Conformance executes compiler-produced Wasm through
 this product host and includes forged-import, forged-handle, policy, heap, and
 digest denial vectors. The closed one-shot module Worker host and restrictive
 same-origin CSP profile are also implemented and gated. This is Phase 1
-progress, not its exit gate: automated real-browser execution and the measured
-browser matrix below are still outstanding.
+progress, not its exit gate. Pinned Chromium, Firefox, and WebKit engine tests
+now execute in CI, including mobile emulation and CSP denial. Branded current
+and previous browser releases, physical mobile devices, and the measured usage
+matrix below are still outstanding and cannot be inferred from engine tests.
 
 - Stabilize `wasm32-browser-kotoba-v1` and its exact import schema.
 - Ship an ES module host, Worker host, capability-policy adapter, CSP guidance,
