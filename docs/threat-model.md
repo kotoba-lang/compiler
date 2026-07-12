@@ -119,6 +119,14 @@ compiler cannot impersonate an approved runtime merely by copying a trusted
 detects persistent identity drift; a transient race, dynamically loaded
 toolchain components, and a compromised compiler remain in scope until the
 toolchain is hermetic.
+The bootstrap also clears the complete inherited environment for every child.
+The toolchain receives only deterministic locale/time/reproducibility values and
+a minimal path rooted at the already-resolved compiler directory. The loader
+receives only explicit execution protocol flags. Consequently attacker-set
+include paths, linker paths, SDK selection, preload variables, credentials, and
+proxy configuration cannot cross into measurement or guest execution. System
+headers, linker binaries, compiler resource directories, and dynamic libraries
+are still host dependencies and remain the next hermeticity boundary.
 The bootstrap nevertheless treats every invoked process as potentially
 unresponsive or noisy. Version queries and loader executions have five-second
 Java deadlines, builds have thirty-second deadlines, and output capture is

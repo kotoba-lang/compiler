@@ -251,3 +251,9 @@ deadline and capped stdout/stderr readers. Limit breach forcibly terminates the
 process tree. This applies during untrusted toolchain measurement as well as
 measured loader execution, preventing a compiler from retaining the bootstrap
 JVM indefinitely or exhausting its heap with streamed diagnostics.
+`ProcessBuilder` environments are cleared before launch. Compiler queries and
+builds receive a closed allowlist (`PATH`, `LANG`, `LC_ALL`, `TZ`,
+`SOURCE_DATE_EPOCH`, `ZERO_AR_DATE`); loader execution receives only explicit
+protocol flags. Ambient include/library paths, SDK overrides, preload hooks,
+credentials, proxies, and user configuration are therefore absent from both
+boundaries.

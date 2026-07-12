@@ -84,7 +84,9 @@
                                  :or {timeout-ms 5000
                                       output-limit max-process-output-bytes}}]
   (let [builder (ProcessBuilder. ^java.util.List (mapv str command))
-        _ (.putAll (.environment builder) env)
+        process-env (.environment builder)
+        _ (.clear process-env)
+        _ (.putAll process-env env)
         process (.start builder)
         stdout (atom nil)
         stderr (atom nil)
@@ -108,6 +110,15 @@
     {:exit exit :stdout @stdout :stderr @stderr
      :timed-out? (not completed?) :output-exceeded? @output-exceeded?}))
 
+(defn- toolchain-environment [^Path compiler-path]
+  {"PATH" (str (.getParent compiler-path) java.io.File/pathSeparator
+               "/usr/bin" java.io.File/pathSeparator "/bin")
+   "LANG" "C"
+   "LC_ALL" "C"
+   "TZ" "UTC"
+   "SOURCE_DATE_EPOCH" "0"
+   "ZERO_AR_DATE" "1"})
+
 (defn- delete-tree! [file]
   (when (.exists ^java.io.File file)
     (doseq [child (reverse (file-seq file))] (io/delete-file child true))))
@@ -127,12 +138,14 @@
         compiler-path (resolve-executable "cc")
         compiler-file (.toFile compiler-path)
         compiler-binary-sha (file-sha256 compiler-file)
+        toolchain-env (toolchain-environment compiler-path)
         actual-source-sha (file-sha256 loader-source)]
     (when-not (= loader-source-sha256 actual-source-sha)
       (throw (ex-info "native loader source identity mismatch"
                       {:phase :execute :expected loader-source-sha256
                        :actual actual-source-sha})))
-    (let [compiler (run-process [(str compiler-path) "--version"] {} {:timeout-ms 5000})
+    (let [compiler (run-process [(str compiler-path) "--version"] toolchain-env
+                                {:timeout-ms 5000})
           _ (when-not (and (zero? (:exit compiler))
                            (not (:timed-out? compiler))
                            (not (:output-exceeded? compiler)))
@@ -144,9 +157,9 @@
                                 [(str compiler-path) "-std=c11" "-O2" "-Wall" "-Wextra" "-Werror"]
                                 (deterministic-linker-flags)
                                 [(.getPath loader-source) "-o" (.getPath loader)])))
-          build (run-process (build-command) {} {:timeout-ms 30000})
+          build (run-process (build-command) toolchain-env {:timeout-ms 30000})
           first-loader-sha (when (zero? (:exit build)) (file-sha256 loader))
-          reproduced-build (run-process (build-command) {} {:timeout-ms 30000})]
+          reproduced-build (run-process (build-command) toolchain-env {:timeout-ms 30000})]
       (when-not (and (zero? (:exit build)) (zero? (:exit reproduced-build))
                      (not-any? #(or (:timed-out? %) (:output-exceeded? %))
                                [build reproduced-build]))

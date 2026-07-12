@@ -199,6 +199,12 @@ build to detect persistent replacement during measurement. Native execution alwa
 runtime. Runtime revocation uses `:revoked-runtime-sha256`. Measurement is a
 deliberate provisioning operation and still executes the local toolchain, so it
 belongs in a controlled build environment rather than on an exposed executor.
+No subprocess inherits the bootstrap environment. Toolchain processes receive
+only a canonical `PATH` containing the resolved compiler directory plus system
+binary directories, `C` locale, UTC, and fixed reproducibility variables.
+Variables such as `CPATH`, `LIBRARY_PATH`, `SDKROOT`, `LD_PRELOAD`, and
+`DYLD_*` cannot influence measurement. The admitted loader receives only its
+explicit structured-report flag.
 Every spawned process has a Java-side wall deadline and separately bounded
 stdout/stderr capture. A hanging or output-flooding compiler or loader is killed
 together with its descendants. Toolchain builds allow 30 seconds and 1 MiB per

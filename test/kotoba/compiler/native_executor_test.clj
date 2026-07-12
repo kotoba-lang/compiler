@@ -83,18 +83,22 @@
 
 (deftest host-process-boundary-is-time-and-output-bounded
   (let [run-process @#'executor/run-process
-        normal (run-process ["/bin/sh" "-c" "printf ok"] {}
+        test-env {"PATH" "/usr/bin:/bin"}
+        normal (run-process ["/bin/sh" "-c" "printf ok"] test-env
                             {:timeout-ms 1000 :output-limit 1024})
-        timeout (run-process ["/bin/sh" "-c" "sleep 10"] {}
+        timeout (run-process ["/bin/sh" "-c" "sleep 10"] test-env
                              {:timeout-ms 100 :output-limit 1024})
-        flood (run-process ["/bin/sh" "-c" "yes x"] {}
-                           {:timeout-ms 2000 :output-limit 1024})]
+        flood (run-process ["/bin/sh" "-c" "yes x"] test-env
+                           {:timeout-ms 2000 :output-limit 1024})
+        isolated (run-process ["/bin/sh" "-c" "printf %s \"${HOME-unset}\""] {}
+                              {:timeout-ms 1000 :output-limit 1024})]
     (is (= {:exit 0 :stdout "ok" :stderr "" :timed-out? false
             :output-exceeded? false}
            normal))
     (is (:timed-out? timeout))
     (is (:output-exceeded? flood))
-    (is (<= (count (:stdout flood)) 1024))))
+    (is (<= (count (:stdout flood)) 1024))
+    (is (= "unset" (:stdout isolated)))))
 
 (deftest compiler-executable-is-resolved-to-a-hashed-real-file
   (let [resolve-executable @#'executor/resolve-executable
