@@ -24,18 +24,11 @@
                                          (make-array java.nio.file.LinkOption 0))
         lookup (.getUserPrincipalLookupService (.getFileSystem path))
         owner (.lookupPrincipalByName lookup (System/getProperty "user.name"))
-        permissions (EnumSet/of AclEntryPermission/READ_DATA
-                                (into-array AclEntryPermission
-                                            (cond-> [AclEntryPermission/WRITE_DATA
-                                                     AclEntryPermission/APPEND_DATA
-                                                     AclEntryPermission/READ_ATTRIBUTES
-                                                     AclEntryPermission/WRITE_ATTRIBUTES
-                                                     AclEntryPermission/READ_ACL
-                                                     AclEntryPermission/WRITE_ACL
-                                                     AclEntryPermission/WRITE_OWNER
-                                                     AclEntryPermission/DELETE
-                                                     AclEntryPermission/SYNCHRONIZE]
-                                              executable? (conj AclEntryPermission/EXECUTE))))
+        ;; Windows checks additional generic-right mappings while a file is
+        ;; written and atomically renamed.  Full control for exactly one SID is
+        ;; the Windows equivalent of an owner-private file: it adds no reader
+        ;; or writer, and the owner could change its ACL in either model.
+        permissions (EnumSet/allOf AclEntryPermission)
         entry (-> (AclEntry/newBuilder)
                   (.setType AclEntryType/ALLOW)
                   (.setPrincipal owner)
