@@ -213,6 +213,9 @@
     (try
       (is (= ["path with space.h" "next.h"]
              (parse-deps "output.o: path\\ with\\ space.h \\\n  next.h\n")))
+      (is (= ["C:\\Program Files\\SDK\\windows.h" "D:\\a\\source.h"]
+             (parse-deps (str "D:\\a\\output.o: C:\\Program\\ Files\\SDK\\windows.h \\\r\n"
+                              " D:\\a\\source.h\r\n"))))
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no target separator"
                             (parse-deps "missing target")))
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"ends in an escape"

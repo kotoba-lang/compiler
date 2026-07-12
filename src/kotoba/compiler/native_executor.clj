@@ -310,13 +310,29 @@
               (throw (ex-info "compiler dependency file ends in an escape"
                               {:phase :execute}))
               (let [next-ch (.charAt ^String text (inc index))]
-                (if (= next-ch \newline)
+                (cond
+                  (= next-ch \newline)
                   (recur (+ index 2) token out)
+
+                  (and (= next-ch \return)
+                       (< (+ index 2) (count text))
+                       (= \newline (.charAt ^String text (+ index 2))))
+                  (recur (+ index 3) token out)
+
+                  (or (Character/isWhitespace next-ch)
+                      (contains? #{\# \: \\} next-ch))
                   (do (.append token next-ch)
                       (when (> (.length token) 4096)
                         (throw (ex-info "compiler dependency path exceeds limit"
                                         {:phase :execute :limit 4096})))
-                      (recur (+ index 2) token out)))))
+                      (recur (+ index 2) token out))
+
+                  :else
+                  ;; Clang emits native Windows separators without escaping
+                  ;; them.  A backslash before an ordinary path character is
+                  ;; therefore data, not Make escape syntax.
+                  (do (.append token ch)
+                      (recur (inc index) token out)))))
 
             (Character/isWhitespace ch)
             (if (zero? (.length token))
