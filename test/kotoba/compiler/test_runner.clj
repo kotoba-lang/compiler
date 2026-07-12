@@ -1,6 +1,7 @@
 (ns kotoba.compiler.test-runner
   (:require [clojure.test :as t]
             [kotoba.compiler.atomic-output-test]
+            [kotoba.compiler.accelerator-test]
             [kotoba.compiler.cli-test]
             [kotoba.compiler.core-test]
             [kotoba.compiler.coverage-test]
@@ -18,6 +19,7 @@
 
 (defn -main [& _]
   (let [{:keys [fail error]} (t/run-tests 'kotoba.compiler.atomic-output-test
+                                          'kotoba.compiler.accelerator-test
                                           'kotoba.compiler.cli-test
                                           'kotoba.compiler.core-test
                                           'kotoba.compiler.coverage-test
