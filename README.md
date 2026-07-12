@@ -1,5 +1,9 @@
 # Kotoba Compiler
 
+The accepted [worldwide 95% platform coverage roadmap](docs/adr/0001-worldwide-95-percent-platform-coverage.md)
+defines the planned native, WebAssembly, GPU, NPU, server, mobile, and IoT
+targets. It is a completion plan, not a claim of current platform support.
+
 The multi-target, deny-by-default compiler for the safe Kotoba language.
 `.kotoba` is the sole admitted source-file format.
 
