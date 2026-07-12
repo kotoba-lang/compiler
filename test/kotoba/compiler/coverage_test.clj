@@ -27,7 +27,7 @@
           :unknown-bps 500 :identifiable-bps 9500 :supported-bps 9400
           :coverage-bps 9894 :threshold-bps 9500 :goal-met? true
           :release-platforms #{:a}}
-         (coverage/report base))))
+         (coverage/report base [{:digest evidence :platform :a :paths #{:native}}]))))
 
 (deftest coverage-manifests-fail-closed
   (doseq [[label malformed]
@@ -51,3 +51,13 @@
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"digest mismatch"
                             (coverage/verify-dataset! base (str path))))
       (finally (Files/deleteIfExists path)))))
+
+(deftest release-platforms-require-matching-verified-evidence
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"missing or mismatched"
+                        (coverage/report base)))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"missing or mismatched"
+                        (coverage/report base [{:digest evidence :platform :b
+                                                :paths #{:native}}])))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"missing or mismatched"
+                        (coverage/report base [{:digest evidence :platform :a
+                                                :paths #{:wasm}}]))))

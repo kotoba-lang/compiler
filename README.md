@@ -11,6 +11,11 @@ bin/kotoba -M coverage data/coverage/interactive-2026-06.edn \
   --dataset data/coverage/statcounter-os-worldwide-2026-06.csv
 ```
 
+A platform marked `release` is counted only when every manifest evidence digest
+resolves to a currently valid Ed25519 envelope from a trusted, non-revoked
+signer. The signed statement binds the platform, native/Wasm paths, exact target
+profiles, conformance and runtime digests, CI run, test time, and expiry.
+
 The multi-target, deny-by-default compiler for the safe Kotoba language.
 `.kotoba` is the sole admitted source-file format.
 

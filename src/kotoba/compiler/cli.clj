@@ -1,8 +1,10 @@
 (ns kotoba.compiler.cli
   (:require [kotoba.compiler.atomic-output :as atomic-output]
+            [kotoba.compiler.artifact :as artifact]
             [kotoba.compiler.bounded-edn :as bounded-edn]
             [kotoba.compiler.core :as compiler]
             [kotoba.compiler.coverage :as coverage]
+            [kotoba.compiler.coverage-evidence :as coverage-evidence]
             [kotoba.compiler.native-executor :as native-executor]
             [kotoba.compiler.receipt :as receipt]
             [kotoba.compiler.runtime-identity :as runtime-identity]
@@ -186,8 +188,24 @@
       (println (pr-str (receipt/verify-chain receipts trust))))
     "coverage"
     (let [manifest (bounded-edn/read-file (second args))
-          _ (coverage/verify-dataset! manifest (option args "--dataset"))]
-      (println (pr-str (coverage/report manifest))))
+          _ (coverage/verify-dataset! manifest (option args "--dataset"))
+          evidence-path (option args "--evidence")
+          evidence (if evidence-path
+                     (coverage-evidence/verify-bundle
+                      (bounded-edn/read-file evidence-path)
+                      (bounded-edn/read-file (option args "--trust"))
+                      (Long/parseLong (or (option args "--now")
+                                          (str (quot (System/currentTimeMillis) 1000)))))
+                     [])]
+      (println (pr-str (coverage/report manifest evidence))))
+    "sign-coverage-evidence"
+    (let [claim (bounded-edn/read-file (second args))
+          key (bounded-edn/read-file (option args "--key"))
+          output (or (option args "--output") "kotoba-coverage-evidence.edn")
+          envelope (coverage-evidence/sign claim key)]
+      (atomic-output/write-edn! output [envelope])
+      (println (pr-str {:ok true :output output
+                        :evidence-sha256 (artifact/sha256 (:statement envelope))})))
     "check"
     (let [input (kotoba-source! (second args))
           policy-path (option args "--policy")

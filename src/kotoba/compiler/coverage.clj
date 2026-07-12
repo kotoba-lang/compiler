@@ -73,12 +73,27 @@
       (reject! "coverage support evidence rejected" {})))
   manifest)
 
-(defn report [manifest]
-  (validate! manifest)
-  (let [shares (into {} (map (juxt :platform :share-bps) (:observations manifest)))
+(defn report
+  ([manifest] (report manifest []))
+  ([manifest verified-evidence]
+   (validate! manifest)
+   (when-not (and (vector? verified-evidence)
+                  (every? #(and (map? %) (sha256? (:digest %))
+                                (keyword? (:platform %)) (set? (:paths %)))
+                          verified-evidence))
+     (reject! "verified coverage evidence rejected" {}))
+   (let [evidence-by-digest (into {} (map (juxt :digest identity) verified-evidence))
+         shares (into {} (map (juxt :platform :share-bps) (:observations manifest)))
         unknown (get shares :unknown)
         identifiable (- 10000 unknown)
         released (filter #(= :release (:status %)) (:support manifest))
+        _ (doseq [{:keys [platform paths evidence]} released
+                  digest evidence]
+            (let [verified (get evidence-by-digest digest)]
+              (when-not (and verified (= platform (:platform verified))
+                             (set/subset? paths (:paths verified)))
+                (reject! "release coverage evidence is missing or mismatched"
+                         {:platform platform}))))
         supported (reduce + (map #(get shares (:platform %)) released))
         coverage-bps (if (zero? identifiable) 0 (quot (* supported 10000) identifiable))]
     {:format :kotoba.coverage-report/v1
@@ -91,7 +106,7 @@
      :coverage-bps coverage-bps
      :threshold-bps (:threshold-bps manifest)
      :goal-met? (>= coverage-bps (:threshold-bps manifest))
-     :release-platforms (set (map :platform released))}))
+     :release-platforms (set (map :platform released))})))
 
 (defn verify-dataset! [manifest path]
   (validate! manifest)

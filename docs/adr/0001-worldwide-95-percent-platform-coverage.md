@@ -106,8 +106,10 @@ report can be reproduced byte-for-byte from committed inputs.
 
 Implementation status: the exact-schema coverage manifest, raw-dataset digest
 verification, basis-point calculator, committed first snapshot, and
-`kotoba -M coverage` command are implemented. Target identity splitting and
-signed conformance-evidence binding remain open Phase 0 work.
+`kotoba -M coverage` command are implemented. Coverage claims now require
+trusted, unexpired Ed25519 conformance evidence binding the platform, execution
+paths, target profiles, runtime, conformance output, and CI run. Target identity
+splitting remains open Phase 0 work.
 
 ### Phase 1 — Web coverage
 
