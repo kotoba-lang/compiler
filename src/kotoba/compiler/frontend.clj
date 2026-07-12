@@ -11,12 +11,17 @@
 (def arithmetic '#{+ - * quot})
 (def comparisons '#{= < > <= >=})
 (def heap-operations '{pair 2 pair-first 1 pair-second 1})
+(def list-operations '#{list cons first rest empty?})
+(def reserved-function-names
+  (set/union forbidden-heads arithmetic comparisons (set (keys heap-operations))
+             list-operations '#{let if cap-call ns defn}))
 (def max-functions 1024)
 (def max-expression-nodes 50000)
 (def max-lowered-nodes 100000)
 (def max-bindings 4096)
 (def max-parameters 5)
 (def max-symbol-chars 128)
+(def max-list-items 128)
 
 (defn- check-reader-depth! [source]
   (loop [index 0 depth 0 in-string? false escaped? false in-comment? false]
@@ -59,6 +64,30 @@
 
 (defn- reject! [message form]
   (throw (ex-info message {:phase :subset :form form})))
+
+(declare desugar-expr)
+
+(defn- desugar-list [args form]
+  (when (> (count args) max-list-items)
+    (reject! "list item count exceeds admission limit" form))
+  (reduce (fn [tail item] (list 'pair (desugar-expr item) tail))
+          0 (reverse args)))
+
+(defn- desugar-expr [form]
+  (if-not (seq? form)
+    form
+    (let [[op & args] form]
+      (case op
+        list (desugar-list args form)
+        cons (do (when-not (= 2 (count args)) (reject! "cons requires two operands" form))
+                 (list 'pair (desugar-expr (first args)) (desugar-expr (second args))))
+        first (do (when-not (= 1 (count args)) (reject! "first requires one operand" form))
+                  (list 'pair-first (desugar-expr (first args))))
+        rest (do (when-not (= 1 (count args)) (reject! "rest requires one operand" form))
+                 (list 'pair-second (desugar-expr (first args))))
+        empty? (do (when-not (= 1 (count args)) (reject! "empty? requires one operand" form))
+                   (list '= (desugar-expr (first args)) 0))
+        (apply list op (map desugar-expr args))))))
 
 (defn- valid-name? [value]
   (and (simple-symbol? value) (<= (count (name value)) max-symbol-chars)))
@@ -210,13 +239,16 @@
         parsed (mapv (fn [form]
                        (let [[_ name params & body] form]
                          (when-not (valid-name? name) (reject! "invalid function name" name))
+                         (when (contains? reserved-function-names name)
+                           (reject! "reserved function name" name))
                          (when-not (and (vector? params) (every? valid-name? params)
                                         (= (count params) (count (distinct params)))
                                         (<= (count params) max-parameters))
                            (reject! "function parameters must be unique bounded symbols with ABI-supported arity" params))
                          (when-not (= 1 (count body))
                            (reject! "function must contain one result expression" body))
-                         {:name name :params params :result :i64 :effects #{} :body (first body)}))
+                         {:name name :params params :result :i64 :effects #{}
+                          :body (desugar-expr (first body))}))
                      defs)
         signatures (into {} (map (juxt :name :params) parsed))]
     (when (seq other) (reject! "only ns and defn are allowed at top level" (first other)))

@@ -118,6 +118,32 @@
                      (ir/execute kir 'read-pair [1])
                      (catch clojure.lang.ExceptionInfo error error))))))))
 
+(deftest persistent-list-syntax-desugars-to-the-bounded-pair-arena
+  (let [source "(defn sum2 [xs] (+ (first xs) (first (rest xs))))
+                (defn main [] (+ (sum2 (list 20 22))
+                                 (empty? (rest (cons 9 (list))))))"
+        results (mapv #(compiler/compile-source source %) compiler/targets)
+        kir (:kir (first results))
+        printed (pr-str kir)]
+    (is (= 43 (:oracle-value kir)))
+    (is (= 1 (count (set (map :kir results)))))
+    (doseq [surface ["(list " "(cons " "(first " "(rest " "(empty? "]]
+      (is (not (.contains printed surface))))
+    (is (= :invalid-pair-handle
+           (:trap (ex-data
+                   (try
+                     (ir/execute kir 'sum2 [0])
+                     (catch clojure.lang.ExceptionInfo error error))))))))
+
+(deftest list-surface-profile-fails-closed
+  (doseq [bad ["(defn list [] 1) (defn main [] 0)"
+               "(defn first [x] x) (defn main [] 0)"
+               "(defn main [] (cons 1))"
+               (str "(defn main [] (list " (apply str (interpose " " (repeat 129 "1"))) "))")]]
+    (testing bad
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (compiler/compile-source bad :wasm32-kotoba-v1))))))
+
 (deftest wasm-recursion-is-fuel-bounded-and-native-fails-closed
   (let [source "(defn fact [n] (if (<= n 1) 1 (* n (fact (- n 1)))))
                 (defn forever [n] (forever (+ n 1)))

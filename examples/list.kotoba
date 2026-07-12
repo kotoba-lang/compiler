@@ -1,0 +1,8 @@
+(ns examples.list)
+
+(defn sum-two [values]
+  (+ (first values)
+     (first (rest values))))
+
+(defn main []
+  (sum-two (cons 20 (list 22))))

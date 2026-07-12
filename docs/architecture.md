@@ -101,6 +101,12 @@ three functions from `kotoba:heap`; conformance supplies a bounded host arena
 and checks valid allocation plus forged-handle rejection. This arena is
 deterministic bounded allocation, not a general-purpose or tracing GC.
 
+The frontend lowers `(list a b)` to `(pair a (pair b 0))`, `cons` to `pair`,
+`first`/`rest` to the two checked projections, and `empty?` to comparison with
+zero. KIR therefore contains only the independently verified pair contract.
+List literals admit at most 128 items and their expanded trees are charged to
+the ordinary expression and lowering budgets.
+
 KIR v3 also has a normative bounded reference executor
 (`kotoba.compiler.ir/execute`). All values are signed i64 bit patterns.
 Addition, subtraction, multiplication, and unary negation wrap modulo 2^64,

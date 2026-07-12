@@ -179,6 +179,11 @@ fields and requires rejection. This prevents host-memory corruption and
 unbounded allocation, but it is not yet a tracing collector: memory is reclaimed
 only when the entire supervised execution ends.
 
+Safe list syntax does not introduce another object representation or runtime
+entry point. Empty is zero and non-empty lists are pair chains; projection from
+empty or forged tails reaches the same checked handle trap. Expansion occurs
+before admission budgets, and a single list form is limited to 128 items.
+
 The C loader's parser and valid execution path run under ASan and UBSan on both
 host platforms in CI. Decimal parsing resets and checks `errno` for every
 `strtoul`, `strtoull`, and `strtoll`, so values outside the declared unsigned or

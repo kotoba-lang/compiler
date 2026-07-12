@@ -28,7 +28,8 @@ must carry no oracle value.
 
 The current experimental slice supports pure integer functions, parameters,
 direct calls, sequential `let`, `if`, arithmetic, comparisons, and immutable
-`pair` / `pair-first` / `pair-second` values. It emits
+`pair` / `pair-first` / `pair-second` values, with `list`, `cons`, `first`,
+`rest`, and `empty?` as bounded frontend syntax. It emits
 executable Wasm with real runtime parameters, locals, calls, and branches, plus
 verified runtime functions for x86-64 and AArch64. KEXE seals its
 target, KIR identity, effects, resource limits, and exact code bytes with
@@ -44,6 +45,11 @@ GC pause or unbounded growth. The normative KIR executor enforces the same
 capacity. Native code reaches only three fixed context-v2 callbacks at sealed
 offsets; the loader owns the arena. Wasm uses equivalent `kotoba:heap` imports,
 whose host implementation must enforce the same contract.
+
+The empty list is the i64 value zero. Non-empty lists are immutable pair chains;
+projection from zero or any forged handle traps. `list` is capped at 128 items
+and is expanded before structural and lowering budgets are checked, so surface
+syntax cannot hide unbounded backend work.
 
 Compilation has explicit structural budgets in addition to the 1 MiB source
 limit. Function count, common five-argument ABI, bindings, expression nodes, and

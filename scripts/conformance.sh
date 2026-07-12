@@ -50,6 +50,7 @@ grep -q 'capability policy denies required effects' "$TMP/capability-deny.out"
 "$ROOT/bin/kotoba" -M compile "$ROOT/examples/fuel.kotoba" --target wasm32 --output "$TMP/fuel.wasm"
 "$ROOT/bin/kotoba" -M compile "$ROOT/examples/i64-semantics.kotoba" --target wasm32 --output "$TMP/i64.wasm"
 "$ROOT/bin/kotoba" -M compile "$ROOT/examples/heap.kotoba" --target wasm32 --output "$TMP/heap.wasm"
+"$ROOT/bin/kotoba" -M compile "$ROOT/examples/list.kotoba" --target wasm32 --output "$TMP/list.wasm"
 "$ROOT/bin/kotoba" -M compile "$ROOT/examples/structured.kotoba" --target x86_64 --output "$TMP/x86_64.kexe"
 "$ROOT/bin/kotoba" -M compile "$ROOT/examples/fuel.kotoba" --target x86_64 --output "$TMP/x86_64-fuel.kexe"
 "$ROOT/bin/kotoba" -M compile "$ROOT/examples/i64-semantics.kotoba" --target x86_64 --output "$TMP/x86_64-i64.kexe"
@@ -190,6 +191,32 @@ WebAssembly.instantiate(fs.readFileSync(process.argv[1]), {"kotoba:heap": heap})
   }).catch(error => { console.error(error); process.exit(1); });
 ' "$TMP/heap.wasm"
 printf '%s\n' 'conformance: Wasm bounded pair arena passed; forged handle trapped'
+
+node -e '
+const fs = require("fs");
+const cells = [];
+function checked(handle) {
+  const n = Number(handle);
+  if (!Number.isSafeInteger(n) || n <= 0 || n > cells.length)
+    throw new WebAssembly.RuntimeError("invalid pair handle");
+  return cells[n - 1];
+}
+const heap = {
+  pair(first, second) {
+    if (cells.length >= 4096) throw new WebAssembly.RuntimeError("heap exhausted");
+    cells.push([first, second]);
+    return BigInt(cells.length);
+  },
+  "pair-first"(handle) { return checked(handle)[0]; },
+  "pair-second"(handle) { return checked(handle)[1]; }
+};
+WebAssembly.instantiate(fs.readFileSync(process.argv[1]), {"kotoba:heap": heap})
+  .then(({instance}) => {
+    if (instance.exports.main() !== 42n) throw new Error("list result mismatch");
+    if (cells.length !== 2) throw new Error(`list usage expected 2, got ${cells.length}`);
+  });
+' "$TMP/list.wasm"
+printf '%s\n' 'conformance: Wasm persistent list syntax passed through bounded pair arena'
 
 native_check() {
   ARTIFACT=$1
