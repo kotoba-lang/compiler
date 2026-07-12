@@ -107,6 +107,10 @@ zero. KIR therefore contains only the independently verified pair contract.
 List literals admit at most 128 items and their expanded trees are charged to
 the ordinary expression and lowering budgets.
 
+`second` composes the checked tail and head projections. `not`, `zero?`,
+`pos?`, and `neg?` lower to existing signed i64 comparisons, preserving the
+language rule that zero is false and every nonzero value is true.
+
 KIR v3 also has a normative bounded reference executor
 (`kotoba.compiler.ir/execute`). All values are signed i64 bit patterns.
 Addition, subtraction, multiplication, and unary negation wrap modulo 2^64,

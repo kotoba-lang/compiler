@@ -144,6 +144,23 @@
       (is (thrown? clojure.lang.ExceptionInfo
                    (compiler/compile-source bad :wasm32-kotoba-v1))))))
 
+(deftest safe-predicates-and-second-desugar-to-verified-core-operations
+  (let [source "(defn classify [x] (+ (zero? x) (pos? x) (neg? x) (not x)))
+                (defn main [] (+ (second (list 40 38))
+                                 (classify 0) (classify 4) (classify -4)))"
+        results (mapv #(compiler/compile-source source %) compiler/targets)
+        kir (:kir (first results))
+        printed (pr-str kir)]
+    (is (= 42 (:oracle-value kir)))
+    (is (= 1 (count (set (map :kir results)))))
+    (doseq [surface ["(second " "(not " "(zero? " "(pos? " "(neg? "]]
+      (is (not (.contains printed surface)))))
+  (doseq [bad ["(defn main [] (second))"
+               "(defn main [] (zero? 1 2))"
+               "(defn not [x] x) (defn main [] 0)"]]
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (compiler/compile-source bad :wasm32-kotoba-v1)))))
+
 (deftest wasm-recursion-is-fuel-bounded-and-native-fails-closed
   (let [source "(defn fact [n] (if (<= n 1) 1 (* n (fact (- n 1)))))
                 (defn forever [n] (forever (+ n 1)))

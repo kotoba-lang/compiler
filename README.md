@@ -29,7 +29,8 @@ must carry no oracle value.
 The current experimental slice supports pure integer functions, parameters,
 direct calls, sequential `let`, `if`, arithmetic, comparisons, and immutable
 `pair` / `pair-first` / `pair-second` values, with `list`, `cons`, `first`,
-`rest`, and `empty?` as bounded frontend syntax. It emits
+`second`, `rest`, and `empty?` as bounded frontend syntax. Safe numeric/truth
+predicates include `not`, `zero?`, `pos?`, and `neg?`. It emits
 executable Wasm with real runtime parameters, locals, calls, and branches, plus
 verified runtime functions for x86-64 and AArch64. KEXE seals its
 target, KIR identity, effects, resource limits, and exact code bytes with
