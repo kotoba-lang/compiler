@@ -70,6 +70,20 @@
                           (executor/execute envelope trust {:allow #{}} {:args []}
                                             {:now 1500 :entry 'main})))))
 
+(deftest execution-rejects-a-valid-artifact-sealed-for-another-os
+  (let [isa (if (= (target) :aarch64-kotoba-v1) "aarch64" "x86_64")
+        other-os (if (.contains (.toLowerCase (System/getProperty "os.name")) "mac")
+                   "linux" "macos")
+        explicit-target (keyword (str isa "-" other-os "-kotoba-v1"))
+        artifact (:artifact (compiler/compile-source "(defn main [] 42)" explicit-target))
+        key (signing/generate-keypair)
+        envelope (signing/sign artifact key {:not-before 1000 :expires 2000})
+        trust {:format :kotoba.trust/v1 :trusted-signers #{(:signer key)}
+               :revoked-signers #{} :revoked-artifacts #{}}]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"does not match execution host"
+                          (executor/execute envelope trust {:allow #{}} {:args []}
+                                            {:now 1500 :entry 'main})))))
+
 (deftest execution-rejects-a-loader-that-does-not-match-the-approved-bytes
   (let [{:keys [envelope trust]} (signed "(defn main [] 42)" {:allow #{}})
         {:keys [trust options]} (execution-options trust)

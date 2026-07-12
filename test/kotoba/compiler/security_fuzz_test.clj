@@ -49,7 +49,12 @@
     18 (reseal (assoc kexe :attacker-field true))
     19 (reseal (update kexe :value inc))
     20 (reseal (assoc-in kexe [:context-abi :pair-new-offset] 80))
-    21 (reseal (assoc-in kexe [:context-abi :pair-capacity] 8192))))
+    21 (reseal (assoc-in kexe [:context-abi :pair-capacity] 8192))
+    22 (reseal (assoc-in kexe [:target-profile :os] :windows))
+    23 (reseal (assoc-in kexe [:target-profile :abi] :msvc))
+    24 (reseal (assoc-in kexe [:target-profile :runtime] :attacker-runtime))
+    25 (reseal (assoc-in kexe [:target-profile :isa] :aarch64))
+    26 (reseal (assoc-in kexe [:target-profile :ignored] true))))
 
 (defn- mutate-envelope [envelope choice]
   (case choice
@@ -102,7 +107,7 @@
         (case domain
           0 (is (thrown? clojure.lang.ExceptionInfo
                          (verifier/verify-artifact!
-                          (mutate-artifact kexe (.nextInt rng 22))))
+                          (mutate-artifact kexe (.nextInt rng 27))))
                 assertion-message)
           1 (is (thrown? clojure.lang.ExceptionInfo
                          (signing/verify

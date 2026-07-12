@@ -109,7 +109,9 @@ verification, basis-point calculator, committed first snapshot, and
 `kotoba -M coverage` command are implemented. Coverage claims now require
 trusted, unexpired Ed25519 conformance evidence binding the platform, execution
 paths, target profiles, runtime, conformance output, and CI run. Target identity
-splitting remains open Phase 0 work.
+is now split across execution kind, ISA, OS, ABI, and runtime profile for the
+existing browser/Linux/macOS matrix. Compatibility migration and future
+platform profiles remain open Phase 0 work.
 
 ### Phase 1 — Web coverage
 

@@ -5,7 +5,8 @@
             [kotoba.compiler.admission :as admission]
             [kotoba.compiler.artifact :as artifact]
             [kotoba.compiler.runtime-identity :as runtime-identity]
-            [kotoba.compiler.signing :as signing])
+            [kotoba.compiler.signing :as signing]
+            [kotoba.compiler.target :as target-profile])
   (:import [java.nio.file Files LinkOption Path Paths]
            [java.lang ProcessHandle]
            [java.nio.charset StandardCharsets]
@@ -52,6 +53,13 @@
       (contains? #{"aarch64" "arm64"} arch) :aarch64-kotoba-v1
       :else (throw (ex-info "native execution is unsupported on this architecture"
                             {:phase :execute :arch arch})))))
+
+(defn- host-os []
+  (let [os (str/lower-case (System/getProperty "os.name"))]
+    (cond
+      (str/includes? os "linux") :linux
+      (str/includes? os "mac") :macos
+      :else nil)))
 
 (defn- deterministic-linker-flags []
   (if (str/includes? (str/lower-case (System/getProperty "os.name")) "mac")
@@ -432,15 +440,19 @@
   "Verify and execute a signed native artifact. Returns measured supervisor evidence."
   [envelope trust policy input {:keys [now entry runtime loader-path]}]
   (let [{artifact :artifact signer :signer} (signing/verify envelope trust now)
-        target (host-target)
+        host-backend (host-target)
+        host-os-value (host-os)
+        artifact-backend (target-profile/backend (:target artifact))
+        artifact-profile (:target-profile artifact)
         entry (or entry 'main)
         export (get (:exports artifact) entry)
         args (:args input)]
     (admission/check {:effects (:effects artifact)} policy)
-    (when-not (= target (:target artifact))
+    (when-not (and (= host-backend artifact-backend)
+                   (contains? #{:unspecified host-os-value} (:os artifact-profile)))
       (throw (ex-info "artifact target does not match execution host"
                       {:phase :execute :artifact-target (:target artifact)
-                       :host-target target})))
+                       :host-target host-backend})))
     (when-not export
       (throw (ex-info "unknown native entry" {:phase :execute :entry entry})))
     (when-not (and (map? input) (vector? args) (every? integer? args)
@@ -471,7 +483,7 @@
                           {:phase :execute})))
         (with-open [out (io/output-stream code-file)]
           (.write out ^bytes (byte-array (map unchecked-byte (:code artifact)))))
-        (let [isa (if (= target :x86_64-kotoba-v1) "x86_64" "aarch64")
+        (let [isa (if (= host-backend :x86_64-kotoba-v1) "x86_64" "aarch64")
               allow (let [ids (allowed-capabilities policy)] (if (empty? ids) "-" ids))
               command (into [(.getPath loader) (.getPath code-file)
                              (str (:offset export)) (str (:arity export)) isa allow]
@@ -490,7 +502,7 @@
             (throw (ex-info "malformed native supervisor evidence"
                             {:phase :execute :exit (:exit process)
                              :stdout (:stdout process) :stderr (:stderr process)})))
-          {:artifact artifact :signer signer :target target :entry entry
+          {:artifact artifact :signer signer :target (:target artifact) :entry entry
            :input input :evidence evidence :report report
            :started-at started-at :finished-at finished-at})
         (finally (delete-tree! directory)))))))

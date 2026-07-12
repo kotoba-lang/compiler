@@ -17,6 +17,24 @@
     (is (= 1 (count (set (map :kir results)))))
     (is (every? #(= #{} (get-in % [:kir :effects])) results))))
 
+(deftest explicit-platform-targets-bind-os-abi-and-runtime-profile
+  (let [linux (:artifact (compiler/compile-source source :x86_64-linux-kotoba-v1))
+        macos (:artifact (compiler/compile-source source :x86_64-macos-kotoba-v1))
+        browser (compiler/compile-source source :wasm32-browser-kotoba-v1)]
+    (is (= (:code linux) (:code macos)))
+    (is (not= (:sha256 linux) (:sha256 macos)))
+    (is (= {:format :kotoba.target-profile/v1 :execution :native :isa :x86_64
+            :os :linux :abi :sysv :runtime :kotoba-linux-supervisor-v1}
+           (:target-profile linux)))
+    (is (= :browser (get-in browser [:target-profile :os])))
+    (is (= :wasm (get-in browser [:target-profile :execution])))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"target profile"
+                          (verifier/verify-artifact!
+                           (artifact/seal
+                            (assoc linux :target-profile (:target-profile macos))))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"unsupported target"
+                          (compiler/compile-source source :x86_64-windows-kotoba-v1)))))
+
 (deftest emits-real-wasm
   (let [bytes (:bytes (compiler/compile-source source :wasm32-kotoba-v1))]
     (is (= [0 97 115 109] (mapv #(bit-and (int %) 0xff) (take 4 bytes))))

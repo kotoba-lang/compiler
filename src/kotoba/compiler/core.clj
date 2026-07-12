@@ -6,9 +6,11 @@
             [kotoba.compiler.backend.x86-64 :as x86-64]
             [kotoba.compiler.backend.aarch64 :as aarch64]
             [kotoba.compiler.artifact :as artifact]
+            [kotoba.compiler.target :as target-profile]
             [kotoba.compiler.verifier :as verifier]))
 
-(def targets #{:wasm32-kotoba-v1 :x86_64-kotoba-v1 :aarch64-kotoba-v1})
+(def targets target-profile/compatibility-targets)
+(def supported-targets (set (keys target-profile/profiles)))
 
 (defn check-source
   ([source] (check-source source {}))
@@ -19,27 +21,30 @@
 (defn compile-source
   ([source target] (compile-source source target {}))
   ([source target policy]
-   (when-not (contains? targets target)
-     (throw (ex-info "unsupported target" {:target target :supported targets})))
-   (let [hir (frontend/analyze source)
+   (when-not (contains? supported-targets target)
+     (throw (ex-info "unsupported target" {:target target :supported supported-targets})))
+   (let [profile (target-profile/profile target)
+        backend (target-profile/backend target)
+        hir (frontend/analyze source)
         admission (admission/check hir policy)
         kir (ir/lower hir)
         value (:oracle-value kir)]
-    (if (= target :wasm32-kotoba-v1)
-      {:format :wasm/v1 :target target :hir hir :kir kir :admission admission
+    (if (= backend :wasm32-kotoba-v1)
+      {:format :wasm/v1 :target target :target-profile profile
+       :hir hir :kir kir :admission admission
        :limits {:fuel 256 :replenishable? false} :bytes (wasm/emit kir)}
-      (let [emitted ((case target
+      (let [emitted ((case backend
                        :x86_64-kotoba-v1 x86-64/emit-program
                        :aarch64-kotoba-v1 aarch64/emit-program) kir)
             code (:code emitted)
             program (select-keys kir [:format :entry :signature :effects :functions])
             artifact (artifact/seal
-                      {:format :kotoba.kexe/v1 :target target :value value
+                      {:format :kotoba.kexe/v1 :target target :target-profile profile :value value
                        :kir-sha256 (artifact/sha256 program)
-                       :lowering (case target
+                       :lowering (case backend
                                    :x86_64-kotoba-v1 :runtime-sysv-v1
                                    :aarch64-kotoba-v1 :runtime-aapcs64-v1)
-                       :fuel-abi (case target
+                       :fuel-abi (case backend
                                    :x86_64-kotoba-v1 {:mode :hidden-context-r9 :initial 256}
                                    :aarch64-kotoba-v1 {:mode :hidden-context-x7 :initial 256})
                        :context-abi {:version 2 :fuel-offset 8 :allow-bitmap-offset 16

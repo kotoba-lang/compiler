@@ -31,6 +31,14 @@ Targets are versioned contracts:
 - `x86_64-kotoba-v1`: direct x86-64 instructions in a sealed KEXE container.
 - `aarch64-kotoba-v1`: direct AArch64 instructions in a sealed KEXE container.
 
+Each emitted result also carries `:kotoba.target-profile/v1`, binding execution
+kind, ISA, OS, ABI, and supervisor/host runtime. Explicit Linux, macOS, and
+browser target names have exact profiles; legacy ISA-only aliases use
+`:os :unspecified`. Native verification reconstructs the expected profile from
+the target name before regenerating code. The executor additionally requires
+the sealed OS to equal its host OS. Changing only OS, ABI, or runtime and
+re-sealing the unkeyed artifact is rejected.
+
 KEXE is not mapped by this compiler. The loader must reverify, compare the
 policy/artifact digest, allocate writable non-executable memory, copy code,
 change it to read+execute, and never map it writable again. No generated code

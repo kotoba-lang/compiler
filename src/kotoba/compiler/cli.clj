@@ -9,13 +9,20 @@
             [kotoba.compiler.receipt :as receipt]
             [kotoba.compiler.runtime-identity :as runtime-identity]
             [kotoba.compiler.signing :as signing]
+            [kotoba.compiler.target :as target-profile]
             [kotoba.compiler.verifier :as verifier]
             [clojure.string :as str])
   (:gen-class))
 
 (defn- parse-target [s]
   (case s "wasm32" :wasm32-kotoba-v1 "x86_64" :x86_64-kotoba-v1
-        "aarch64" :aarch64-kotoba-v1 (keyword s)))
+        "aarch64" :aarch64-kotoba-v1
+        "wasm32-browser" :wasm32-browser-kotoba-v1
+        "x86_64-linux" :x86_64-linux-kotoba-v1
+        "x86_64-macos" :x86_64-macos-kotoba-v1
+        "aarch64-linux" :aarch64-linux-kotoba-v1
+        "aarch64-macos" :aarch64-macos-kotoba-v1
+        (keyword s)))
 
 (defn- option [args flag] (second (drop-while #(not= flag %) args)))
 
@@ -217,7 +224,9 @@
     "compile"
     (let [input (kotoba-source! (second args))
           target (parse-target (or (option args "--target") "wasm32"))
-          output (or (option args "--output") (str input (if (= target :wasm32-kotoba-v1) ".wasm" ".kexe")))
+          output (or (option args "--output")
+                     (str input (if (= :wasm (:execution (target-profile/profile target)))
+                                  ".wasm" ".kexe")))
           policy-path (option args "--policy")
           policy (if policy-path (bounded-edn/read-file policy-path) {})
           result (compiler/compile-source (bounded-edn/read-text-file input) target policy)]

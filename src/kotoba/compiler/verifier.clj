@@ -3,7 +3,8 @@
             [kotoba.compiler.artifact :as artifact]
             [kotoba.compiler.backend.aarch64 :as aarch64]
             [kotoba.compiler.backend.x86-64 :as x86-64]
-            [kotoba.compiler.ir :as ir]))
+            [kotoba.compiler.ir :as ir]
+            [kotoba.compiler.target :as target-profile]))
 
 (defn- reject! [message data]
   (throw (ex-info message (assoc data :phase :verify))))
@@ -13,7 +14,7 @@
    :aarch64-kotoba-v1 {:lowering :runtime-aapcs64-v1 :emit aarch64/emit-program}})
 
 (def ^:private artifact-fields
-  #{:format :target :value :kir-sha256 :lowering :fuel-abi :context-abi
+  #{:format :target :target-profile :value :kir-sha256 :lowering :fuel-abi :context-abi
     :effects :limits :code :program :exports :sha256})
 
 (def max-functions 1024)
@@ -200,8 +201,13 @@
         (reject! "runtime KIR lowering budget exhausted" {:cost cost}))))
   program)
 
-(defn- verify-runtime! [{:keys [target program code exports lowering limits fuel-abi context-abi]}]
-  (let [{expected-lowering :lowering emit :emit} (get target-contracts target)]
+(defn- verify-runtime! [{:keys [target program code exports lowering limits fuel-abi context-abi]
+                         profile-value :target-profile}]
+  (let [backend (target-profile/backend target)
+        expected-profile (target-profile/profile target)
+        {expected-lowering :lowering emit :emit} (get target-contracts backend)]
+    (when-not (= expected-profile profile-value)
+      (reject! "native target profile does not match target identity" {:target target}))
     (when-not emit (reject! "not a native verifier target" {:target target}))
     (when-not (= expected-lowering lowering)
       (reject! "native runtime lowering mode is not admitted"
@@ -218,7 +224,7 @@
         (reject! "native export table rejected" {:target target}))
       (when-not (= (:code expected) code)
         (reject! "native instruction stream rejected" {:target target})))
-    (let [expected-fuel-abi (case target
+    (let [expected-fuel-abi (case backend
                               :x86_64-kotoba-v1 {:mode :hidden-context-r9 :initial 256}
                               :aarch64-kotoba-v1 {:mode :hidden-context-x7 :initial 256})
           expected-limits {:memory-bytes 65536
