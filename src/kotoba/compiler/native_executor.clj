@@ -143,6 +143,15 @@
 
 (defn- toolchain-environment [^Path compiler-path]
   (let [system-root (System/getenv "SystemRoot")
+        injection-vars #{"CFLAGS" "CPPFLAGS" "LDFLAGS" "CL" "_CL_" "LINK"
+                         "CPATH" "C_INCLUDE_PATH" "CPLUS_INCLUDE_PATH"
+                         "OBJC_INCLUDE_PATH" "LIBRARY_PATH" "COMPILER_PATH"
+                         "GCC_EXEC_PREFIX"}
+        host-env (when (windows-host?)
+                   (into {}
+                         (remove (fn [[name _]]
+                                   (contains? injection-vars (str/upper-case name))))
+                         (System/getenv)))
         windows-vars (when (windows-host?)
                        (into {}
                              (keep (fn [name]
@@ -155,7 +164,7 @@
                               "UniversalCRTSdkDir" "UCRTVersion"
                               "TEMP" "TMP"]))]
     (cond->
-     (merge
+     (merge host-env
       {"PATH" (if (windows-host?)
                 (str (.getParent compiler-path) java.io.File/pathSeparator
                      system-root "\\System32" java.io.File/pathSeparator
