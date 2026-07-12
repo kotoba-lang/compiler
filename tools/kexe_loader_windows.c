@@ -127,7 +127,7 @@ static void install_job_boundary(void) {
 }
 
 static HANDLE restricted_token(void) {
-  HANDLE process_token = NULL, token = NULL;
+  HANDLE process_token = NULL, token = NULL, impersonation = NULL;
   PSID low_sid = NULL;
   TOKEN_MANDATORY_LABEL label;
   if (!OpenProcessToken(GetCurrentProcess(), TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_IMPERSONATE |
@@ -144,7 +144,11 @@ static HANDLE restricted_token(void) {
                            (DWORD)(sizeof(label) + GetLengthSid(low_sid))))
     fail_win("SetTokenInformation low integrity");
   LocalFree(low_sid);
-  return token;
+  if (!DuplicateTokenEx(token, TOKEN_QUERY | TOKEN_IMPERSONATE, NULL,
+                        SecurityImpersonation, TokenImpersonation, &impersonation))
+    fail_win("DuplicateTokenEx impersonation");
+  CloseHandle(token);
+  return impersonation;
 }
 
 static void prohibit_dynamic_code(void) {
