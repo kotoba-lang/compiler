@@ -155,6 +155,11 @@ Microsoft Edge Stable on Linux and Windows. Its versioned machine-readable recei
 the exact Playwright project, engine, browser version, evidence class, commit,
 CI run, and host OS, and is retained as a workflow artifact. It is conformance evidence,
 not yet a trusted signed platform-release statement.
+On `macos-14`, a separate NBB-controlled SafariDriver job launches the installed
+Safari rather than Playwright WebKit. It navigates the same production-CSP
+fixture, waits for the direct/Worker/capability/heap result, separately verifies
+the CSP denial page, and records the Safari version as
+`safari-stable-macos` evidence.
 
 The test gate generates a deterministic 100-program property corpus across
 arithmetic, comparisons, `if`, lexical `let`, and direct calls. Every program is

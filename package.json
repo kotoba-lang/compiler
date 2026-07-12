@@ -14,6 +14,7 @@
     "check-workflows": "nbb scripts/check-workflows.cljs",
     "test-browser-host": "nbb scripts/test-browser-host.cljs",
     "test-worker-host": "nbb scripts/test-worker-host.cljs",
-    "test-browsers": "nbb scripts/browser-matrix.cljs"
+    "test-browsers": "nbb scripts/browser-matrix.cljs",
+    "test-safari": "nbb scripts/safari-matrix.cljs"
   }
 }

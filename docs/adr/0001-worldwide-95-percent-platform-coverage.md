@@ -128,9 +128,10 @@ and previous browser releases, physical mobile devices, and the measured usage
 matrix below are still outstanding and cannot be inferred from engine tests.
 Current branded Chrome Stable and Edge Stable are now exercised on Linux and
 Windows and produce commit/run/OS-bound version receipts. This narrows, but
-does not close, the exit gap: macOS branded runs, previous releases, physical
-Android and iOS, actual Safari, signed evidence, and usage-weighted accounting
-remain.
+does not close, the exit gap. The installed Safari on macOS 14 now runs through
+SafariDriver and emits the same bound receipt. Previous releases, other macOS
+versions, physical Android and iOS, signed evidence, and usage-weighted
+accounting remain.
 
 - Stabilize `wasm32-browser-kotoba-v1` and its exact import schema.
 - Ship an ES module host, Worker host, capability-policy adapter, CSP guidance,

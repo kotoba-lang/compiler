@@ -244,6 +244,14 @@ mismatch. The receipt distinguishes `engine`, `mobile-emulation`, and
 accepted by the signed worldwide-coverage manifest until browser/OS/version
 window and trust requirements are implemented.
 
+Actual Safari uses a separate path because Playwright WebKit is not the Safari
+product. NBB compiles the same temporary artifacts and starts the closed-route
+fixture; a bounded WebDriver client launches `safaridriver`, creates exactly one
+Safari session, navigates only the two loopback fixture URLs, polls only fixed
+CSS selectors, and closes the session and child processes in `finally`. The
+result is verified through the same closed evidence schema with project
+`safari-stable-macos` and platform `darwin`.
+
 Native targets implement a sealed context-v1 ABI: version at offset 0, fuel at
 8, a 256-bit allow bitmap at 16, and the sole `cap_call` function pointer at 48.
 Generated code checks the relevant bitmap bit before loading that fixed slot;

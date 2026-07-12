@@ -289,3 +289,10 @@ claim. Branded Chrome/Edge now run on Linux and Windows, with the runner
 platform bound into the receipt. These runs still do not establish
 previous-version compatibility, update-channel integrity, macOS behavior,
 mobile coverage, or physical-device isolation.
+
+SafariDriver is an additional CI TCB and is enabled only on the ephemeral macOS
+runner. The controller does not accept remote URLs, arbitrary selectors,
+scripts, or capability handlers: its ports, routes, selectors, session count,
+and timeouts are fixed in reviewed code. Failure text is not placed in the
+evidence receipt. Safari evidence remains a hosted-runner product test, not
+proof about every macOS release or Apple device.

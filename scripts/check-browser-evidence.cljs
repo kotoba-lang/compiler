@@ -15,8 +15,10 @@
 (def platform-name (if (= "win32" platform) "windows" platform))
 (def branded-projects #{(str "chrome-stable-" platform-name) (str "edge-stable-" platform-name)})
 (def expected-projects
-  (if (= "1" js/process.env.KOTOBA_BRANDED_BROWSERS)
-    (set/union base-projects branded-projects) base-projects))
+  (cond
+    (= "1" js/process.env.KOTOBA_SAFARI_ONLY) #{"safari-stable-macos"}
+    (= "1" js/process.env.KOTOBA_BRANDED_BROWSERS) (set/union base-projects branded-projects)
+    :else base-projects))
 
 (lib/ensure! (= expected-keys (set (keys evidence))) "browser evidence: unknown or missing receipt field")
 (lib/ensure! (= "kotoba.browser-engine-evidence/v1" (:format evidence)) "browser evidence: format mismatch")
