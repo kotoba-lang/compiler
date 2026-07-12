@@ -29,6 +29,9 @@ Targets are versioned contracts:
 
 - `wasm32-kotoba-v1`: portable sandbox target and conformance oracle.
 - `x86_64-kotoba-v1`: direct x86-64 instructions in a sealed KEXE container.
+- `x86_64-windows-kotoba-v1`: the same regenerated x86-64 instruction subset,
+  sealed to Windows, the `kotoba-sysv-v1` internal ABI, and the future measured
+  Windows supervisor. This is compile/verify support, not executable support.
 - `aarch64-kotoba-v1`: direct AArch64 instructions in a sealed KEXE container.
 
 Each emitted result also carries `:kotoba.target-profile/v1`, binding execution
@@ -90,6 +93,13 @@ locals, calls, and structured control flow. Both native backends emit general
 verified control flow for this subset and execute through the supervised W^X
 loader. General allocation, tracing GC, and a production-strength VM sandbox
 remain absent.
+
+Windows x64 has entered Phase 2 at the artifact boundary. The CLI accepts the
+explicit target, KEXE identity differs from Linux/macOS despite equal code
+bytes, the independent verifier regenerates it, and Windows CI requires two
+compilations to be byte-identical. Runtime identity deliberately excludes
+Windows, so `measure-runtime` / `run` cannot confuse the POSIX loader with the
+reserved Windows supervisor profile.
 
 ## Bounded pair arena
 

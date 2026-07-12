@@ -26,11 +26,13 @@ source -> inert reader -> typed/effect HIR -> SSA-like KIR
 
 Release-oriented target identities explicitly bind execution format, ISA, OS,
 ABI, and runtime profile. Current explicit names are `wasm32-browser`,
-`x86_64-linux`, `x86_64-macos`, `aarch64-linux`, and `aarch64-macos`.
+`x86_64-linux`, `x86_64-macos`, `x86_64-windows`, `aarch64-linux`, and `aarch64-macos`.
 The short `wasm32`, `x86_64`, and `aarch64` names remain experimental
 compatibility aliases with `:os :unspecified`; they cannot serve as platform
-release evidence. Windows names are reserved by the roadmap but compilation is
-rejected until a verified Windows supervisor exists.
+release evidence. `x86_64-windows` compilation now emits a reproducible KEXE
+whose Windows OS, internal ABI, and supervisor identity are independently
+verified. Native execution and release evidence still fail closed until the
+measured Windows supervisor is implemented.
 
 WebAssembly is one backend, not the compiler architecture. Native backends emit
 machine instructions directly and never invoke an assembler, LLVM, a JVM JIT,
@@ -84,6 +86,7 @@ compact substitution chains cannot amplify into unbounded native code.
 ```bash
 bin/kotoba -M compile example.kotoba --target wasm32 --output app.wasm
 bin/kotoba -M compile example.kotoba --target x86_64 --output app.kexe
+bin/kotoba -M compile example.kotoba --target x86_64-windows --output app-windows.kexe
 bin/kotoba -M verify app.kexe
 npm ci
 npm run conformance

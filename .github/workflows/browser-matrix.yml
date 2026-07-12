@@ -24,6 +24,8 @@ jobs:
         with:
           cli: 1.12.5.1654
       - run: npm ci
+      - run: npm run test-windows-profile
+        if: runner.os == 'Windows'
       - run: node node_modules/@playwright/test/cli.js install --with-deps chromium firefox webkit chrome msedge
         if: runner.os == 'Linux'
       - run: node node_modules/@playwright/test/cli.js install chromium firefox webkit chrome msedge

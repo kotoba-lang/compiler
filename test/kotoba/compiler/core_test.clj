@@ -20,20 +20,28 @@
 (deftest explicit-platform-targets-bind-os-abi-and-runtime-profile
   (let [linux (:artifact (compiler/compile-source source :x86_64-linux-kotoba-v1))
         macos (:artifact (compiler/compile-source source :x86_64-macos-kotoba-v1))
+        windows (:artifact (compiler/compile-source source :x86_64-windows-kotoba-v1))
         browser (compiler/compile-source source :wasm32-browser-kotoba-v1)]
     (is (= (:code linux) (:code macos)))
+    (is (= (:code linux) (:code windows)))
     (is (not= (:sha256 linux) (:sha256 macos)))
+    (is (not= (:sha256 linux) (:sha256 windows)))
     (is (= {:format :kotoba.target-profile/v1 :execution :native :isa :x86_64
             :os :linux :abi :sysv :runtime :kotoba-linux-supervisor-v1}
            (:target-profile linux)))
+    (is (= {:format :kotoba.target-profile/v1 :execution :native :isa :x86_64
+            :os :windows :abi :kotoba-sysv-v1 :runtime :kotoba-windows-supervisor-v1}
+           (:target-profile windows)))
     (is (= :browser (get-in browser [:target-profile :os])))
     (is (= :wasm (get-in browser [:target-profile :execution])))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"target profile"
                           (verifier/verify-artifact!
                            (artifact/seal
                             (assoc linux :target-profile (:target-profile macos))))))
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"unsupported target"
-                          (compiler/compile-source source :x86_64-windows-kotoba-v1)))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"target profile"
+                          (verifier/verify-artifact!
+                           (artifact/seal
+                            (assoc windows :target-profile (:target-profile linux))))))))
 
 (deftest emits-real-wasm
   (let [bytes (:bytes (compiler/compile-source source :wasm32-kotoba-v1))]

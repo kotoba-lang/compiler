@@ -150,6 +150,13 @@ same normative vectors, and denied capabilities and forged pair handles trap.
 
 ### Phase 2 — Windows native desktop and enterprise
 
+Implementation status: the explicit x86_64 Windows target profile, internal
+ABI identity, supervisor identity, CLI route, independent regeneration, and
+cross-runner reproducibility gate are implemented. Execution remains denied:
+the Windows W^X supervisor, Job Object/restricted-token boundary, code signing,
+packaging, and Arm64 backend are still required before any Windows-native
+coverage is counted.
+
 - Implement x64 and Arm64 Windows KEXE loaders.
 - Use W^X allocation, Control Flow Guard-compatible entry points, Job Objects,
   restricted tokens/AppContainer where available, and process mitigation
