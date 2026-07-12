@@ -237,7 +237,7 @@ ephemeral Linux and Windows runners. Browser orchestration invokes the pinned
 NBB CLI through the pinned Node executable rather than a POSIX command shim, so
 fixture compilation, serving, and evidence validation share one cross-platform
 control path. A custom reporter emits
-`kotoba.browser-engine-evidence/v1`; an independent NBB gate rejects missing or
+`kotoba.browser-engine-evidence/v2`; an independent NBB gate rejects missing or
 extra projects, malformed versions, schema drift, host-OS drift, and commit/run identity
 mismatch. The receipt distinguishes `engine`, `mobile-emulation`, and
 `branded-browser` evidence and is retained for 30 days. It is intentionally not
@@ -251,6 +251,12 @@ Safari session, navigates only the two loopback fixture URLs, polls only fixed
 CSS selectors, and closes the session and child processes in `finally`. The
 result is verified through the same closed evidence schema with project
 `safari-stable-macos` and platform `darwin`.
+
+Evidence v2 additionally carries the closed boolean property
+`cspWasmEnforced`. The Playwright projects prove and report `true`; actual
+Safari reports the observed `false`. This is not normalized away. Runtime
+admission is always the digest/import/export/capability/heap boundary, while CSP
+remains a separately measured defense-in-depth property.
 
 Native targets implement a sealed context-v1 ABI: version at offset 0, fuel at
 8, a 256-bit allow bitmap at 16, and the sole `cap_call` function pointer at 48.

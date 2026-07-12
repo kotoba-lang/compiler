@@ -132,6 +132,11 @@ does not close, the exit gap. The installed Safari on macOS 14 now runs through
 SafariDriver and emits the same bound receipt. Previous releases, other macOS
 versions, physical Android and iOS, signed evidence, and usage-weighted
 accounting remain.
+Safari also exposes a measured CSP gap: unlike the other gated browsers, the
+macOS 14 product permits Wasm compilation without `'wasm-unsafe-eval'`.
+Evidence v2 records that property as false, so Safari compatibility can advance
+without incorrectly claiming the CSP defense. Digest and host admission remain
+the normative boundary.
 
 - Stabilize `wasm32-browser-kotoba-v1` and its exact import schema.
 - Ship an ES module host, Worker host, capability-policy adapter, CSP guidance,

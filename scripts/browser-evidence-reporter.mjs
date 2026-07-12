@@ -18,11 +18,12 @@ export default class KotobaBrowserEvidenceReporter {
 
   async onEnd(result) {
     const evidence = {
-      format: "kotoba.browser-engine-evidence/v1",
+      format: "kotoba.browser-engine-evidence/v2",
       status: result.status,
       commit: process.env.GITHUB_SHA ?? "local",
       ciRunId: process.env.GITHUB_RUN_ID ?? "local",
       platform: process.platform,
+      securityProperties: { cspWasmEnforced: true },
       projects: Array.from(this.identities.values()).sort((a, b) => a.project.localeCompare(b.project))
     };
     fs.mkdirSync(path.dirname(this.outputFile), { recursive: true });

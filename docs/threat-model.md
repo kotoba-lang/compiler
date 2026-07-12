@@ -296,3 +296,10 @@ scripts, or capability handlers: its ports, routes, selectors, session count,
 and timeouts are fixed in reviewed code. Failure text is not placed in the
 evidence receipt. Safari evidence remains a hosted-runner product test, not
 proof about every macOS release or Apple device.
+
+The macOS 14 Safari run demonstrates that CSP semantics cannot be assumed from
+the WebKit engine run: Safari permits Wasm compilation when
+`'wasm-unsafe-eval'` is omitted. Evidence v2 binds this as
+`cspWasmEnforced=false`; the verifier requires the divergence rather than
+silently accepting a missing test. Consequently no Kotoba security decision
+may rely on CSP blocking unreviewed Wasm bytes.

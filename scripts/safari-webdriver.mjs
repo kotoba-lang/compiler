@@ -97,29 +97,32 @@ try {
     url: `http://127.0.0.1:${fixturePort}/tests/browser/csp-blocked.html`
   });
   status = await element(session, "#status");
+  let cspWasmEnforced = true;
   try {
     await waitAttribute(session, status, "data-result", "passed");
   } catch (error) {
     const observed = await webdriver("GET", `/session/${session}/element/${status}/text`);
-    const safeObserved = String(observed ?? "unknown").replace(/[^A-Za-z0-9_-]/g, "?").slice(0, 64);
-    throw new Error(`Safari CSP observation: ${safeObserved}`, { cause: error });
+    if (observed === "wasm-unexpectedly-allowed") cspWasmEnforced = false;
+    else {
+      const safeObserved = String(observed ?? "unknown").replace(/[^A-Za-z0-9_-]/g, "?").slice(0, 64);
+      throw new Error(`Safari CSP observation: ${safeObserved}`, { cause: error });
+    }
   }
-  const text = await webdriver("GET", `/session/${session}/element/${status}/text`);
-  if (text !== "wasm-blocked") throw new Error("Safari CSP denial mismatch");
 
   const evidence = {
-    format: "kotoba.browser-engine-evidence/v1",
+    format: "kotoba.browser-engine-evidence/v2",
     status: "passed",
     commit: process.env.GITHUB_SHA ?? "local",
     ciRunId: process.env.GITHUB_RUN_ID ?? "local",
     platform: process.platform,
+    securityProperties: { cspWasmEnforced },
     projects: [{ project: "safari-stable-macos", browserName: "safari",
       version: browserVersion, evidenceKind: "branded-browser" }]
   };
   const output = path.join(root, "test-results", "browser-evidence.json");
   fs.mkdirSync(path.dirname(output), { recursive: true });
   fs.writeFileSync(output, `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600 });
-  console.log(`safari-conformance: Safari ${browserVersion} passed direct, Worker, capability, heap, and CSP vectors`);
+  console.log(`safari-conformance: Safari ${browserVersion} passed host vectors; cspWasmEnforced=${cspWasmEnforced}`);
 } finally {
   if (session) {
     try { await webdriver("DELETE", `/session/${session}`); } catch {}

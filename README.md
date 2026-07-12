@@ -160,6 +160,10 @@ Safari rather than Playwright WebKit. It navigates the same production-CSP
 fixture, waits for the direct/Worker/capability/heap result, separately verifies
 the CSP denial page, and records the Safari version as
 `safari-stable-macos` evidence.
+Evidence schema v2 also binds the observed `cspWasmEnforced` property. Current
+Safari reports `false`; all other gated engines and branded browsers report
+`true`. Therefore CSP denial is never substituted for Kotoba artifact and
+capability admission.
 
 The test gate generates a deterministic 100-program property corpus across
 arithmetic, comparisons, `if`, lexical `let`, and direct calls. Every program is

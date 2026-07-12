@@ -17,6 +17,14 @@ compilation. Do not replace it with the broader `'unsafe-eval'`.
 `connect-src 'self'` is needed only when the embedding application fetches the reviewed
 Wasm bytes; use `'none'` when the artifact is delivered without `fetch`.
 
+Do not treat omission of `'wasm-unsafe-eval'` as a portable Wasm-denial
+boundary. Kotoba CI observes the expected denial in Chromium, Chrome, Edge,
+Firefox, and Playwright WebKit, but the Safari version on the macOS 14 runner
+still permits byte compilation when the token is omitted. Artifact digest,
+exact import/export validation, capability checks, and Worker isolation remain
+mandatory on every browser; CSP is defense in depth and its observed behavior
+is recorded in browser evidence v2.
+
 Create a module worker from a static URL:
 
 ```js

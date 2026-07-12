@@ -8,7 +8,7 @@
 (def evidence-file (path/join lib/root "test-results" "browser-evidence.json"))
 (lib/ensure! (.existsSync fs evidence-file) "browser evidence: receipt is missing")
 (def evidence (js->clj (js/JSON.parse (lib/read-text evidence-file)) :keywordize-keys true))
-(def expected-keys #{:format :status :commit :ciRunId :platform :projects})
+(def expected-keys #{:format :status :commit :ciRunId :platform :securityProperties :projects})
 (def base-projects #{"chromium-desktop" "firefox-desktop" "webkit-desktop"
                      "chromium-mobile-emulation" "webkit-mobile-emulation"})
 (def platform (.-platform js/process))
@@ -21,9 +21,14 @@
     :else base-projects))
 
 (lib/ensure! (= expected-keys (set (keys evidence))) "browser evidence: unknown or missing receipt field")
-(lib/ensure! (= "kotoba.browser-engine-evidence/v1" (:format evidence)) "browser evidence: format mismatch")
+(lib/ensure! (= "kotoba.browser-engine-evidence/v2" (:format evidence)) "browser evidence: format mismatch")
 (lib/ensure! (= "passed" (:status evidence)) "browser evidence: suite did not pass")
 (lib/ensure! (= platform (:platform evidence)) "browser evidence: platform mismatch")
+(lib/ensure! (= #{:cspWasmEnforced} (set (keys (:securityProperties evidence))))
+             "browser evidence: security property schema mismatch")
+(lib/ensure! (= (not= "1" js/process.env.KOTOBA_SAFARI_ONLY)
+                (get-in evidence [:securityProperties :cspWasmEnforced]))
+             "browser evidence: CSP Wasm enforcement observation mismatch")
 (when js/process.env.CI
   (lib/ensure! (= js/process.env.GITHUB_SHA (:commit evidence)) "browser evidence: commit mismatch")
   (lib/ensure! (= js/process.env.GITHUB_RUN_ID (:ciRunId evidence)) "browser evidence: CI run mismatch"))
