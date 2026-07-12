@@ -381,8 +381,7 @@
               (throw (ex-info "native C compiler identity query failed"
                               {:phase :execute :stderr (:stderr compiler)})))
           compiler-text (str (:stdout compiler) (:stderr compiler))
-          common-flags (cond-> [(str compiler-path) "-std=c11" "-O2" "-Wall" "-Wextra" "-Werror"]
-                         windows? (conj "-fuse-ld=lld"))
+          common-flags [(str compiler-path) "-std=c11" "-O2" "-Wall" "-Wextra" "-Werror"]
           dependency-command (vec (concat common-flags
                                           ["-MD" "-MF" (.getPath dependency-file)
                                            "-c" (.getPath loader-source)
