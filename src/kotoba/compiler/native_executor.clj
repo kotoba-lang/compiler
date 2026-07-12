@@ -148,7 +148,12 @@
                              (keep (fn [name]
                                      (when-let [value (System/getenv name)]
                                        [name value])))
-                             ["INCLUDE" "LIB" "LIBPATH"]))]
+                             ["INCLUDE" "LIB" "LIBPATH"
+                              "ProgramFiles" "ProgramFiles(x86)" "ProgramW6432"
+                              "VCINSTALLDIR" "VCToolsInstallDir"
+                              "WindowsSdkDir" "WindowsSDKVersion"
+                              "UniversalCRTSdkDir" "UCRTVersion"
+                              "TEMP" "TMP"]))]
     (cond->
      (merge
       {"PATH" (if (windows-host?)
