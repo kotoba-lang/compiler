@@ -303,3 +303,22 @@ the WebKit engine run: Safari permits Wasm compilation when
 `cspWasmEnforced=false`; the verifier requires the divergence rather than
 silently accepting a missing test. Consequently no Kotoba security decision
 may rely on CSP blocking unreviewed Wasm bytes.
+
+## Windows supervisor boundary
+
+The experimental Windows loader never creates RWX memory. It byte-caps and
+copies verifier-extracted code into RW storage, changes it to RX, flushes the
+instruction cache, and enables the process dynamic-code prohibition before
+guest entry. The hidden context is loader-owned and all capability and pair
+callbacks use reviewed fixed slots. Job active-process limits and a
+low-integrity restricted impersonation token are checked by negative process
+and filesystem probes on the Windows runner.
+
+This boundary is not yet sufficient for release admission. Raw-code input is
+safe only because conformance invokes it after KEXE verification; the product
+loader must bind KEXE verification and measurement in one workflow. Guest traps
+currently terminate the loader process rather than a separately supervised
+child. Network denial is not implemented, Job/restricted-token behavior has
+only hosted-runner evidence, and loader binary/source identity is not yet in
+the Windows runtime trust schema. These omissions keep Windows execution out of
+coverage accounting.

@@ -17,6 +17,14 @@ signer. The signed statement binds the platform, native/Wasm paths, exact target
 profiles, conformance and runtime digests, CI run, test time, and expiry.
 
 The multi-target, deny-by-default compiler for the safe Kotoba language.
+
+GPU compilation now begins with a separate typed accelerator KIR rather than
+allowing arbitrary shaders into scalar CPU KIR. `kotoba.compiler.accelerator`
+validates bounded f32 elementwise/reduction kernels and deterministically emits
+WGSL or CUDA C. Sealed GPU artifacts bind KIR/code hashes and are independently
+re-lowered during verification, including against attacker-resealed code. This
+is the shared GPU compiler contract consumed by `kotoba-lang/num`; see
+ADR-0002.
 `.kotoba` is the sole admitted source-file format.
 
 ```text
@@ -33,6 +41,17 @@ release evidence. `x86_64-windows` compilation now emits a reproducible KEXE
 whose Windows OS, internal ABI, and supervisor identity are independently
 verified. Native execution and release evidence still fail closed until the
 measured Windows supervisor is implemented.
+
+The first Windows supervisor slice now executes verifier-extracted x86-64 KEXE
+code on the Windows CI runner. It maps code RW, copies it, transitions it to RX,
+flushes the instruction cache, then prohibits further dynamic code. A Clang
+`sysv_abi` adapter supplies the hidden `r9` context. A one-process Job Object,
+low-integrity restricted impersonation token, system32-only DLL search, and
+error-mode hardening surround guest entry. Conformance covers runtime arguments,
+transitive calls, fuel reports, capability allow/deny, bounded pairs, and
+filesystem/process denial. This is not yet the measured `kotoba -M run` path:
+network denial, child trap isolation, loader measurement, signing/packaging,
+and Windows Arm64 remain required.
 
 WebAssembly is one backend, not the compiler architecture. Native backends emit
 machine instructions directly and never invoke an assembler, LLVM, a JVM JIT,

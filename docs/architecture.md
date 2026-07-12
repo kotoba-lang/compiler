@@ -101,6 +101,23 @@ compilations to be byte-identical. Runtime identity deliberately excludes
 Windows, so `measure-runtime` / `run` cannot confuse the POSIX loader with the
 reserved Windows supervisor profile.
 
+The reference Windows x64 supervisor has now crossed the execution boundary in
+CI without changing that product fail-closed rule. `VirtualAlloc(PAGE_READWRITE)`
+is followed by `VirtualProtect(PAGE_EXECUTE_READ)` and
+`FlushInstructionCache`; `ProcessDynamicCodePolicy` is then set to prohibit new
+executable mappings. The generated code retains its verified
+`kotoba-sysv-v1` convention, entered through a six-slot Clang `sysv_abi`
+adapter whose final register is the hidden `r9` context. Context v2 callbacks
+use the same ABI and fixed offsets as regeneration.
+
+Before guest entry, the loader joins a Job Object with active-process limit one,
+creates a max-privilege-disabled low-integrity restricted token, duplicates it
+as an impersonation token, and applies it to the execution thread. Windows CI
+executes arithmetic/calls, structured fuel, bounded heap, capability
+allow/deny, and fixed filesystem/process probes. The loader still consumes raw
+code extracted after verifier admission; integration into measured runtime
+identity and the signed `run` path is outstanding.
+
 ## Bounded pair arena
 
 `pair`, `pair-first`, and `pair-second` are the first admitted heap contract.

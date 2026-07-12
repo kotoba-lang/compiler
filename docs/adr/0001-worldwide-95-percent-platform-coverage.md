@@ -152,10 +152,13 @@ same normative vectors, and denied capabilities and forged pair handles trap.
 
 Implementation status: the explicit x86_64 Windows target profile, internal
 ABI identity, supervisor identity, CLI route, independent regeneration, and
-cross-runner reproducibility gate are implemented. Execution remains denied:
-the Windows W^X supervisor, Job Object/restricted-token boundary, code signing,
-packaging, and Arm64 backend are still required before any Windows-native
-coverage is counted.
+cross-runner reproducibility gate are implemented. A first Windows supervisor
+also executes verified/extracted code under W^X, dynamic-code prohibition, a
+one-process Job Object, and a low-integrity restricted token. CI covers calls,
+fuel, capability allow/deny, heap accounting, and filesystem/process probes.
+Measured `kotoba -M run` integration, parent/child trap supervision, network
+denial, code signing, packaging, and Arm64 remain required before any
+Windows-native coverage is counted.
 
 - Implement x64 and Arm64 Windows KEXE loaders.
 - Use W^X allocation, Control Flow Guard-compatible entry points, Job Objects,
