@@ -9,6 +9,8 @@
 (def releases
   {"linux-x64" {:archive "wasmtime-v42.0.1-x86_64-linux.tar.xz"
                  :sha256 "dd5253f3cb521bb094f9951c3d2c45c746b31e5723b07ce56f162ec9bab44d59"}
+   "linux-arm64" {:archive "wasmtime-v42.0.1-aarch64-linux.tar.xz"
+                   :sha256 "fa9b7e09f49f75c17acf2c018a4286cdbeffb4c1f3ee9e72c48b6a42c1deceda"}
    "darwin-arm64" {:archive "wasmtime-v42.0.1-aarch64-macos.tar.xz"
                     :sha256 "69c56932453483f31cac7636f850bbd3bf884eaa7315b2c3b92857a2b0c6762e"}
    "darwin-x64" {:archive "wasmtime-v42.0.1-x86_64-macos.tar.xz"
