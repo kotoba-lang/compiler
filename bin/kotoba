@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env -S npx --no-install nbb
 (ns kotoba-driver
   (:require ["node:child_process" :as child]
             ["node:fs" :as fs]
