@@ -1,0 +1,10 @@
+{
+  "name": "kotoba-compiler-tooling",
+  "private": true,
+  "devDependencies": {
+    "nbb": "1.4.208"
+  },
+  "scripts": {
+    "conformance": "nbb scripts/conformance.cljs"
+  }
+}

@@ -97,7 +97,8 @@ The explicit `measure-runtime` provisioning step pins the reviewed loader source
 by raw SHA-256 before invoking the C toolchain. It measures the resulting binary
 and places the loader source, loader binary, resolved compiler binary, compiler
 version, compiler-reported assembler, and compiler-reported linker hashes in
-`:kotoba.native-runtime/v5`. The loader binary is published separately with
+`:kotoba.native-runtime/v6`. The identity additionally binds the exact native
+target profile for the measured host. The loader binary is published separately with
 owner-only execute permission. The production `run` path requires both files,
 checks exact schemas, trust membership, revocation, and binary hash, and never
 starts `cc`. The

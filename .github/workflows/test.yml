@@ -16,6 +16,7 @@ jobs:
       - uses: DeLaGuardo/setup-clojure@13.2
         with:
           cli: latest
+      - run: npm ci
       - run: clojure -M:test
         env:
           KOTOBA_FUZZ_SEED: "5426643073673934426"
@@ -24,7 +25,7 @@ jobs:
           printf '(defn main [] (+ 40 2))\n' > /tmp/ci.kotoba
           bin/kotoba -M compile /tmp/ci.kotoba --target x86_64 --output /tmp/ci.kexe
           bin/kotoba -M verify /tmp/ci.kexe
-      - run: scripts/conformance.sh
+      - run: npx nbb scripts/conformance.cljs
       - run: scripts/sanitizer.sh
       - run: scripts/fuzz-native.sh
         env:

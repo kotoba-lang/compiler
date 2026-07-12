@@ -39,11 +39,13 @@
         result (executor/execute envelope trust {:allow #{}} {:args []}
                                  options)]
     (is (= {:status :ok :result 42} (select-keys (:evidence result) [:status :result])))
-    (is (= :kotoba.native-runtime/v5 (get-in result [:evidence :runtime :format])))
+    (is (= :kotoba.native-runtime/v6 (get-in result [:evidence :runtime :format])))
+    (is (= :native (get-in result [:evidence :runtime :target-profile :execution])))
     (is (= executor/loader-source-sha256
            (get-in result [:evidence :runtime :loader-source-sha256])))
     (is (every? #(re-matches #"[0-9a-f]{64}" %)
-                (vals (dissoc (get-in result [:evidence :runtime]) :format))))
+                (vals (dissoc (get-in result [:evidence :runtime])
+                              :format :target-profile))))
     (is (= {:status :ok :result 42
             :fuel {:initial 256 :remaining 255}
             :heap {:capacity 4096 :used 0}}
@@ -83,6 +85,24 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"does not match execution host"
                           (executor/execute envelope trust {:allow #{}} {:args []}
                                             {:now 1500 :entry 'main})))))
+
+(deftest execution-rejects-a-trusted-runtime-measured-for-another-platform
+  (let [{:keys [envelope trust]} (signed "(defn main [] 42)" {:allow #{}})
+        {:keys [runtime loader-path]} @measured-runtime
+        other-os (if (= :macos (get-in runtime [:target-profile :os])) :linux :macos)
+        other-runtime (-> runtime
+                          (assoc-in [:target-profile :os] other-os)
+                          (assoc-in [:target-profile :runtime]
+                                    (if (= other-os :linux)
+                                      :kotoba-linux-supervisor-v1
+                                      :kotoba-macos-supervisor-v1)))
+        pinned (assoc trust :trusted-runtime-sha256
+                      #{(runtime-identity/identity-sha256 other-runtime)})]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"runtime target profile"
+                          (executor/execute envelope pinned {:allow #{}} {:args []}
+                                            {:now 1500 :entry 'main
+                                             :runtime other-runtime
+                                             :loader-path loader-path})))))
 
 (deftest execution-rejects-a-loader-that-does-not-match-the-approved-bytes
   (let [{:keys [envelope trust]} (signed "(defn main [] 42)" {:allow #{}})

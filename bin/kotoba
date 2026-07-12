@@ -1,44 +1,46 @@
-#!/bin/sh
-set -eu
+#!/usr/bin/env -S npx --no-install nbb
+(ns kotoba-driver
+  (:require ["node:child_process" :as child]
+            ["node:fs" :as fs]
+            ["node:path" :as path]))
 
-# Public Kotoba compiler driver. Resolve the checkout so the command works from
-# any directory; Clojure is a private bootstrap implementation detail.
-SELF=$0
-while [ -L "$SELF" ]; do
-  BASE=$(CDPATH= cd -- "$(dirname -- "$SELF")" && pwd)
-  LINK=$(readlink "$SELF")
-  case "$LINK" in /*) SELF=$LINK ;; *) SELF=$BASE/$LINK ;; esac
-done
-ROOT=$(CDPATH= cd -- "$(dirname -- "$SELF")/.." && pwd)
+(def usage
+  ["usage: kotoba -M compile <file.kotoba> --target wasm32-browser|x86_64-linux|x86_64-macos|aarch64-linux|aarch64-macos [--policy policy.edn] --output <file>"
+   "       kotoba -M check <file.kotoba> [--policy policy.edn]"
+   "       kotoba -M coverage <coverage-manifest.edn> --dataset <raw-dataset> [--evidence evidence.edn --trust trust.edn --now <epoch>]"
+   "       kotoba -M sign-coverage-evidence <claim.edn> --key <key.edn> --output <evidence.edn>"
+   "       kotoba -M keygen --output key.edn"
+   "       kotoba -M public-key key.edn --output verification-key.edn"
+   "       kotoba -M trust-key verification-key.edn --output trust.edn"
+   "       kotoba -M measure-runtime --output runtime.edn --loader-output kotoba-loader"
+   "       kotoba -M trust-runtime runtime.edn --trust trust.edn --output pinned-trust.edn"
+   "       kotoba -M sign program.kexe --key key.edn --expires <epoch> --output signed.kexe"
+   "       kotoba -M verify-signed signed.kexe --trust trust.edn [--now <epoch>]"
+   "       kotoba -M run signed.kexe --trust trust.edn --runtime runtime.edn --loader kotoba-loader --policy policy.edn --input input.edn --executor-key key.edn --output receipt.edn"
+   "       kotoba -M receipt --signed signed.kexe --trust trust.edn --executor-key key.edn --policy policy.edn --input in.edn --result out.edn ..."
+   "       kotoba -M verify-receipt receipt.edn --signed signed.kexe --trust trust.edn --policy policy.edn --input in.edn --result out.edn --now <epoch>"
+   "       kotoba -M verify-chain receipts.edn --trust trust.edn"
+   "       kotoba -M verify <file>"])
 
-case "${1-}" in
-  -M) shift ;;
-  -M:compiler|-M:compile) shift ;;
-  -h|--help|"")
-    printf '%s\n' \
-      'usage: kotoba -M compile <file.kotoba> --target wasm32-browser|x86_64-linux|x86_64-macos|aarch64-linux|aarch64-macos [--policy policy.edn] --output <file>' \
-      '       kotoba -M check <file.kotoba> [--policy policy.edn]' \
-      '       kotoba -M coverage <coverage-manifest.edn> --dataset <raw-dataset> [--evidence evidence.edn --trust trust.edn --now <epoch>]' \
-      '       kotoba -M sign-coverage-evidence <claim.edn> --key <key.edn> --output <evidence.edn>' \
-      '       kotoba -M keygen --output key.edn' \
-      '       kotoba -M public-key key.edn --output verification-key.edn' \
-      '       kotoba -M trust-key verification-key.edn --output trust.edn' \
-      '       kotoba -M measure-runtime --output runtime.edn --loader-output kotoba-loader' \
-      '       kotoba -M trust-runtime runtime.edn --trust trust.edn --output pinned-trust.edn' \
-      '       kotoba -M sign program.kexe --key key.edn --expires <epoch> --output signed.kexe' \
-      '       kotoba -M verify-signed signed.kexe --trust trust.edn [--now <epoch>]' \
-      '       kotoba -M run signed.kexe --trust trust.edn --runtime runtime.edn --loader kotoba-loader --policy policy.edn --input input.edn --executor-key key.edn --output receipt.edn' \
-      '       kotoba -M receipt --signed signed.kexe --trust trust.edn --executor-key key.edn --policy policy.edn --input in.edn --result out.edn ...' \
-      '       kotoba -M verify-receipt receipt.edn --signed signed.kexe --trust trust.edn --policy policy.edn --input in.edn --result out.edn --now <epoch>' \
-      '       kotoba -M verify-chain receipts.edn --trust trust.edn' \
-      '       kotoba -M verify <file>'
-    exit 0
-    ;;
-  *)
-    printf '%s\n' 'error: compiler commands require the -M execution boundary' >&2
-    exit 2
-    ;;
-esac
+(defn fail! [message code]
+  (.error js/console message)
+  (.exit js/process code))
 
-cd "$ROOT"
-exec clojure -M:run "$@"
+(let [args (vec *command-line-args*)
+      boundary (first args)]
+  (cond
+    (contains? #{nil "" "-h" "--help"} boundary)
+    (doseq [line usage] (println line))
+
+    (contains? #{"-M" "-M:compiler" "-M:compile"} boundary)
+    (let [self (.realpathSync fs *file*)
+          root (.resolve path (.dirname path self) "..")
+          result (.spawnSync child "clojure"
+                             (clj->js (into ["-M:run"] (subvec args 1)))
+                             #js {:cwd root :stdio "inherit" :env js/process.env})]
+      (when (.-error result)
+        (fail! "error: unable to start private compiler runtime" 70))
+      (.exit js/process (or (.-status result) 70)))
+
+    :else
+    (fail! "error: compiler commands require the -M execution boundary" 2)))

@@ -85,10 +85,13 @@ compact substitution chains cannot amplify into unbounded native code.
 bin/kotoba -M compile example.kotoba --target wasm32 --output app.wasm
 bin/kotoba -M compile example.kotoba --target x86_64 --output app.kexe
 bin/kotoba -M verify app.kexe
-scripts/conformance.sh
+npm ci
+npm run conformance
 ```
 
-On x86-64 Linux and AArch64 macOS/Linux, `scripts/conformance.sh` additionally compiles the small
+The public `bin/kotoba` driver and conformance orchestrator run on NBB rather
+than POSIX shell. Clojure remains a private compiler implementation detail.
+On x86-64 Linux and AArch64 macOS/Linux, `npm run conformance` additionally compiles the small
 auditable loader in `tools/kexe_loader.c`, maps verified code RW, transitions it
 to RX with `mprotect`, and executes a runtime arithmetic/comparison vector. No
 RWX mapping is created. Zero division and signed-division overflow must trap on
@@ -243,6 +246,11 @@ binary directories, `C` locale, UTC, and fixed reproducibility variables.
 Variables such as `CPATH`, `LIBRARY_PATH`, `SDKROOT`, `LD_PRELOAD`, and
 `DYLD_*` cannot influence measurement. The admitted loader receives only its
 explicit structured-report flag.
+Native runtime identity v6 additionally includes the exact explicit target
+profile measured on the host. Execution requires artifact ISA/ABI/OS/runtime
+compatibility, runtime-to-host exact profile equality, and explicit trust in
+the resulting runtime digest. A loader identity measured for another OS is
+rejected even if that digest was provisioned into the trust store.
 The resource manifest sorts relative paths and binds each path, size, and file
 hash plus aggregate bytes. It rejects symlinks and special files, more than
 10,000 files, paths over 4,096 characters, and trees over 64 MiB before hashing

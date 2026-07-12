@@ -262,6 +262,10 @@ version tuple, plus the compiler-selected assembler and linker binaries;
 absence and an empty set both deny. Provisioning builds twice and publishes a
 measured owner-executable loader. Execution consumes that exact binary, checks
 its hash before entry, and does not invoke the C toolchain.
+Runtime identity v6 adds the explicit host target profile to that measured
+closure. The executor compares artifact, runtime, and actual host independently:
+legacy artifacts may have an unspecified OS, but a measured runtime never may.
+Runtime ISA, ABI, OS, and supervisor profile must exactly describe the host.
 The checked loader bytes are copied into a private execution directory before
 launch, closing replacement between hash verification and process creation.
 All host subprocesses have two independent resource boundaries: a wall-clock

@@ -61,6 +61,16 @@
       (str/includes? os "mac") :macos
       :else nil)))
 
+(defn- explicit-host-target []
+  (let [backend (host-target)
+        os (host-os)]
+    (case [backend os]
+      [:x86_64-kotoba-v1 :linux] :x86_64-linux-kotoba-v1
+      [:x86_64-kotoba-v1 :macos] :x86_64-macos-kotoba-v1
+      [:aarch64-kotoba-v1 :linux] :aarch64-linux-kotoba-v1
+      [:aarch64-kotoba-v1 :macos] :aarch64-macos-kotoba-v1
+      (throw (ex-info "native host has no explicit target profile" {:phase :execute})))))
+
 (defn- deterministic-linker-flags []
   (if (str/includes? (str/lower-case (System/getProperty "os.name")) "mac")
     []
@@ -389,7 +399,8 @@
                           {:phase :execute :first first-loader-sha
                            :second loader-sha})))
         {:loader loader
-         :runtime {:format :kotoba.native-runtime/v5
+         :runtime {:format :kotoba.native-runtime/v6
+                   :target-profile (target-profile/profile (explicit-host-target))
                    :loader-source-sha256 loader-source-sha256
                    :loader-binary-sha256 loader-sha
                    :compiler-binary-sha256 compiler-binary-sha
@@ -444,6 +455,7 @@
         host-os-value (host-os)
         artifact-backend (target-profile/backend (:target artifact))
         artifact-profile (:target-profile artifact)
+        runtime-profile (:target-profile runtime)
         entry (or entry 'main)
         export (get (:exports artifact) entry)
         args (:args input)]
@@ -460,6 +472,17 @@
                    (= (:arity export) (count args)) (<= (count args) 5))
       (throw (ex-info "execution input does not match entry arity"
                       {:phase :execute :entry entry :arity (:arity export)})))
+    (when-not (= (target-profile/profile (explicit-host-target)) runtime-profile)
+      (throw (ex-info "runtime target profile does not match execution host"
+                      {:phase :runtime-identity})))
+    (when-not (and (= (:execution artifact-profile) (:execution runtime-profile))
+                   (= (:isa artifact-profile) (:isa runtime-profile))
+                   (= (:abi artifact-profile) (:abi runtime-profile))
+                   (contains? #{:unspecified (:os runtime-profile)} (:os artifact-profile))
+                   (or (= :kotoba-supervisor-v1 (:runtime artifact-profile))
+                       (= (:runtime artifact-profile) (:runtime runtime-profile))))
+      (throw (ex-info "artifact and runtime target profiles do not match"
+                      {:phase :runtime-identity})))
     (runtime-identity/admit! runtime trust)
     (when-not (and (string? loader-path) (seq loader-path))
       (throw (ex-info "native execution requires a measured loader"

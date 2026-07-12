@@ -112,7 +112,10 @@
 
 (deftest receipt-runtime-identity-can-be-pinned-and-revoked
   (let [{:keys [envelope key trust policy input]} (fixture)
-        runtime {:format :kotoba.native-runtime/v5
+        runtime {:format :kotoba.native-runtime/v6
+                 :target-profile {:format :kotoba.target-profile/v1
+                                  :execution :native :isa :x86_64 :os :linux
+                                  :abi :sysv :runtime :kotoba-linux-supervisor-v1}
                  :loader-source-sha256 runtime-identity/loader-source-sha256
                  :loader-binary-sha256 (apply str (repeat 64 "a"))
                  :compiler-binary-sha256 (apply str (repeat 64 "b"))
@@ -147,7 +150,10 @@
                                           {:now 1500 :parent nil})))))
 
 (deftest runtime-measurement-schema-is-exact
-  (let [runtime {:format :kotoba.native-runtime/v5
+  (let [runtime {:format :kotoba.native-runtime/v6
+                 :target-profile {:format :kotoba.target-profile/v1
+                                  :execution :native :isa :x86_64 :os :linux
+                                  :abi :sysv :runtime :kotoba-linux-supervisor-v1}
                  :loader-source-sha256 runtime-identity/loader-source-sha256
                  :loader-binary-sha256 (apply str (repeat 64 "a"))
                  :compiler-binary-sha256 (apply str (repeat 64 "b"))
@@ -171,4 +177,8 @@
                                       (apply str (repeat 64 "b")))))))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"schema mismatch"
                           (runtime-identity/validate-measurement!
-                           (assoc measurement :ignored true))))))
+                           (assoc measurement :ignored true))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"identity rejected"
+                          (runtime-identity/validate-measurement!
+                           (assoc-in measurement [:runtime :target-profile :os]
+                                     :unspecified))))))

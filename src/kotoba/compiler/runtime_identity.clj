@@ -1,12 +1,13 @@
 (ns kotoba.compiler.runtime-identity
-  (:require [kotoba.compiler.artifact :as artifact]))
+  (:require [kotoba.compiler.artifact :as artifact]
+            [kotoba.compiler.target :as target]))
 
 (def loader-source-sha256
   "Pinned identity of the reviewed native loader source."
   "b3b3361712a26e69edbaa42fec47d1290a8ebb06a0baf83f54533b9a32173fdc")
 
 (def ^:private fields
-  #{:format :loader-source-sha256 :loader-binary-sha256
+  #{:format :target-profile :loader-source-sha256 :loader-binary-sha256
     :compiler-binary-sha256 :compiler-version-sha256
     :assembler-binary-sha256 :linker-binary-sha256
     :compiler-resource-sha256 :system-header-closure-sha256})
@@ -17,7 +18,10 @@
 (defn validate! [runtime]
   (when-not (and (map? runtime)
                  (= fields (set (keys runtime)))
-                 (= :kotoba.native-runtime/v5 (:format runtime))
+                 (= :kotoba.native-runtime/v6 (:format runtime))
+                 (contains? (set (vals target/profiles)) (:target-profile runtime))
+                 (= :native (get-in runtime [:target-profile :execution]))
+                 (contains? #{:linux :macos} (get-in runtime [:target-profile :os]))
                  (= loader-source-sha256 (:loader-source-sha256 runtime))
                  (sha256? (:loader-binary-sha256 runtime))
                  (sha256? (:compiler-binary-sha256 runtime))
