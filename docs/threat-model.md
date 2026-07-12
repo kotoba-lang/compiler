@@ -97,7 +97,7 @@ The explicit `measure-runtime` provisioning step pins the reviewed loader source
 by raw SHA-256 before invoking the C toolchain. It measures the resulting binary
 and places the loader source, loader binary, resolved compiler binary, compiler
 version, compiler-reported assembler, and compiler-reported linker hashes in
-`:kotoba.native-runtime/v4`. The loader binary is published separately with
+`:kotoba.native-runtime/v5`. The loader binary is published separately with
 owner-only execute permission. The production `run` path requires both files,
 checks exact schemas, trust membership, revocation, and binary hash, and never
 starts `cc`. The
@@ -134,7 +134,17 @@ after both builds. Symlinks and special files fail closed, and file-count,
 path-length, and aggregate-byte ceilings bound hostile traversal. This detects
 changes to compiler builtin headers such as intrinsic and sanitizer definitions.
 Platform SDK/system headers outside that directory and dynamic library closure
-remain unmeasured host dependencies.
+were previously unmeasured host dependencies.
+
+Runtime v5 closes the header portion by compiling the loader once with `-MD`
+under the same sanitized environment and production flags. A strict bounded
+Make-dependency parser accepts escaped paths and continuations but rejects
+missing separators, dangling escapes, NUL, oversized files/tokens, missing or
+special dependencies, more than 10,000 canonical files, and more than 64 MiB.
+The manifest includes the loader source and all compiler-selected builtin,
+system, and platform SDK headers and is recomputed after both real builds.
+Dynamic loader/library closure and transient filesystem replacement remain in
+scope for a fully hermetic toolchain bundle.
 The bootstrap also clears the complete inherited environment for every child.
 The toolchain receives only deterministic locale/time/reproducibility values and
 a minimal path rooted at the already-resolved compiler directory. The loader

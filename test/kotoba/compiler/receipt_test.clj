@@ -112,14 +112,15 @@
 
 (deftest receipt-runtime-identity-can-be-pinned-and-revoked
   (let [{:keys [envelope key trust policy input]} (fixture)
-        runtime {:format :kotoba.native-runtime/v4
+        runtime {:format :kotoba.native-runtime/v5
                  :loader-source-sha256 runtime-identity/loader-source-sha256
                  :loader-binary-sha256 (apply str (repeat 64 "a"))
                  :compiler-binary-sha256 (apply str (repeat 64 "b"))
                  :compiler-version-sha256 (apply str (repeat 64 "c"))
                  :assembler-binary-sha256 (apply str (repeat 64 "d"))
                  :linker-binary-sha256 (apply str (repeat 64 "e"))
-                 :compiler-resource-sha256 (apply str (repeat 64 "f"))}
+                 :compiler-resource-sha256 (apply str (repeat 64 "f"))
+                 :system-header-closure-sha256 (apply str (repeat 64 "0"))}
         output {:status :ok :result 42 :runtime runtime}
         identity (runtime-identity/identity-sha256 runtime)
         pinned-trust (assoc trust :trusted-runtime-sha256 #{identity})
@@ -146,24 +147,25 @@
                                           {:now 1500 :parent nil})))))
 
 (deftest runtime-measurement-schema-is-exact
-  (let [runtime {:format :kotoba.native-runtime/v4
+  (let [runtime {:format :kotoba.native-runtime/v5
                  :loader-source-sha256 runtime-identity/loader-source-sha256
                  :loader-binary-sha256 (apply str (repeat 64 "a"))
                  :compiler-binary-sha256 (apply str (repeat 64 "b"))
                  :compiler-version-sha256 (apply str (repeat 64 "c"))
                  :assembler-binary-sha256 (apply str (repeat 64 "d"))
                  :linker-binary-sha256 (apply str (repeat 64 "e"))
-                 :compiler-resource-sha256 (apply str (repeat 64 "f"))}
+                 :compiler-resource-sha256 (apply str (repeat 64 "f"))
+                 :system-header-closure-sha256 (apply str (repeat 64 "0"))}
         measurement {:format :kotoba.runtime-measurement/v1 :runtime runtime}]
     (is (= measurement (runtime-identity/validate-measurement! measurement)))
     (is (not= (runtime-identity/identity-sha256 runtime)
               (runtime-identity/identity-sha256
                (assoc runtime :compiler-binary-sha256
-                      (apply str (repeat 64 "0"))))))
+                      (apply str (repeat 64 "1"))))))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"identity rejected"
                           (runtime-identity/validate!
                            (-> runtime
-                               (assoc :format :kotoba.native-runtime/v3)
+                               (assoc :format :kotoba.native-runtime/v4)
                                (dissoc :compiler-binary-sha256)
                                (assoc :compiler-identity-sha256
                                       (apply str (repeat 64 "b")))))))

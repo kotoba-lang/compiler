@@ -176,7 +176,9 @@ The result evidence also binds the pinned loader-source hash, the exact loader
 binary hash, the resolved C compiler executable's byte hash, and its version
 output hash. Runtime v3 additionally binds the compiler-reported assembler and
 linker executable byte hashes. Runtime v4 also binds a deterministic manifest
-of the compiler's builtin include/resource directory. A source mismatch is denied
+of the compiler's builtin include/resource directory. Runtime v5 binds the exact
+source and system/SDK header closure emitted by the compiler dependency scan.
+A source mismatch is denied
 before compilation, and the executor signature makes the runtime identity part
 of the receipt's output evidence.
 
@@ -215,6 +217,11 @@ hash plus aggregate bytes. It rejects symlinks and special files, more than
 10,000 files, paths over 4,096 characters, and trees over 64 MiB before hashing
 contents, preventing the measurement step itself from becoming an unbounded
 filesystem traversal. Total directory entries are separately capped at 20,000.
+The dependency scan uses the same compiler, isolated environment, warning
+policy, and optimization mode as the real build. Its Make-style depfile parser
+handles escaped characters and line continuations, caps serialized input at
+1 MiB, then binds every canonical real path, size, and content hash. The closure
+is limited to 10,000 files and 64 MiB and is recomputed after both builds.
 Every spawned process has a Java-side wall deadline and separately bounded
 stdout/stderr capture. A hanging or output-flooding compiler or loader is killed
 together with its descendants. Toolchain builds allow 30 seconds and 1 MiB per

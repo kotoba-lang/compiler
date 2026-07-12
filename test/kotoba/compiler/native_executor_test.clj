@@ -39,7 +39,7 @@
         result (executor/execute envelope trust {:allow #{}} {:args []}
                                  options)]
     (is (= {:status :ok :result 42} (select-keys (:evidence result) [:status :result])))
-    (is (= :kotoba.native-runtime/v4 (get-in result [:evidence :runtime :format])))
+    (is (= :kotoba.native-runtime/v5 (get-in result [:evidence :runtime :format])))
     (is (= executor/loader-source-sha256
            (get-in result [:evidence :runtime :loader-source-sha256])))
     (is (every? #(re-matches #"[0-9a-f]{64}" %)
@@ -154,6 +154,40 @@
           (.setLength large (inc (* 64 1024 1024))))
         (is (thrown-with-msg? clojure.lang.ExceptionInfo #"bytes exceed limit"
                               (manifest root))))
+      (finally (delete-tree (.toFile root))))))
+
+(deftest compiler-dependency-closure-parser-and-manifest-fail-closed
+  (let [parse-deps @#'executor/parse-dependency-file
+        manifest @#'executor/dependency-manifest-sha256
+        delete-tree @#'executor/delete-tree!
+        root (java.nio.file.Files/createTempDirectory
+              "kotoba-dependency-test-" (make-array java.nio.file.attribute.FileAttribute 0))]
+    (try
+      (is (= ["path with space.h" "next.h"]
+             (parse-deps "output.o: path\\ with\\ space.h \\\n  next.h\n")))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no target separator"
+                            (parse-deps "missing target")))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"ends in an escape"
+                            (parse-deps "out: path\\")))
+      (let [first-file (.resolve root "first.h")
+            second-file (.resolve root "second.h")]
+        (java.nio.file.Files/writeString first-file "alpha"
+                                         (make-array java.nio.file.OpenOption 0))
+        (java.nio.file.Files/writeString second-file "beta"
+                                         (make-array java.nio.file.OpenOption 0))
+        (let [first-hash (manifest [(str second-file) (str first-file)])]
+          (is (= first-hash (manifest [(str first-file) (str second-file)])))
+          (java.nio.file.Files/writeString second-file "changed"
+                                           (make-array java.nio.file.OpenOption 0))
+          (is (not= first-hash (manifest [(str first-file) (str second-file)]))))
+        (java.nio.file.Files/delete second-file)
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a regular file"
+                              (manifest [(str second-file)])))
+        (let [large (.resolve root "large.h")]
+          (with-open [file (java.io.RandomAccessFile. (.toFile large) "rw")]
+            (.setLength file (inc (* 64 1024 1024))))
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo #"bytes exceed limit"
+                                (manifest [(str large)])))))
       (finally (delete-tree (.toFile root))))))
 
 (deftest native-trap-is-returned-as-measured-evidence

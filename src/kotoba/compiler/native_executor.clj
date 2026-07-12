@@ -221,6 +221,75 @@
         (artifact/sha256 {:format :kotoba.directory-manifest/v1
                           :files entries :total-bytes total})))))
 
+(defn- parse-dependency-file [text]
+  (when-not (and (string? text) (<= (count text) (* 1024 1024))
+                 (not (str/includes? text (str \u0000))))
+    (throw (ex-info "compiler dependency file exceeds syntax limits"
+                    {:phase :execute})))
+  (let [colon (.indexOf ^String text ":")]
+    (when (neg? colon)
+      (throw (ex-info "compiler dependency file has no target separator"
+                      {:phase :execute})))
+    (loop [index (inc colon) token (StringBuilder.) out []]
+      (when (> (count out) 10000)
+        (throw (ex-info "compiler dependency count exceeds limit"
+                        {:phase :execute :limit 10000})))
+      (if (>= index (count text))
+        (cond-> out (pos? (.length token)) (conj (str token)))
+        (let [ch (.charAt ^String text index)]
+          (cond
+            (= ch \\)
+            (if (>= (inc index) (count text))
+              (throw (ex-info "compiler dependency file ends in an escape"
+                              {:phase :execute}))
+              (let [next-ch (.charAt ^String text (inc index))]
+                (if (= next-ch \newline)
+                  (recur (+ index 2) token out)
+                  (do (.append token next-ch)
+                      (when (> (.length token) 4096)
+                        (throw (ex-info "compiler dependency path exceeds limit"
+                                        {:phase :execute :limit 4096})))
+                      (recur (+ index 2) token out)))))
+
+            (Character/isWhitespace ch)
+            (if (zero? (.length token))
+              (recur (inc index) token out)
+              (recur (inc index) (StringBuilder.) (conj out (str token))))
+
+            :else
+            (do (.append token ch)
+                (when (> (.length token) 4096)
+                  (throw (ex-info "compiler dependency path exceeds limit"
+                                  {:phase :execute :limit 4096})))
+                (recur (inc index) token out))))))))
+
+(defn- dependency-manifest-sha256 [dependencies]
+  (let [paths (mapv (fn [value]
+                      (try
+                        (let [path (Paths/get value (make-array String 0))
+                              absolute (if (.isAbsolute path) path (.toAbsolutePath path))]
+                          (when-not (Files/isRegularFile absolute (make-array LinkOption 0))
+                            (throw (ex-info "compiler dependency is not a regular file"
+                                            {:phase :execute})))
+                          (.toRealPath absolute (make-array LinkOption 0)))
+                        (catch clojure.lang.ExceptionInfo error (throw error))
+                        (catch Exception error
+                          (throw (ex-info "compiler dependency path is malformed"
+                                          {:phase :execute} error)))))
+                    (distinct dependencies))
+        _ (when (> (count paths) 10000)
+            (throw (ex-info "compiler dependency count exceeds limit"
+                            {:phase :execute :limit 10000})))
+        total (reduce + 0 (map #(Files/size ^Path %) paths))
+        _ (when (> total (* 64 1024 1024))
+            (throw (ex-info "compiler dependency bytes exceed limit"
+                            {:phase :execute :limit (* 64 1024 1024)})))
+        entries (mapv (fn [^Path path]
+                        [(str path) (Files/size path) (file-sha256 (.toFile path))])
+                      (sort-by str paths))]
+    (artifact/sha256 {:format :kotoba.dependency-manifest/v1
+                      :files entries :total-bytes total})))
+
 (defn- delete-tree! [file]
   (when (.exists ^java.io.File file)
     (doseq [child (reverse (file-seq file))] (io/delete-file child true))))
@@ -236,6 +305,8 @@
 
 (defn- build-runtime! [directory]
   (let [loader (io/file directory "kexe-loader")
+        dependency-file (io/file directory "loader.d")
+        dependency-object (io/file directory "loader-deps.o")
         loader-source (io/file "tools/kexe_loader.c")
         compiler-path (resolve-executable "cc")
         compiler-file (.toFile compiler-path)
@@ -260,9 +331,26 @@
               (throw (ex-info "native C compiler identity query failed"
                               {:phase :execute :stderr (:stderr compiler)})))
           compiler-text (str (:stdout compiler) (:stderr compiler))
+          common-flags [(str compiler-path) "-std=c11" "-O2" "-Wall" "-Wextra" "-Werror"]
+          dependency-command (vec (concat common-flags
+                                          ["-MD" "-MF" (.getPath dependency-file)
+                                           "-c" (.getPath loader-source)
+                                           "-o" (.getPath dependency-object)]))
+          dependency-build (run-process dependency-command toolchain-env
+                                        {:timeout-ms 30000})
+          _ (when-not (and (zero? (:exit dependency-build))
+                           (not (:timed-out? dependency-build))
+                           (not (:output-exceeded? dependency-build)))
+              (throw (ex-info "native compiler dependency scan failed"
+                              {:phase :execute :stderr (:stderr dependency-build)})))
+          _ (when (> (.length dependency-file) (* 1024 1024))
+              (throw (ex-info "compiler dependency file exceeds byte limit"
+                              {:phase :execute :limit (* 1024 1024)})))
+          dependencies (parse-dependency-file (slurp dependency-file))
+          dependency-sha (dependency-manifest-sha256 dependencies)
           build-command (fn []
                           (vec (concat
-                                [(str compiler-path) "-std=c11" "-O2" "-Wall" "-Wextra" "-Werror"]
+                                common-flags
                                 (deterministic-linker-flags)
                                 [(.getPath loader-source) "-o" (.getPath loader)])))
           build (run-process (build-command) toolchain-env {:timeout-ms 30000})
@@ -285,12 +373,15 @@
         (when-not (= resource-sha (directory-manifest-sha256 resource-path))
           (throw (ex-info "compiler resource directory changed during measurement"
                           {:phase :execute})))
+        (when-not (= dependency-sha (dependency-manifest-sha256 dependencies))
+          (throw (ex-info "compiler dependency closure changed during measurement"
+                          {:phase :execute})))
         (when-not (= first-loader-sha loader-sha)
           (throw (ex-info "native loader build is not reproducible"
                           {:phase :execute :first first-loader-sha
                            :second loader-sha})))
         {:loader loader
-         :runtime {:format :kotoba.native-runtime/v4
+         :runtime {:format :kotoba.native-runtime/v5
                    :loader-source-sha256 loader-source-sha256
                    :loader-binary-sha256 loader-sha
                    :compiler-binary-sha256 compiler-binary-sha
@@ -298,7 +389,8 @@
                    (raw-sha256 (.getBytes compiler-text StandardCharsets/UTF_8))
                    :assembler-binary-sha256 assembler-sha
                    :linker-binary-sha256 linker-sha
-                   :compiler-resource-sha256 resource-sha}}))))
+                   :compiler-resource-sha256 resource-sha
+                   :system-header-closure-sha256 dependency-sha}}))))
 
 (defn measure-runtime
   "Build the reviewed loader twice and return its identity and exact bytes."

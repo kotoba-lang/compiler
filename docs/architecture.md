@@ -262,3 +262,10 @@ Runtime v4 queries the compiler's builtin include directory and hashes it as a
 SHA-256 for every regular file plus aggregate bytes. Traversal rejects links,
 special files, over 20,000 entries or 10,000 files, overlong paths, and more than 64 MiB before
 reading file contents. The manifest is recomputed after the second build.
+Runtime v5 performs a separate `-MD` compile with the production C flags and
+parses its Make dependency file through a bounded escape-aware parser. The
+resulting `kotoba.dependency-manifest/v1` sorts canonical real paths and binds
+path, size, content SHA-256, and aggregate bytes for the loader source plus all
+actually selected SDK/system headers. Depfile bytes, token length, dependency
+count, and aggregate referenced bytes are capped before content hashing. The
+closure is re-hashed after the reproducibility build.
