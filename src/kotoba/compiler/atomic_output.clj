@@ -76,10 +76,12 @@
    (let [target (target-path path)
          parent (.getParent target)
          temporary (Files/createTempFile parent ".kotoba-" ".tmp"
-                                         (make-array FileAttribute 0))]
+                                         (make-array FileAttribute 0))
+         operation (volatile! :permissions)]
      (try
        (cond executable? (set-executable-permissions! temporary)
              private? (set-private-permissions! temporary))
+       (vreset! operation :write)
        (with-open [channel (FileChannel/open
                             temporary
                             (into-array OpenOption
@@ -88,13 +90,14 @@
          (let [buffer (ByteBuffer/wrap bytes)]
            (while (.hasRemaining buffer) (.write channel buffer)))
          (.force channel true))
+       (vreset! operation :move)
        (Files/move temporary target
                    (into-array CopyOption [StandardCopyOption/ATOMIC_MOVE
                                            StandardCopyOption/REPLACE_EXISTING]))
        (str target)
        (catch clojure.lang.ExceptionInfo error (throw error))
        (catch Exception error
-         (reject! "atomic output failed" {:path path} error))
+         (reject! "atomic output failed" {:path path :reason @operation} error))
        (finally (Files/deleteIfExists temporary))))))
 
 (defn write-edn!
