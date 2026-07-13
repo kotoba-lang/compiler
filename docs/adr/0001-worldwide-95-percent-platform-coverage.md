@@ -184,6 +184,11 @@ static-host identities. Independent regeneration rejects OS/runtime profile
 substitution, and equal AArch64 code still produces distinct sealed artifacts.
 A pinned NDK now also cross-builds the first Android AArch64 host library twice
 byte-identically and checks its hardened ELF and single-function export surface.
+An opt-in NBB/adb gate also builds a PIE harness that executes extracted,
+verified code on an attached Arm64 Android device and checks result, fuel, and
+heap state. Hosted macOS Arm64 runners failed to boot API 35, API 31, and the
+minimal AOSP API 28 image within 600 seconds, so no hosted emulator execution
+evidence is claimed.
 This remains build-boundary progress only: no mobile execution or endpoint
 coverage is claimed until KEXE admission integration, isolated-process
 packaging, lifecycle, and physical-device gates pass.

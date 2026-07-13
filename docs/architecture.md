@@ -63,6 +63,10 @@ reproducible AArch64 ELF with NX stack, RELRO, `BIND_NOW`, and no additional
 exports. Code transitions RW to RX and never uses RWX. The library does not
 authenticate or independently regenerate KEXE and must run inside a separately
 configured Android isolated process; those are product integration gates.
+An optional NBB/adb conformance path builds a PIE harness and executes the
+extracted verified entry on an attached Arm64 Android device. Hosted emulator
+boot success is not part of the trust claim; physical-device evidence and an
+Android isolated application process remain required.
 
 The iOS AOT packager first runs the independent KEXE verifier, then converts the
 admitted code vector into canonical assembly in `__TEXT,__text`. A separate

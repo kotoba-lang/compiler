@@ -58,7 +58,12 @@ exported execution function. That function maps verified code RW then RX,
 flushes the instruction cache, installs the fixed fuel/capability/pair context,
 and requires the Android target identity. It deliberately expects an Android
 isolated process to contain guest traps. No emulator or physical-device
-execution is claimed yet.
+execution is claimed yet. The NBB conformance can require native execution on
+an attached Arm64 Android device by setting `KOTOBA_ANDROID_EXECUTE=1`; it then
+pushes a minimal harness and verified code through adb and checks the result,
+fuel, and heap report. GitHub-hosted macOS Arm64 runners timed out booting API
+35, 31, and minimal AOSP API 28 images, so this evidence is deliberately not a
+required hosted-CI claim.
 
 iOS now has a static AOT packaging command:
 
