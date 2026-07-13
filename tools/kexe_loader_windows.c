@@ -10,11 +10,19 @@
 #include <string.h>
 #include <errno.h>
 
-#if !defined(__clang__) || !defined(_M_X64)
-#error "Kotoba Windows loader requires Clang x86-64 sysv_abi support"
+#if !defined(__clang__)
+#error "Kotoba Windows loader requires Clang"
 #endif
 
+#if defined(_M_X64)
 #define SYSV __attribute__((sysv_abi))
+#define KEXE_ISA "x86_64"
+#elif defined(_M_ARM64)
+#define SYSV
+#define KEXE_ISA "aarch64"
+#else
+#error "Kotoba Windows loader requires x86-64 or Arm64"
+#endif
 #define KEXE_MAX_CODE (1024u * 1024u)
 #define KEXE_PAIR_CAPACITY 4096u
 
@@ -163,8 +171,13 @@ static void prohibit_dynamic_code(void) {
   }
 }
 
+#if defined(_M_X64)
 typedef int64_t (SYSV *guest_fn)(int64_t, int64_t, int64_t, int64_t, int64_t,
                                  struct kexe_context *);
+#else
+typedef int64_t (*guest_fn)(int64_t, int64_t, int64_t, int64_t,
+                            int64_t, int64_t, int64_t, struct kexe_context *);
+#endif
 
 static int sandbox_probe(void) {
   if (getenv("KEXE_FILESYSTEM_PROBE") != NULL) {
@@ -212,10 +225,11 @@ int main(int argc, char **argv) {
   int64_t args[5] = {0, 0, 0, 0, 0}, result;
 
   if (argc < 6) {
-    fprintf(stderr, "usage: kexe-loader-windows <raw-code> <offset> <arity> x86_64 <allow-csv|-> [i64 ...]\n");
+    fprintf(stderr, "usage: kexe-loader-windows <raw-code> <offset> <arity> %s <allow-csv|-> [i64 ...]\n",
+            KEXE_ISA);
     return 2;
   }
-  if (strcmp(argv[4], "x86_64") != 0) fail_input("unsupported ISA");
+  if (strcmp(argv[4], KEXE_ISA) != 0) fail_input("unsupported ISA");
   offset = parse_u64(argv[2], "invalid offset");
   arity = parse_u64(argv[3], "invalid arity");
   if (arity > 5 || argc != (int)(6 + arity)) fail_input("arity mismatch");
@@ -264,7 +278,11 @@ int main(int argc, char **argv) {
     int probe = sandbox_probe();
     if (probe != 0) return probe;
   }
+#if defined(_M_X64)
   result = ((guest_fn)(code + offset))(args[0], args[1], args[2], args[3], args[4], ctx);
+#else
+  result = ((guest_fn)(code + offset))(args[0], args[1], args[2], args[3], args[4], 0, 0, ctx);
+#endif
   if (!SetThreadToken(NULL, NULL)) fail_win("clear thread token");
   CloseHandle(token);
 

@@ -80,6 +80,7 @@
       [:x86_64-kotoba-v1 :windows] :x86_64-windows-kotoba-v1
       [:aarch64-kotoba-v1 :linux] :aarch64-linux-kotoba-v1
       [:aarch64-kotoba-v1 :macos] :aarch64-macos-kotoba-v1
+      [:aarch64-kotoba-v1 :windows] :aarch64-windows-kotoba-v1
       (throw (ex-info "native host has no explicit target profile" {:phase :execute})))))
 
 (defn- deterministic-linker-flags []

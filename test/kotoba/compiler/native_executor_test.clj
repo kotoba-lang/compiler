@@ -105,18 +105,18 @@
                                             :loader-path loader-path})))))
 
 (deftest windows-runtime-identity-requires-the-windows-loader-source
-  (let [{:keys [runtime]} @measured-runtime
-        windows-profile (compiler/compile-source "(defn main [] 42)"
-                                                 :x86_64-windows-kotoba-v1)
-        windows-runtime (-> runtime
-                            (assoc :target-profile (get-in windows-profile [:artifact :target-profile]))
-                            (assoc :loader-source-sha256
-                                   runtime-identity/windows-loader-source-sha256))]
-    (is (= windows-runtime (runtime-identity/validate! windows-runtime)))
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"runtime identity rejected"
-                          (runtime-identity/validate!
-                           (assoc windows-runtime :loader-source-sha256
-                                  runtime-identity/loader-source-sha256))))))
+  (let [{:keys [runtime]} @measured-runtime]
+    (doseq [target [:x86_64-windows-kotoba-v1 :aarch64-windows-kotoba-v1]]
+      (let [windows-profile (compiler/compile-source "(defn main [] 42)" target)
+            windows-runtime (-> runtime
+                                (assoc :target-profile (get-in windows-profile [:artifact :target-profile]))
+                                (assoc :loader-source-sha256
+                                       runtime-identity/windows-loader-source-sha256))]
+        (is (= windows-runtime (runtime-identity/validate! windows-runtime)))
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"runtime identity rejected"
+                              (runtime-identity/validate!
+                               (assoc windows-runtime :loader-source-sha256
+                                      runtime-identity/loader-source-sha256))))))))
 
 (deftest execution-rejects-a-loader-that-does-not-match-the-approved-bytes
   (let [{:keys [envelope trust]} (signed "(defn main [] 42)" {:allow #{}})

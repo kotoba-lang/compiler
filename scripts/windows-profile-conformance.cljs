@@ -10,6 +10,12 @@
 (def nbb-cli (.join path lib/root "node_modules" "nbb" "cli.js"))
 (def kotoba (.join path lib/root "bin" "kotoba"))
 (def source (.join path lib/root "examples" "structured.kotoba"))
+(def arm64? (= "arm64" (.-arch js/process)))
+(def target (if arm64? "aarch64-windows" "x86_64-windows"))
+(def target-profile (if arm64? ":aarch64-windows-kotoba-v1" ":x86_64-windows-kotoba-v1"))
+(def isa (if arm64? "aarch64" "x86_64"))
+(def abi (if arm64? ":kotoba-aapcs64-v1" ":kotoba-sysv-v1"))
+(def context-mode (if arm64? ":hidden-context-x7" ":hidden-context-r9"))
 (defn artifact [name] (.join path tmp name))
 (defn run-k! [args]
   (let [result (.spawnSync child js/process.execPath (clj->js (into [nbb-cli kotoba "-M"] args))
@@ -46,24 +52,24 @@
     (lib/ensure! (and offset arity) (str "windows-profile: missing export metadata for " symbol))
     [offset arity]))
 (defn loader-check! [loader raw offset arity expected & args]
-  (let [result (run-external loader (into [raw offset arity "x86_64" "-"] args))]
+  (let [result (run-external loader (into [raw offset arity isa "-"] args))]
     (lib/ensure! (= expected (.trim (.-stdout result)))
                  (str "windows-profile: runtime result mismatch, expected " expected))))
 
 (try
-  (run-k! ["compile" source "--target" "x86_64-windows" "--output" (artifact "first.kexe")])
-  (run-k! ["compile" source "--target" "x86_64-windows" "--output" (artifact "second.kexe")])
+  (run-k! ["compile" source "--target" target "--output" (artifact "first.kexe")])
+  (run-k! ["compile" source "--target" target "--output" (artifact "second.kexe")])
   (let [first (.readFileSync fs (artifact "first.kexe"))
         second (.readFileSync fs (artifact "second.kexe"))
         text (.toString first "utf8")]
     (lib/ensure! (.equals first second) "windows-profile: artifact is not reproducible")
-    (doseq [needle [":target :x86_64-windows-kotoba-v1"
-                    ":os :windows" ":abi :kotoba-sysv-v1"
+    (doseq [needle [(str ":target " target-profile)
+                    ":os :windows" (str ":abi " abi)
                     ":runtime :kotoba-windows-supervisor-v1"
-                    ":mode :hidden-context-r9"]]
+                    (str ":mode " context-mode)]]
       (lib/ensure! (.includes text needle) (str "windows-profile: missing binding " needle))))
   (run-k! ["verify" (artifact "first.kexe")])
-  (println "windows-profile: reproducible x86_64 Windows KEXE verified")
+  (println (str "windows-profile: reproducible " isa " Windows KEXE verified"))
   (when (= "win32" (.-platform js/process))
     (let [loader (artifact "kexe-loader-windows.exe")
           raw (artifact "program.bin")
@@ -76,35 +82,36 @@
       (loader-check! loader raw main-offset main-arity "42")
       (loader-check! loader raw score-offset score-arity "12" "-7" "2")
       (loader-check! loader raw calc-offset calc-arity "21" "20" "4")
-      (let [structured (run-external loader [raw main-offset main-arity "x86_64" "-"]
+      (let [structured (run-external loader [raw main-offset main-arity isa "-"]
                                              {:KEXE_STRUCTURED_REPORT "1"} false)]
         (lib/ensure! (= "{:status :ok :result 42 :fuel {:initial 256 :remaining 253} :heap {:capacity 4096 :used 0}}"
                         (.trim (.-stdout structured)))
                      "windows-profile: structured supervisor report mismatch"))
       (doseq [[probe reason] [[:KEXE_FILESYSTEM_PROBE "filesystem-denied"]
                               [:KEXE_PROCESS_PROBE "process-denied"]]]
-        (let [result (run-external loader [raw main-offset main-arity "x86_64" "-"]
+        (let [result (run-external loader [raw main-offset main-arity isa "-"]
                                    {probe "1"} true)]
           (lib/ensure! (= 77 (.-status result)) (str "windows-profile: " reason " exit mismatch"))
           (lib/ensure! (.includes (.-stderr result) (str ":reason :" reason))
                        (str "windows-profile: " reason " report mismatch"))))
       (run-k! ["compile" (.join path lib/root "examples/heap.kotoba")
-               "--target" "x86_64-windows" "--output" (artifact "heap.kexe")])
+               "--target" target "--output" (artifact "heap.kexe")])
       (let [[offset arity] (extract! (artifact "heap.kexe") "main" (artifact "heap.bin"))
-            report (run-external loader [(artifact "heap.bin") offset arity "x86_64" "-"]
+            report (run-external loader [(artifact "heap.bin") offset arity isa "-"]
                                  {:KEXE_STRUCTURED_REPORT "1"} false)]
         (lib/ensure! (= "{:status :ok :result 42 :fuel {:initial 256 :remaining 255} :heap {:capacity 4096 :used 2}}"
                         (.trim (.-stdout report)))
                      "windows-profile: bounded heap report mismatch"))
       (run-k! ["compile" (.join path lib/root "tests/browser/capability.kotoba")
-               "--target" "x86_64-windows" "--policy" (.join path lib/root "examples/capability-policy.edn")
+               "--target" target "--policy" (.join path lib/root "examples/capability-policy.edn")
                "--output" (artifact "capability.kexe")])
       (let [[offset arity] (extract! (artifact "capability.kexe") "main" (artifact "capability.bin"))]
-        (let [allowed (run-external loader [(artifact "capability.bin") offset arity "x86_64" "7"])]
+        (let [allowed (run-external loader [(artifact "capability.bin") offset arity isa "7"])]
           (lib/ensure! (= "42" (.trim (.-stdout allowed))) "windows-profile: capability result mismatch"))
-        (let [denied (run-external loader [(artifact "capability.bin") offset arity "x86_64" "-"] {} true)]
+        (let [denied (run-external loader [(artifact "capability.bin") offset arity isa "-"] {} true)]
           (lib/ensure! (not= 0 (.-status denied)) "windows-profile: denied capability executed")))
-      (println "windows-profile: W^X supervisor, SysV adapter, sandbox, capability, fuel, and heap vectors passed")
+      (println (str "windows-profile: W^X supervisor, " abi
+                    " adapter, sandbox, capability, fuel, and heap vectors passed"))
       (.writeFileSync fs (artifact "policy.edn") "{:allow #{}}\n")
       (.writeFileSync fs (artifact "input.edn") "{:args []}\n")
       (run-k! ["keygen" "--output" (artifact "key.edn")])

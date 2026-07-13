@@ -8,7 +8,7 @@
 
 (def windows-loader-source-sha256
   "Pinned identity of the reviewed Windows native loader source."
-  "38e626f0bc7d38b20efef218b2f746c9ee89e46a11a1c3e5777dbc2dc13d2a89")
+  "cfeb7e0e32635db5f0522e84b18e6e477cef70e3c9a858d1f20242d9c8ff5702")
 
 (defn loader-source-for-profile [profile]
   (case (:os profile)

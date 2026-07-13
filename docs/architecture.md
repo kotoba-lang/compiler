@@ -33,6 +33,8 @@ Targets are versioned contracts:
 - `x86_64-windows-kotoba-v1`: the same regenerated x86-64 instruction subset,
   sealed to Windows, the `kotoba-sysv-v1` internal ABI, and the measured
   Windows supervisor.
+- `aarch64-windows-kotoba-v1`: direct AArch64 instructions sealed to Windows,
+  the `kotoba-aapcs64-v1` ABI, and the same measured supervisor boundary.
 - `aarch64-kotoba-v1`: direct AArch64 instructions in a sealed KEXE container.
 - `aarch64-android-kotoba-v1`: Android AArch64 code sealed to the future
   isolated application host.
