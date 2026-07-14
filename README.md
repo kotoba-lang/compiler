@@ -64,8 +64,33 @@ ADR-0002.
 
 ```text
 source -> inert reader -> typed/effect HIR -> SSA-like KIR
-       -> wasm32 | x86_64 | aarch64 -> independent verifier -> admission
+       -> wasm32 | x86_64 | aarch64 | cljs -> independent verifier -> admission
 ```
+
+`cljs` (ADR-2607151500) is a genuinely different kind of backend from the
+other three: it lowers KIR to plain ClojureScript SOURCE TEXT, not machine
+code or a WASM binary. `:cljs-kotoba-v1` (with `:cljs-node-kotoba-v1`/
+`:cljs-browser-kotoba-v1` os-scoped variants, mirroring how
+`wasm32-browser`/`wasm32-wasi` relate to `wasm32`) is in
+`compiler/targets`, so every existing cross-backend consistency test now
+also compiles through it. Since a cljs runtime already has real
+heap-allocated persistent data structures, `pair`/`pair-first`/
+`pair-second` become plain 2-element vectors + `nth` -- no hand-rolled
+linear-memory heap simulation needed, unlike wasm32/x86_64/aarch64. KIR's
+`if`-is-0-false and comparison-returns-1-or-0 conventions (neither of
+which plain cljs semantics reproduce for free) are made explicit at every
+emission site, and the module-global, never-replenished 256-call fuel
+budget (identical to WASM's own semantics) is reproduced with a
+`defonce` atom. Real execution (not just JVM `eval`) was verified via
+`nbb`, including one real bug this uncovered before landing: KIR's own
+function order does not guarantee a synthesized `loop`/`recur` helper is
+defined before the `defn` that calls it, and plain `defn` forms (in cljs
+*or* JVM Clojure) do not forward-hoist across a file the way WASM's
+function-index table does -- fixed by emitting a `(declare ...)` of every
+function name ahead of any `defn`. `cap-call` is rejected at emit time (no
+cljs-side host-import wiring yet); i64 wraparound is a documented,
+unaddressed gap for a hypothetical program that depends on overflow --
+see `backend/cljs.clj`'s own docstring for the full, honest scope.
 
 Release-oriented target identities explicitly bind execution format, ISA, OS,
 ABI, and runtime profile. Current explicit names are `wasm32-browser`, `wasm32-wasi`,
