@@ -78,7 +78,34 @@
 (defn- reject! [message form]
   (throw (ex-info message {:phase :subset :form form})))
 
-(declare desugar-expr)
+(declare desugar-expr form-free-symbols replace-recur)
+
+;; ADR-2607150000: bound (via `binding`) around each top-level defn's
+;; desugaring pass in `analyze`, to an atom `loop`'s desugar-expr case
+;; conjoins synthesized helper-function definitions onto -- the same
+;; "collect synthesized functions on the side, inject them into `parsed`
+;; afterward" pattern `map-get-helper`/`uses-map-get?` already established,
+;; generalized to support MULTIPLE, uniquely-named helpers per defn (one
+;; per `loop` occurrence) rather than one fixed shared name.
+(def ^:dynamic *pending-loop-helpers* nil)
+
+;; ADR-2607150000: loop-helper names are NOT `gensym` -- unlike and/or's
+;; gensym'd `let`-local temp names (erased into numeric WASM local indices,
+;; never appearing in the compiled bytes -- confirmed by repeated-compile
+;; byte comparison), a loop-helper becomes a real EXPORTED top-level
+;; function ("every function is exported by current backends," see
+;; analyze's :effects comment below), so its NAME is literally baked into
+;; the WASM export section. `gensym` uses a JVM-process-wide monotonic
+;; counter, so two compiles of the IDENTICAL source in the same process
+;; would get DIFFERENT loop-helper names and therefore DIFFERENT bytes --
+;; confirmed empirically (compiled the same loop-using source twice in one
+;; process: bytes differed). This compiler's own reproducible-build gates
+;; (coverage_evidence.clj/release.clj) require byte-for-byte determinism,
+;; so loop-helpers instead get a sequential name from *loop-counter*,
+;; bound ONCE per `analyze` call (not per-defn) so the same source always
+;; encounters `loop` forms in the same left-to-right desugaring order and
+;; always assigns the same names.
+(def ^:dynamic *loop-counter* nil)
 
 (defn- desugar-list [args form]
   (when (> (count args) max-list-items)
@@ -171,15 +198,194 @@
     (coll? form) (some uses-map-get? form)
     :else false))
 
+(defn- nth-pair-second
+  "N nested `pair-second`s around EXPR (0 => expr itself) -- the pair-chain
+  position N steps past the head, used by both vector destructuring
+  (below) and vector-as-data indexing."
+  [expr n]
+  (nth (iterate (fn [e] (list 'pair-second e)) expr) n))
+
+(defn- destructure-binding
+  "Expands ONE `[pattern value-expr]` `let`/`defn`-param binding into a flat
+  seq of `[symbol expr]` pairs (ADR-2607150000). PATTERN is a plain symbol
+  (kept as-is, 1 pair), a positional vector `[a b & rest]` (pair-chain
+  destructuring via pair-first/pair-second, 1 pair per named/rest symbol),
+  or a map `{:keys [a b]}` (association-list destructuring via the `get`
+  special form, 1 pair per key). VALUE-EXPR must already be desugared --
+  callers desugar it once; every pattern binds a single gensym'd temp to it
+  first so it's never re-evaluated. One level only: a pattern NESTED inside
+  a vector/map pattern is not itself recursively destructured -- a real,
+  documented scope limit, not silently ignored (rejected below if written)."
+  [pattern value-expr]
+  (cond
+    (symbol? pattern) [[pattern value-expr]]
+
+    (vector? pattern)
+    (let [tmp (gensym "destr-vec__")
+          [positional rest-part] (split-with (complement #{'&}) pattern)]
+      (when-not (every? symbol? positional)
+        (reject! "vector destructuring supports only flat (one-level) symbol patterns" pattern))
+      (when (and (seq rest-part) (or (not= 2 (count rest-part)) (not (symbol? (second rest-part)))))
+        (reject! "`&` in vector destructuring must be followed by exactly one rest-binding symbol" pattern))
+      (into [[tmp value-expr]]
+            (concat
+             (map-indexed (fn [i name] [name (list 'pair-first (nth-pair-second tmp i))]) positional)
+             (when-let [rest-name (second rest-part)]
+               [[rest-name (nth-pair-second tmp (count positional))]]))))
+
+    (map? pattern)
+    (let [keys-vec (:keys pattern)]
+      (when-not (and (= 1 (count pattern)) keys-vec (vector? keys-vec) (every? symbol? keys-vec))
+        (reject! "map destructuring supports only {:keys [...]} (no :or/:as/:strs)" pattern))
+      (let [tmp (gensym "destr-map__")]
+        (into [[tmp value-expr]]
+              ;; Builds the same ALREADY-DESUGARED shape as the `get` case
+              ;; in desugar-expr's case dispatch below
+              ;; (`(map-get-helper-name m k default)`), not the sugared
+              ;; `(get m k)` source form -- this generated call is never
+              ;; routed back through desugar-expr, so it must already be in
+              ;; its final form: both a bare `(get ...)` op (unresolvable,
+              ;; "operation has no admitted lowering") and a raw keyword key
+              ;; (unrepresentable at runtime) were caught live before this
+              ;; fix.
+              (map (fn [k] [k (list map-get-helper-name tmp (keyword->i64 (keyword k)) 0)]) keys-vec))))
+
+    :else (reject! "unsupported destructuring pattern" pattern)))
+
+(defn- form-free-symbols
+  "Symbols FORM references as VALUES (never call-heads) that aren't in
+  BOUND -- a purely syntactic free-variable scan for `loop`'s closure
+  conversion (see desugar-expr's `loop` case). Operates on an ALREADY
+  DESUGARED form, so every `let` it sees has plain-symbol bindings only
+  (destructuring has already been expanded away by this point) -- no need
+  to reason about vector/map patterns here."
+  [form bound]
+  (cond
+    (symbol? form) (if (contains? bound form) #{} #{form})
+    (seq? form)
+    (let [[op & args] form]
+      (if (= op 'let)
+        (let [[bindings & body] args]
+          (loop [pairs (partition 2 bindings) bound bound acc #{}]
+            (if-let [[name value] (first pairs)]
+              (recur (next pairs) (conj bound name) (set/union acc (form-free-symbols value bound)))
+              (apply set/union acc (map #(form-free-symbols % bound) body)))))
+        (apply set/union #{} (map #(form-free-symbols % bound) args))))
+    (coll? form) (apply set/union #{} (map #(form-free-symbols % bound) form))
+    :else #{}))
+
+(defn- replace-recur
+  "Walks the already-desugared loop BODY, replacing every `(recur a b ...)`
+  with a call to HELPER-NAME carrying the new loop-binding values (A/B/...)
+  followed by CAPTURED's outer-variable values UNCHANGED (they never vary
+  across iterations, only the loop's own bindings do). A `recur` belonging
+  to a NESTED loop is never seen here -- desugar-expr's `loop` case already
+  resolved it (into an ordinary call to ITS OWN gensym'd helper) as part of
+  desugaring this loop's body, before replace-recur ever runs."
+  [form helper-name loop-names captured]
+  (cond
+    (seq? form)
+    (let [[op & args] form]
+      (if (= op 'recur)
+        (do (when-not (= (count args) (count loop-names))
+              (reject! "recur argument count must match loop bindings" form))
+            (list* helper-name (concat args captured)))
+        (cons op (map #(replace-recur % helper-name loop-names captured) args))))
+    :else form))
+
 (defn- desugar-expr [form]
   (cond
     (keyword? form) (keyword->i64 form)
     (map? form) (desugar-map form)
+    ;; ADR-2607150000: vector-as-data reuses desugar-list's pair-chain
+    ;; encoding verbatim -- a vector and a `(list ...)` call become
+    ;; identical runtime representations, matching this language's
+    ;; existing "no runtime type tags" design. Safe to dispatch generically
+    ;; here because `let`'s OWN bindings vector never reaches this branch:
+    ;; the `let` case below fully owns processing it directly (via
+    ;; destructure-binding) and never routes it back through desugar-expr
+    ;; as a bare value. `defn` params are consumed entirely inside
+    ;; `analyze`, before any desugar-expr call, for the same reason.
+    (vector? form) (desugar-list (seq form) form)
     (not (seq? form)) form
     :else
     (let [[op & args] form]
       (case op
         list (desugar-list args form)
+
+        ;; ADR-2607150000: `let` gets its own case (previously handled only
+        ;; by the generic default case below) for two reasons: (1) bug fix
+        ;; -- the default case's `(map desugar-expr args)` called
+        ;; desugar-expr on the WHOLE bindings vector as one opaque arg;
+        ;; since vectors aren't `seq?`, it passed through UNCHANGED,
+        ;; silently skipping map/keyword/nested-vector desugaring inside
+        ;; binding VALUES (`(let [m {:a 1}] (get m :a))` failed with
+        ;; "value type is outside the safe profile" before this fix,
+        ;; confirmed live). (2) destructuring: each binding's PATTERN may
+        ;; now be a vector `[a b & rest]` or a map `{:keys [a b]}`, not
+        ;; just a plain symbol (destructure-binding above expands either
+        ;; into flat symbol bindings). Malformed bindings (not an even
+        ;; vector) pass through unchanged so validate-expr's own existing
+        ;; "let requires an even binding vector" check still fires with
+        ;; its original, clearer error.
+        let (let [[bindings & body] args]
+              (list* 'let
+                     (if (and (vector? bindings) (even? (count bindings)))
+                       ;; destructure-binding returns a seq of [name value]
+                       ;; pairs per pattern; mapcat over patterns yields a
+                       ;; seq OF PAIRS (not yet flat), so a second `mapcat
+                       ;; identity` is needed to splice each pair's two
+                       ;; elements into the flat alternating binding vector
+                       ;; `let` itself expects.
+                       (vec (mapcat identity
+                                    (mapcat (fn [[pattern value]]
+                                              (destructure-binding pattern (desugar-expr value)))
+                                            (partition 2 bindings))))
+                       bindings)
+                     ;; `mapv`, not bare `map`: `list*`'s tail argument is
+                     ;; never forced by `list*` itself, so a lazy `map`
+                     ;; result here would defer these desugar-expr calls
+                     ;; past the end of whatever *loop-counter*/
+                     ;; *pending-loop-helpers* `binding` this `let` case is
+                     ;; nested inside -- confirmed live as an NPE ("Cannot
+                     ;; invoke Volatile.deref() ... is null") when a `loop`
+                     ;; inside a `let` body was first forced later, by
+                     ;; `uses-map-get?`'s post-analyze tree walk, long
+                     ;; after `analyze`'s `binding` had already exited.
+                     (mapv desugar-expr body)))
+
+        ;; ADR-2607150000: `loop`/`recur` desugars to a compiler-synthesized
+        ;; recursive helper function (like `get`'s __kotoba_map_get, but
+        ;; freshly gensym'd per loop occurrence rather than one shared fixed
+        ;; name) -- no backend/codegen change, since ordinary recursive
+        ;; `defn` calls already work and are already fuel-metered. Any free
+        ;; variable the loop body references from its ENCLOSING scope is
+        ;; captured as an EXTRA helper parameter (form-free-symbols does a
+        ;; purely syntactic scan -- no environment lookup needed: an
+        ;; over/under-capture mistake still fails SAFELY later, as a hard
+        ;; :unbound-symbol or arity-mismatch compile error from validate-expr,
+        ;; never silently wrong runtime behavior). Threading the captured
+        ;; values through recur unchanged is handled by replace-recur.
+        loop
+        (let [[bindings & body] args]
+          (when-not (and (vector? bindings) (even? (count bindings))
+                         (every? symbol? (take-nth 2 bindings)))
+            (reject! "loop requires an even vector of plain-symbol bindings (destructure inside the body instead)" form))
+          (when-not (= 1 (count body))
+            (reject! "loop requires exactly one body expression (this profile has no `do`)" form))
+          (let [loop-names (vec (take-nth 2 bindings))
+                loop-inits (mapv desugar-expr (take-nth 2 (rest bindings)))
+                desugared-body (desugar-expr (first body))
+                captured (vec (sort-by str (form-free-symbols desugared-body (set loop-names))))
+                helper-name (symbol (str "__kotoba_loop_" (vswap! *loop-counter* inc)))
+                helper-params (into loop-names captured)]
+            (when (> (count helper-params) max-parameters)
+              (reject! "loop bindings plus captured outer variables exceed this compiler's ABI-supported arity" form))
+            (when *pending-loop-helpers*
+              (swap! *pending-loop-helpers* conj
+                     {:name helper-name :params helper-params :result :i64 :effects #{}
+                      :body (replace-recur desugared-body helper-name loop-names captured)}))
+            (list* helper-name (concat loop-inits captured))))
         cons (do (when-not (= 2 (count args)) (reject! "cons requires two operands" form))
                  (list 'pair (desugar-expr (first args)) (desugar-expr (second args))))
         first (do (when-not (= 1 (count args)) (reject! "first requires one operand" form))
@@ -351,6 +557,21 @@
     (when (> cost max-lowered-nodes)
       (reject! "lowered program budget exhausted" cost))))
 
+(defn- param-name+wrap
+  "For one `defn` PARAM: a plain symbol is kept as-is (identity wrap). A
+  vector/map destructuring pattern (ADR-2607150000) gets a fresh gensym'd
+  parameter name, plus a body-wrapping fn that binds the pattern from that
+  gensym via a `let` -- reusing desugar-expr's own `let`-destructuring
+  (above) rather than duplicating it: `(defn f [{:keys [a]}] body)`
+  becomes params `[tmp]`, body `(let [{:keys [a]} tmp] body)`, which then
+  goes through desugar-expr exactly like any other `let`. Returns
+  `[param-symbol wrap-fn]`."
+  [param]
+  (if (symbol? param)
+    [param identity]
+    (let [tmp (gensym "param-destr__")]
+      [tmp (fn [body] (list 'let [param tmp] body))])))
+
 (defn analyze [source]
   (let [forms (read-forms source)
         namespaces (filter #(and (seq? %) (= 'ns (first %))) forms)
@@ -364,20 +585,47 @@
                                      (<= (count (str (second %))) max-symbol-chars)))
                           namespaces))
             (reject! "ns must contain exactly one namespace symbol" namespaces))
-        parsed (mapv (fn [form]
-                       (let [[_ name params & body] form]
+        ;; ADR-2607150000: mapcat, not mapv -- a defn using `loop` may
+        ;; expand into itself PLUS one or more synthesized loop-helper
+        ;; functions (collected via *pending-loop-helpers*, bound fresh
+        ;; per defn so helpers from one function's loops never leak into
+        ;; another's). defn PARAMS may now be destructuring patterns
+        ;; (param-name+wrap above), not just plain symbols. *loop-counter*
+        ;; is bound ONCE for the whole source (not per-defn) so loop-helper
+        ;; names stay unique across every defn, not just within one.
+        parsed (binding [*loop-counter* (volatile! 0)]
+               ;; `vec` (forcing) must stay INSIDE `binding`'s dynamic
+               ;; extent: `mapcat` is lazy, so `(vec (binding [...]
+               ;; (mapcat ...)))` would rebind *loop-counter* only around
+               ;; building the (unrealized) lazy seq, then unbind it before
+               ;; `vec` actually forces each element -- confirmed live as an
+               ;; NPE (`*loop-counter*` back to its nil default) on any
+               ;; source using `loop`.
+               (vec
+                     (mapcat
+                     (fn [form]
+                       (let [[_ name raw-params & body] form]
                          (when-not (valid-name? name) (reject! "invalid function name" name))
                          (when (contains? reserved-function-names name)
                            (reject! "reserved function name" name))
-                         (when-not (and (vector? params) (every? valid-name? params)
-                                        (= (count params) (count (distinct params)))
-                                        (<= (count params) max-parameters))
-                           (reject! "function parameters must be unique bounded symbols with ABI-supported arity" params))
+                         (when-not (vector? raw-params)
+                           (reject! "function parameters must be a vector" raw-params))
+                         (when (> (count raw-params) max-parameters)
+                           (reject! "function parameters exceed ABI-supported arity" raw-params))
                          (when-not (= 1 (count body))
                            (reject! "function must contain one result expression" body))
-                         {:name name :params params :result :i64 :effects #{}
-                          :body (desugar-expr (first body))}))
-                     defs)
+                         (let [name+wraps (mapv param-name+wrap raw-params)
+                               params (mapv first name+wraps)
+                               wrap-body (apply comp (map second name+wraps))]
+                           (when-not (and (every? valid-name? params) (= (count params) (count (distinct params))))
+                             (reject! "function parameters must be unique bounded symbols with ABI-supported arity" raw-params))
+                           (let [loop-helpers (atom [])
+                                 desugared (binding [*pending-loop-helpers* loop-helpers]
+                                             (desugar-expr (wrap-body (first body))))]
+                             (into [{:name name :params params :result :i64 :effects #{}
+                                     :body desugared}]
+                                   @loop-helpers)))))
+                     defs)))
         ;; ADR-2607150000: inject the synthesized `get` helper only when a
         ;; desugared body actually calls it -- keeps modules that never use
         ;; `get` byte-identical to before this change. A user `defn` that
