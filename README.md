@@ -18,6 +18,34 @@ profiles, conformance and runtime digests, CI run, test time, and expiry.
 
 The multi-target, deny-by-default compiler for the safe Kotoba language.
 
+## Relationship to `kotoba-lang/kotoba` and `kotoba-lang/kotoba-lang`
+
+This repository is the CLJC-native successor of `kotoba-lang/kotoba`'s
+historical Rust "safe Kotoba" three-gate design (`policy.rs`/`subset.rs`/
+`effects.rs`, removed from that repo `604896171b` 2026-07-01 — see
+`kotoba-lang/kotoba`'s README, "Language — kotoba-lang & kotoba wasm"
+section) — not `kotoba-lang/kotoba-lang`, which that README currently
+(mis)states as where the successor "lives entirely." `kotoba-lang/kotoba-lang`
+owns the source-extension/CLI/package *contract* only; it does not implement
+compile-time admission gates. The three gates map onto this repo's
+`src/kotoba/compiler/frontend.clj` as follows:
+
+| safe-Kotoba gate | Theorem | This repo |
+|---|---|---|
+| Subset | no ambient code/effect | `forbidden-heads` (`eval`/`require`/`import`/`set!`/`defmacro`/reflection/... rejected in `validate-expr`) |
+| Capability | T3 — Capability Confinement | `cap-call` (a typed, arity-checked capability invocation form) |
+| Effect | T2 — Effect Soundness | `direct-facts` + `infer-effects` (interprocedural fixpoint over `:calls`, converges through mutual recursion) |
+
+`kotoba-lang/kotoba`'s reference-implementation grammar (`def`/`defn`/`ns`,
+`if`/`when`/`let`/`do`, full arithmetic/comparison, `and`/`or`/`not`, strings,
+recursion — no capability/effect gate baked into the language itself) and
+this repo's admission-gated KIR-level grammar (`if`/`let`/`cap-call`,
+`quot`-only arithmetic, heap-pair-encoded lists, no `when`/`do`/`and`/`or`
+sugar, but with the effect/capability gates above) are two different,
+independently-evolved surfaces — not yet reconciled into one shared grammar
+spec. See `com-junkawasaki/root` ADR-2607141600 for the fuller cross-repo
+analysis and open follow-up.
+
 GPU compilation now begins with a separate typed accelerator KIR rather than
 allowing arbitrary shaders into scalar CPU KIR. `kotoba.compiler.accelerator`
 validates bounded f32 elementwise/reduction kernels and deterministically emits
