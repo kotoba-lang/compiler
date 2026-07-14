@@ -104,3 +104,14 @@
   ([path value] (write-edn! path value {}))
   ([path value options]
    (write-bytes! path (.getBytes (pr-str value) StandardCharsets/UTF_8) options)))
+
+(defn write-text!
+  "Like write-edn! but for a value that is ALREADY a string meant to be read
+  verbatim (e.g. emitted ClojureScript source) -- write-edn! would pr-str it
+  into a quoted/escaped EDN string literal, corrupting source text that must
+  stay directly readable by a cljs host."
+  ([path value] (write-text! path value {}))
+  ([path value options]
+   (when-not (string? value)
+     (reject! "output must be a string" {:path path} nil))
+   (write-bytes! path (.getBytes ^String value StandardCharsets/UTF_8) options)))

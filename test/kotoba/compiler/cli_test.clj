@@ -1,9 +1,15 @@
 (ns kotoba.compiler.cli-test
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
-            [clojure.test :refer [deftest is]]
+            [clojure.test :refer [deftest is testing]]
             [kotoba.compiler.cli :as cli])
   (:import [java.io StringWriter]))
+
+(defn- temp-kotoba-source! [contents]
+  (let [file (doto (java.io.File/createTempFile "kotoba-cli-test-" ".kotoba")
+               (.deleteOnExit))]
+    (spit file contents)
+    (.getPath file)))
 
 (deftest phase-exit-codes-are-stable
   (is (= 64 (cli/exit-code :usage)))
@@ -51,3 +57,58 @@
         (is (= 64 @status))
         (is (= :usage (:error report)))
         (is (= "source input must use the .kotoba extension" (:message report)))))))
+
+(deftest compile-cljs-target-writes-real-source-not-a-corrupted-nil-artifact
+  (testing "regression test for a real bug found live: `compile --target
+            cljs-kotoba-v1` reported {:ok true ...} while silently writing
+            the literal text \"nil\" to --output, because compile-source's
+            :cljs/v1 result carries :source (a string), not :artifact --
+            and the old code unconditionally wrote (:artifact result) via
+            write-edn! for every non-:wasm/v1 format."
+    (let [source (temp-kotoba-source! "(defn main [] (let [x 40 y 2] (+ x y)))")
+          output (.getPath (doto (java.io.File/createTempFile "kotoba-cli-cljs-out-" ".cljs")
+                             (.deleteOnExit)))
+          status (atom nil)
+          out (StringWriter.)]
+      (binding [cli/*exit* #(reset! status %)
+                *out* out]
+        (cli/-main "compile" source "--target" "cljs-kotoba-v1" "--output" output))
+      (let [report (edn/read-string (str out))
+            written (slurp output)]
+        (is (nil? @status))
+        (is (:ok report))
+        (is (= :cljs-kotoba-v1 (:target report)))
+        (is (not= "nil" (str/trim written)))
+        (is (str/includes? written "(defn main"))
+        ;; the written text must be genuinely readable cljs source, not an
+        ;; EDN-escaped string literal (what write-edn!'s pr-str would have
+        ;; produced instead)
+        (is (seq? (read-string (str "(" written ")"))))))))
+
+(deftest compile-cljs-target-default-output-extension-is-cljs
+  (let [source (temp-kotoba-source! "(defn main [] 42)")
+        status (atom nil)
+        out (StringWriter.)]
+    (binding [cli/*exit* #(reset! status %)
+              *out* out]
+      (cli/-main "compile" source "--target" "cljs-kotoba-v1"))
+    (let [report (edn/read-string (str out))]
+      (is (nil? @status))
+      (is (str/ends-with? (:output report) ".cljs"))
+      (is (str/includes? (slurp (:output report)) "(defn main")))))
+
+(deftest compile-wasm-target-is-unaffected-by-the-cljs-output-fix
+  (let [source (temp-kotoba-source! "(defn main [] (let [x 40 y 2] (+ x y)))")
+        output (.getPath (doto (java.io.File/createTempFile "kotoba-cli-wasm-out-" ".wasm")
+                           (.deleteOnExit)))
+        status (atom nil)
+        out (StringWriter.)]
+    (binding [cli/*exit* #(reset! status %)
+              *out* out]
+      (cli/-main "compile" source "--target" "wasm32" "--output" output))
+    (let [report (edn/read-string (str out))
+          bytes (java.nio.file.Files/readAllBytes (.toPath (java.io.File. ^String output)))]
+      (is (nil? @status))
+      (is (:ok report))
+      (is (= [0 97 115 109] (mapv #(bit-and % 0xff) (take 4 bytes)))
+          "still a real WASM binary (magic bytes), the write-bytes! path is untouched"))))
