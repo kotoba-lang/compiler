@@ -91,9 +91,13 @@ function name ahead of any `defn`. `cap-call` dispatches through an
 exported `set-cap-dispatch!` (a fn [cap-id value] -> i64 the host installs
 before calling `main`, this backend's equivalent of WASM's `kotoba:cap`
 host import) -- no dispatcher installed means every cap-call is denied,
-fail-closed. i64 wraparound is a documented, unaddressed gap for a
-hypothetical program that depends on overflow -- see `backend/cljs.clj`'s
-own docstring for the full, honest scope.
+fail-closed. i64 wraparound is not exactly reproduced (would need every
+value as a JS BigInt end to end, not attempted) -- but every `+`/`-`/`*`
+result is checked against JS's own safe-integer bound (2^53-1) and throws
+`:arithmetic-overflow` rather than silently continuing with an imprecise
+value, narrowing the gap from "silently wrong" to "loudly fails," the
+same fail-closed posture as fuel/division/capability. See
+`backend/cljs.clj`'s own docstring for the full, honest scope.
 
 Release-oriented target identities explicitly bind execution format, ISA, OS,
 ABI, and runtime profile. Current explicit names are `wasm32-browser`, `wasm32-wasi`,

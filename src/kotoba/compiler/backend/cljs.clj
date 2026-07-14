@@ -23,19 +23,27 @@
     result composes with `if`'s 0-is-false convention above), not a
     boolean -- every comparison is wrapped `(if (cljs-op ...) 1 0)`.
 
-  Two more real (documented, not silently smoothed over) gaps against the
-  wasm/native backends, an honest MVP scope limit:
+  One more real (documented, not silently smoothed over) gap against the
+  wasm/native backends, an honest scope limit -- now narrowed from
+  \"silently wrong\" to \"loudly fails\":
   - `ir.clj`'s `execute` docstring is explicit: \"Add/subtract/multiply
-    wrap modulo 2^64\" -- true two's-complement i64 wraparound. This
-    backend emits plain cljs `+`/`-`/`*`, which auto-promote to bignum on
-    overflow (never wrap) since JS/cljs numbers don't have a native i64.
-    Every existing safe-kotoba-subset program in this monorepo (keyword
-    hashes are compile-time-folded constants already; application-level
-    arithmetic like the cloud-itonami credit governor's cent amounts) stays
-    well inside JS's 53-bit safe-integer range, so this divergence is
-    unreachable in practice for the currently-known corpus -- but it IS a
-    real semantic gap for a hypothetical program relying on wraparound,
-    and is NOT hidden here.
+    wrap modulo 2^64\" -- true two's-complement i64 wraparound. Exact
+    wraparound parity would need EVERY value (params, literals,
+    intermediate results) represented as a JS BigInt end to end -- a much
+    larger, invasive rewrite of this backend's whole numeric
+    representation, not attempted here (no known safe-kotoba-subset
+    program needs it). Instead, every `+`/`-`/`*` result is checked
+    against JS's own safe-integer bound (`kotoba$check-safe-int`, 2^53-1)
+    and THROWS `:arithmetic-overflow` rather than silently continuing with
+    a value cljs's plain `number` (an IEEE-754 double) can no longer
+    represent exactly -- the same fail-closed posture this backend already
+    takes for fuel/division/capability, applied here too: an unreachable-
+    today divergence stays unreachable by trapping loudly, not by
+    producing a silently wrong result. The safe-integer bound is written
+    as a portable numeric literal (not `js/Number.isSafeInteger`)
+    specifically so this check evaluates identically whether the emitted
+    source runs under real cljs or, as this backend's own committed test
+    suite does, under plain JVM Clojure.
   `cap-call` (capability invocation): the emitted module exports
   `set-cap-dispatch!` (a fn [cap-id value] -> i64, installed via
   `kotoba$cap-dispatch`, a `defonce` atom) as its cljs-side equivalent of
@@ -61,6 +69,7 @@
 (declare lower-expr)
 
 (def ^:private comparison-ops '#{= < > <= >=})
+(def ^:private wraparound-arith-ops '#{+ - *})
 
 (defn- lower-expr [form]
   (cond
@@ -90,9 +99,14 @@
         cap-call (let [[cap-id value] args]
                    (list 'kotoba$cap-call cap-id (lower-expr value)))
 
-        (if (contains? comparison-ops op)
+        (cond
+          (contains? comparison-ops op)
           (list 'if (apply list op (map lower-expr args)) 1 0)
-          (apply list op (map lower-expr args)))))))
+
+          (contains? wraparound-arith-ops op)
+          (list 'kotoba$check-safe-int (apply list op (map lower-expr args)))
+
+          :else (apply list op (map lower-expr args)))))))
 
 (defn- lower-function [{:keys [name params body]}]
   (list 'defn name (vec params) (list 'do '(kotoba$charge!) (lower-expr body))))
@@ -103,6 +117,16 @@
       (let [remaining (swap! kotoba$fuel dec)]
         (when (neg? remaining)
           (throw (ex-info "fuel-exhausted" {:kotoba.cljs/trap :fuel-exhausted})))))
+    ;; 2^53 - 1, JS's own safe-integer bound -- written as a portable
+    ;; numeric literal (not js/Number.isSafeInteger) so this evaluates
+    ;; identically under real cljs or plain JVM Clojure (see this ns's
+    ;; own docstring).
+    (def ^:private kotoba$max-safe-integer 9007199254740991)
+    (defn- kotoba$check-safe-int [n]
+      (if (<= (- kotoba$max-safe-integer) n kotoba$max-safe-integer)
+        n
+        (throw (ex-info "arithmetic-overflow"
+                        {:kotoba.cljs/trap :arithmetic-overflow :kotoba.cljs/value n}))))
     (defn- kotoba$quot [a b]
       (when (zero? b)
         (throw (ex-info "division-by-zero" {:kotoba.cljs/trap :division-by-zero})))
