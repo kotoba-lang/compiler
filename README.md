@@ -179,6 +179,16 @@ or a Wasm runtime. Native output is deliberately a sealed `KEXE` object rather
 than an OS executable: an aiueos loader must verify it, map code W^X, and expose
 only policy-derived capability trampolines.
 
+The aiueos freestanding profiles additionally produce boot artifacts. The
+kernel profile packages its sealed x86-64 code as an import-free ELF64 image.
+The UEFI profile packages a deterministic PE32+ EFI application with `.text`,
+`.data`, and `.reloc` sections and no import directory. Its entry shim satisfies
+the Microsoft x64 stack/shadow-space boundary only for the language's required
+zero-argument `main`, initializes the hidden Kotoba context, and returns the
+integer result as `EFI_STATUS`; internal functions retain the compiler's
+Kotoba SysV/context-r9 ABI. Firmware service bindings are not implied by this
+packaging contract.
+
 The native verifier treats embedded KIR as hostile even when an attacker has
 recomputed every unkeyed hash. It independently validates the KIR AST, lexical
 scope, call arities, transitive capability effects, ABI limits, node/depth

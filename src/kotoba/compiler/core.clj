@@ -6,6 +6,7 @@
             [kotoba.compiler.backend.x86-64 :as x86-64]
             [kotoba.compiler.backend.aarch64 :as aarch64]
             [kotoba.compiler.packaging.elf64 :as elf64]
+            [kotoba.compiler.packaging.pe32plus :as pe32plus]
             [kotoba.compiler.artifact :as artifact]
             [kotoba.compiler.target :as target-profile]
             [kotoba.compiler.verifier :as verifier]))
@@ -61,5 +62,8 @@
         (verifier/verify-artifact! artifact)
         (cond-> {:format :kexe/v1 :target target :hir hir :kir kir
                  :admission admission :artifact artifact}
+          (= target :x86_64-aiueos-uefi-v1)
+          (assoc :binary (pe32plus/package-efi artifact))
+
           (= target :x86_64-aiueos-kernel-v1)
           (assoc :binary (elf64/package-kernel artifact))))))))
