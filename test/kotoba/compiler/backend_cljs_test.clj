@@ -121,14 +121,25 @@
                           (call ns 'noop))
         "the 257th call, ever, on this loaded module traps -- not reset per top-level call")))
 
-;; ───────────────────────── cap-call rejected at emit time ─────────────────────────
+;; ───────────────────────── cap-call ─────────────────────────
 
-(deftest cap-call-is-rejected-at-emit-time-not-silently-stubbed
-  ;; a capability POLICY that admits this cap-call, so the rejection below
-  ;; is genuinely this backend's own -- not the earlier, stricter
-  ;; capability-policy admission gate short-circuiting first.
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"cap-call is not supported by the cljs backend"
-                        (compile-cljs "(defn main [] (cap-call 1 2))" {:allow #{[:cap/call 1]}}))))
+(deftest cap-call-with-no-dispatcher-installed-is-denied-fail-closed
+  ;; a capability POLICY that admits this cap-call at the frontend/admission
+  ;; level -- so a throw here is genuinely this backend's OWN cljs-side
+  ;; capability boundary (kotoba$cap-dispatch defaulting to nil), not the
+  ;; earlier, stricter static admission gate short-circuiting first.
+  (let [compiled (compile-cljs "(defn main [] (cap-call 1 2))" {:allow #{[:cap/call 1]}})
+        ns (eval-in-fresh-ns (:source compiled))]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"capability-denied"
+                          (call ns 'main))
+        "no dispatcher installed -- every cap-call denied, matching kotoba-lang/kotoba's own fail-closed has-capability-fn")))
+
+(deftest cap-call-dispatches-to-the-installed-host-function
+  (let [compiled (compile-cljs "(defn main [] (cap-call 1 42))" {:allow #{[:cap/call 1]}})
+        ns (eval-in-fresh-ns (:source compiled))]
+    (call ns 'set-cap-dispatch! (fn [cap-id value] (+ (* cap-id 100) value)))
+    (is (= 142 (call ns 'main))
+        "cap-id 1 and value 42 both reach the installed host function unchanged")))
 
 ;; ───────────────────────── cross-backend consistency ─────────────────────────
 
