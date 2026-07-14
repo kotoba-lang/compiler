@@ -232,13 +232,23 @@
     (let [input (kotoba-source! (second args))
           target (parse-target (or (option args "--target") "wasm32"))
           output (or (option args "--output")
-                     (str input (if (= :wasm (:execution (target-profile/profile target)))
-                                  ".wasm" ".kexe")))
+                     (str input (case (:execution (target-profile/profile target))
+                                  :wasm ".wasm"
+                                  :cljs ".cljs"
+                                  ".kexe")))
           policy-path (option args "--policy")
           policy (if policy-path (bounded-edn/read-file policy-path) {})
           result (compiler/compile-source (bounded-edn/read-text-file input) target policy)]
-      (if (= :wasm/v1 (:format result))
-        (atomic-output/write-bytes! output (:bytes result))
+      (case (:format result)
+        :wasm/v1 (atomic-output/write-bytes! output (:bytes result))
+        ;; ADR-2607151500: the cljs backend emits SOURCE TEXT, not an
+        ;; artifact map -- write-edn! would pr-str this into a quoted/
+        ;; escaped EDN string literal instead of directly readable cljs
+        ;; source (a real, previously-silent bug: `compile --target
+        ;; cljs-kotoba-v1` reported :ok true while writing the literal
+        ;; text "nil" to --output, since :artifact is absent from a
+        ;; :cljs/v1 result).
+        :cljs/v1 (atomic-output/write-text! output (:source result))
         (atomic-output/write-edn! output (:artifact result)))
       (println (pr-str {:ok true :target target :output output})))
     "package-ios"
