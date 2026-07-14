@@ -87,10 +87,13 @@ function order does not guarantee a synthesized `loop`/`recur` helper is
 defined before the `defn` that calls it, and plain `defn` forms (in cljs
 *or* JVM Clojure) do not forward-hoist across a file the way WASM's
 function-index table does -- fixed by emitting a `(declare ...)` of every
-function name ahead of any `defn`. `cap-call` is rejected at emit time (no
-cljs-side host-import wiring yet); i64 wraparound is a documented,
-unaddressed gap for a hypothetical program that depends on overflow --
-see `backend/cljs.clj`'s own docstring for the full, honest scope.
+function name ahead of any `defn`. `cap-call` dispatches through an
+exported `set-cap-dispatch!` (a fn [cap-id value] -> i64 the host installs
+before calling `main`, this backend's equivalent of WASM's `kotoba:cap`
+host import) -- no dispatcher installed means every cap-call is denied,
+fail-closed. i64 wraparound is a documented, unaddressed gap for a
+hypothetical program that depends on overflow -- see `backend/cljs.clj`'s
+own docstring for the full, honest scope.
 
 Release-oriented target identities explicitly bind execution format, ISA, OS,
 ABI, and runtime profile. Current explicit names are `wasm32-browser`, `wasm32-wasi`,

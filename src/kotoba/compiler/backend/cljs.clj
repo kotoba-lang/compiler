@@ -36,11 +36,16 @@
     unreachable in practice for the currently-known corpus -- but it IS a
     real semantic gap for a hypothetical program relying on wraparound,
     and is NOT hidden here.
-  - `cap-call` (capability invocation) has no cljs-side host-import
-    equivalent wired up yet -- this backend REJECTS any KIR function body
-    containing `cap-call` at emit time with a clear compile error, rather
-    than silently emitting a stub or an unbound host expectation the
-    caller might miss.
+  `cap-call` (capability invocation): the emitted module exports
+  `set-cap-dispatch!` (a fn [cap-id value] -> i64, installed via
+  `kotoba$cap-dispatch`, a `defonce` atom) as its cljs-side equivalent of
+  WASM's `kotoba:cap.call` host import -- the host calls
+  `set-cap-dispatch!` before calling `main`, exactly the same \"host wires
+  the boundary, host calls main\" shape as the wasm/native backends'
+  memory-writing convention. No dispatcher installed means EVERY cap-call
+  throws `:capability-denied` -- fail-closed, matching
+  `kotoba-lang/kotoba`'s own `has-capability-fn` (\"no POLICY grants
+  NOTHING\") rather than defaulting to permissive.
 
   Fuel: WASM's `charge!` is a MODULE-GLOBAL mutable counter that starts at
   256 and is never replenished for the life of one Instance (ir.clj: one
@@ -54,12 +59,6 @@
   (:require [clojure.string :as str]))
 
 (declare lower-expr)
-
-(defn- reject-cap-call! [form]
-  (when (and (seq? form) (= 'cap-call (first form)))
-    (throw (ex-info "cap-call is not supported by the cljs backend (ADR-2607151500 v1 scope)"
-                    {:phase :cljs-backend :form form})))
-  (when (coll? form) (doseq [item form] (reject-cap-call! item))))
 
 (def ^:private comparison-ops '#{= < > <= >=})
 
@@ -84,6 +83,13 @@
 
         quot (list 'kotoba$quot (lower-expr (first args)) (lower-expr (second args)))
 
+        ;; cap-id is always a literal integer in [0,255] here -- validated
+        ;; by frontend.clj's validate-expr, never itself an expression (see
+        ;; ir.clj's eval-expr, which never runs `cap-id` through eval-expr
+        ;; either) -- so it passes through unchanged, only `value` recurses.
+        cap-call (let [[cap-id value] args]
+                   (list 'kotoba$cap-call cap-id (lower-expr value)))
+
         (if (contains? comparison-ops op)
           (list 'if (apply list op (map lower-expr args)) 1 0)
           (apply list op (map lower-expr args)))))))
@@ -100,7 +106,21 @@
     (defn- kotoba$quot [a b]
       (when (zero? b)
         (throw (ex-info "division-by-zero" {:kotoba.cljs/trap :division-by-zero})))
-      (quot a b))])
+      (quot a b))
+    (defonce kotoba$cap-dispatch (atom nil))
+    (defn set-cap-dispatch!
+      "Installs F (a fn [cap-id value] -> i64) as this module's capability
+      host, this backend's equivalent of WASM's kotoba:cap.call host
+      import. Call before `main` if the module uses cap-call. No
+      dispatcher installed means every cap-call is denied (fail-closed)."
+      [f]
+      (reset! kotoba$cap-dispatch f))
+    (defn- kotoba$cap-call [cap-id value]
+      (if-let [f @kotoba$cap-dispatch]
+        (long (f cap-id value))
+        (throw (ex-info "capability-denied"
+                        {:kotoba.cljs/trap :capability-denied
+                         :kotoba.cljs/capability cap-id}))))])
 
 (def default-ns-name
   "KIR carries no `ns` name (frontend/analyze validates and discards the
@@ -132,7 +152,6 @@
   shape. Confirmed live via real `nbb` execution before this fix: `Unable
   to resolve symbol: __kotoba_loop_1`, identically to plain JVM `eval`."
   [kir]
-  (doseq [{:keys [body]} (:functions kir)] (reject-cap-call! body))
   (let [fn-names (mapv :name (:functions kir))
         fn-forms (mapv lower-function (:functions kir))
         forms (concat [(list 'ns default-ns-name)] prelude-forms
