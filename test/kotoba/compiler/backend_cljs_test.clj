@@ -121,6 +121,40 @@
                           (call ns 'noop))
         "the 257th call, ever, on this loaded module traps -- not reset per top-level call")))
 
+;; ───────────────────────── arithmetic overflow ─────────────────────────
+
+(deftest arithmetic-within-safe-integer-range-is-unaffected
+  (let [compiled (compile-cljs "(defn main [] (+ 9007199254740990 1))") ; == 2^53-1, the boundary itself
+        ns (eval-in-fresh-ns (:source compiled))]
+    (is (= 9007199254740991 (:oracle-value (:kir compiled))))
+    (is (= 9007199254740991 (call ns 'main)))))
+
+(deftest arithmetic-past-safe-integer-range-throws-instead-of-silently-diverging
+  ;; True i64 wraparound parity would need every value represented as a JS
+  ;; BigInt end to end -- not attempted (see this backend's own docstring).
+  ;; Instead, exceeding JS's safe-integer bound (2^53-1, past which a plain
+  ;; cljs `number` can no longer represent every integer exactly) throws
+  ;; :arithmetic-overflow rather than silently continuing with an
+  ;; imprecise value -- the same fail-closed posture already used for
+  ;; fuel/division/capability, narrowing the wraparound gap from "silently
+  ;; wrong" to "loudly fails."
+  (let [compiled (compile-cljs "(defn main [] (* 100000000 100000000))") ; 10^16 > 2^53-1
+        ns (eval-in-fresh-ns (:source compiled))]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"arithmetic-overflow"
+                          (call ns 'main)))))
+
+(deftest arithmetic-overflow-check-applies-to-plus-minus-and-times
+  (doseq [[source expect-throw?]
+          [["(defn main [] (+ 100000000 100000000))" false]
+           ["(defn main [] (* 100000000 100000000))" true]
+           ["(defn main [] (- 0 100000000000000000))" true]]]
+    (let [compiled (compile-cljs source)
+          ns (eval-in-fresh-ns (:source compiled))]
+      (if expect-throw?
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"arithmetic-overflow" (call ns 'main))
+            source)
+        (is (= (:oracle-value (:kir compiled)) (call ns 'main)) source)))))
+
 ;; ───────────────────────── cap-call ─────────────────────────
 
 (deftest cap-call-with-no-dispatcher-installed-is-denied-fail-closed
