@@ -13,13 +13,26 @@
    :aarch64-macos-kotoba-v1 {:format :kotoba.target-profile/v1 :execution :native :isa :aarch64 :os :macos :abi :aapcs64 :runtime :kotoba-macos-supervisor-v1}
    :aarch64-windows-kotoba-v1 {:format :kotoba.target-profile/v1 :execution :native :isa :aarch64 :os :windows :abi :kotoba-aapcs64-v1 :runtime :kotoba-windows-supervisor-v1}
    :aarch64-android-kotoba-v1 {:format :kotoba.target-profile/v1 :execution :native :isa :aarch64 :os :android :abi :aapcs64 :runtime :kotoba-android-isolated-host-v1}
-   :aarch64-ios-kotoba-v1 {:format :kotoba.target-profile/v1 :execution :native :isa :aarch64 :os :ios :abi :aapcs64 :runtime :kotoba-ios-static-host-v1}})
+   :aarch64-ios-kotoba-v1 {:format :kotoba.target-profile/v1 :execution :native :isa :aarch64 :os :ios :abi :aapcs64 :runtime :kotoba-ios-static-host-v1}
+   ;; ADR-2607151500: a genuinely new execution target (KIR -> cljs SOURCE
+   ;; TEXT, not machine code), distinct from every profile above -- a host
+   ;; requires the emitted namespace directly (nbb, a browser bundle,
+   ;; shadow-cljs) and calls `main` itself, same "host writes inputs, host
+   ;; calls main" shape as wasm32/native, but with zero WASM-instantiation
+   ;; boundary. :cljs-kotoba-v1 is the generic/default profile;
+   ;; :cljs-node-kotoba-v1/:cljs-browser-kotoba-v1 share the identical
+   ;; backend/:isa and differ only in :os/:runtime, mirroring how
+   ;; wasm32-browser/wasm32-wasi already relate to wasm32-kotoba-v1.
+   :cljs-kotoba-v1 {:format :kotoba.target-profile/v1 :execution :cljs :isa :cljs :os :unspecified :abi :cljs-source-v1 :runtime :kotoba-cljs-host-v1}
+   :cljs-node-kotoba-v1 {:format :kotoba.target-profile/v1 :execution :cljs :isa :cljs :os :node :abi :cljs-source-v1 :runtime :kotoba-cljs-node-host-v1}
+   :cljs-browser-kotoba-v1 {:format :kotoba.target-profile/v1 :execution :cljs :isa :cljs :os :browser :abi :cljs-source-v1 :runtime :kotoba-cljs-browser-host-v1}})
 
-(def compatibility-targets #{:wasm32-kotoba-v1 :x86_64-kotoba-v1 :aarch64-kotoba-v1})
+(def compatibility-targets #{:wasm32-kotoba-v1 :x86_64-kotoba-v1 :aarch64-kotoba-v1 :cljs-kotoba-v1})
 (defn profile [target] (get profiles target))
 (defn backend [target]
   (case (:isa (profile target))
     :wasm32 :wasm32-kotoba-v1
     :x86_64 :x86_64-kotoba-v1
     :aarch64 :aarch64-kotoba-v1
+    :cljs :cljs-kotoba-v1
     nil))

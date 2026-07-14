@@ -3,6 +3,7 @@
             [kotoba.compiler.ir :as ir]
             [kotoba.compiler.admission :as admission]
             [kotoba.compiler.backend.wasm :as wasm]
+            [kotoba.compiler.backend.cljs :as cljs]
             [kotoba.compiler.backend.x86-64 :as x86-64]
             [kotoba.compiler.backend.aarch64 :as aarch64]
             [kotoba.compiler.artifact :as artifact]
@@ -29,10 +30,22 @@
         admission (admission/check hir policy)
         kir (ir/lower hir)
         value (:oracle-value kir)]
-    (if (= backend :wasm32-kotoba-v1)
+    (cond
+      (= backend :wasm32-kotoba-v1)
       {:format :wasm/v1 :target target :target-profile profile
        :hir hir :kir kir :admission admission
        :limits {:fuel 256 :replenishable? false} :bytes (wasm/emit kir target)}
+
+      ;; ADR-2607151500: cljs backend emits SOURCE TEXT, not bytes -- no
+      ;; kexe sealing (that artifact shape is native-code-specific: raw
+      ;; :code bytes + a fuel/context ABI for a machine-code caller). A
+      ;; cljs host just requires the returned source's namespace directly.
+      (= backend :cljs-kotoba-v1)
+      {:format :cljs/v1 :target target :target-profile profile
+       :hir hir :kir kir :admission admission
+       :limits {:fuel 256 :replenishable? false} :source (cljs/emit kir)}
+
+      :else
       (let [emitted ((case backend
                        :x86_64-kotoba-v1 x86-64/emit-program
                        :aarch64-kotoba-v1 aarch64/emit-program) kir)
