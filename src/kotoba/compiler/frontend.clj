@@ -198,6 +198,38 @@
     (coll? form) (some uses-map-get? form)
     :else false))
 
+(def ^:private map-without-helper-name '__kotoba_map_without)
+
+(def ^:private map-without-helper
+  "Compiler-synthesized recursive filter over a desugar-map cons-list,
+  removing every entry whose key equals `k` while preserving the relative
+  order of the rest -- `assoc`'s desugar (below) calls this on the OLD map
+  before prepending the new pair, so re-`assoc`-ing an existing key no
+  longer leaves the old entry as dead weight (a real bug found and fixed
+  in the same ADR-2607150000 line of work that first landed assoc: the
+  original desugar only ever prepended, `get`'s first-match-wins scan made
+  the RESULT correct but the map grew without bound under repeated
+  re-assoc of the same key). Injected only when `assoc` is actually used
+  (`uses-map-without?`), same pattern as `map-get-helper`. Recurses through
+  the WHOLE tail even after a match (not just the first hit) so any
+  pre-existing duplicate from before this fix, or a hand-built map literal
+  with a repeated key, is fully cleaned up, not just shadowed once more."
+  {:name map-without-helper-name
+   :params '[m k]
+   :result :i64
+   :effects #{}
+   :body '(if (= m 0)
+            0
+            (if (= (pair-first (pair-first m)) k)
+              (__kotoba_map_without (pair-second m) k)
+              (pair (pair-first m) (__kotoba_map_without (pair-second m) k))))})
+
+(defn- uses-map-without? [form]
+  (cond
+    (seq? form) (or (= map-without-helper-name (first form)) (some uses-map-without? (rest form)))
+    (coll? form) (some uses-map-without? form)
+    :else false))
+
 (defn- nth-pair-second
   "N nested `pair-second`s around EXPR (0 => expr itself) -- the pair-chain
   position N steps past the head, used by both vector destructuring
@@ -418,7 +450,22 @@
                     (reject! "assoc requires a map followed by one or more key/value pairs" form))
                   (let [[m & kvs] args]
                     (reduce (fn [acc-map [k v]]
-                              (list 'pair (list 'pair (desugar-expr k) (desugar-expr v)) acc-map))
+                              ;; ADR-2607150000: remove any existing entry
+                              ;; for this key via __kotoba_map_without
+                              ;; BEFORE prepending the new pair, so re-
+                              ;; assoc-ing an existing key doesn't grow the
+                              ;; map unboundedly. k/v are let-bound once
+                              ;; (gensym'd LET-LOCAL temp names -- safe,
+                              ;; erased to WASM local indices, same
+                              ;; reasoning as and/or's temps) so the key
+                              ;; expression is evaluated exactly once
+                              ;; despite being referenced twice (removal
+                              ;; scan + the new pair itself).
+                              (let [k-sym (gensym "assoc-k__")
+                                    v-sym (gensym "assoc-v__")]
+                                (list 'let [k-sym (desugar-expr k) v-sym (desugar-expr v)]
+                                      (list 'pair (list 'pair k-sym v-sym)
+                                            (list map-without-helper-name acc-map k-sym)))))
                             (desugar-expr m)
                             (partition 2 kvs))))
         (apply list op (map desugar-expr args))))))
@@ -626,14 +673,16 @@
                                      :body desugared}]
                                    @loop-helpers)))))
                      defs)))
-        ;; ADR-2607150000: inject the synthesized `get` helper only when a
-        ;; desugared body actually calls it -- keeps modules that never use
-        ;; `get` byte-identical to before this change. A user `defn` that
-        ;; collides with the helper's reserved name is caught for free by
-        ;; the existing :duplicate-function-name check below (signatures'
-        ;; map semantics silently drop one entry, count mismatch trips it).
+        ;; ADR-2607150000: inject the synthesized `get`/`assoc` helpers only
+        ;; when a desugared body actually calls them -- keeps modules that
+        ;; never use `get`/`assoc` byte-identical to before this change. A
+        ;; user `defn` that collides with a helper's reserved name is
+        ;; caught for free by the existing :duplicate-function-name check
+        ;; below (signatures' map semantics silently drop one entry, count
+        ;; mismatch trips it).
         parsed (cond-> parsed
-                 (some #(uses-map-get? (:body %)) parsed) (conj map-get-helper))
+                 (some #(uses-map-get? (:body %)) parsed) (conj map-get-helper)
+                 (some #(uses-map-without? (:body %)) parsed) (conj map-without-helper))
         signatures (into {} (map (juxt :name :params) parsed))]
     (when (seq other) (reject! "only ns and defn are allowed at top level" (first other)))
     (when (empty? parsed) (reject! "at least one defn is required" forms))
