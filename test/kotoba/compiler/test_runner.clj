@@ -9,6 +9,7 @@
             [kotoba.compiler.bounded-edn-test]
             [kotoba.compiler.frontend-fuzz-test]
             [kotoba.compiler.frontend-limits-test]
+            [kotoba.compiler.frontend-extensions-test]
             [kotoba.compiler.ios-aot-test]
             [kotoba.compiler.native-executor-test]
             [kotoba.compiler.admission-test]
@@ -29,6 +30,7 @@
                                           'kotoba.compiler.bounded-edn-test
                                           'kotoba.compiler.frontend-fuzz-test
                                           'kotoba.compiler.frontend-limits-test
+                                          'kotoba.compiler.frontend-extensions-test
                                           'kotoba.compiler.ios-aot-test
                                           'kotoba.compiler.admission-test
                                           'kotoba.compiler.signing-test

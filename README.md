@@ -40,11 +40,18 @@ compile-time admission gates. The three gates map onto this repo's
 `if`/`when`/`let`/`do`, full arithmetic/comparison, `and`/`or`/`not`, strings,
 recursion — no capability/effect gate baked into the language itself) and
 this repo's admission-gated KIR-level grammar (`if`/`let`/`cap-call`,
-`quot`-only arithmetic, heap-pair-encoded lists, no `when`/`do`/`and`/`or`
-sugar, but with the effect/capability gates above) are two different,
-independently-evolved surfaces — not yet reconciled into one shared grammar
-spec. See `com-junkawasaki/root` ADR-2607141600 for the fuller cross-repo
-analysis and open follow-up.
+`quot`-only arithmetic, heap-pair-encoded lists, plus `and`/`or`/`when`,
+keyword literals, and `get`/`assoc` map literals as of ADR-2607150000 —
+ported from/inspired by `kotoba-lang/kotoba`'s already-proven implementations,
+all desugared to the existing `pair`/`pair-first`/`pair-second`/`if`/`let`
+primitives with no backend/codegen change, since those primitives were
+already host-imported capabilities rather than guest-managed WASM linear
+memory even before this change — but still no `do` sugar, since this
+profile's `let`/`defn` bodies are still exactly one result expression) are
+two different, independently-evolved surfaces — narrower than before, but
+still not fully reconciled into one shared grammar spec. See
+`com-junkawasaki/root` ADR-2607141600 / ADR-2607150000 for the fuller
+cross-repo analysis.
 
 GPU compilation now begins with a separate typed accelerator KIR rather than
 allowing arbitrary shaders into scalar CPU KIR. `kotoba.compiler.accelerator`

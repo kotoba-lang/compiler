@@ -13,9 +13,21 @@
 (def heap-operations '{pair 2 pair-first 1 pair-second 1})
 (def list-operations '#{list cons first second rest empty?})
 (def predicate-operations '#{not zero? pos? neg?})
+;; ADR-2607150000: and/or/when mirror kotoba-lang/kotoba's already-proven
+;; desugar-and/desugar-or (runtime.clj) -- ported here rather than reinvented,
+;; closing the divergence ADR-2607141600/2607150000 identified between the
+;; two independently-evolved grammars. get/assoc are new: map literals and
+;; keyword literals desugar entirely to the EXISTING heap-pair/list
+;; primitives (see desugar-map/keyword->i64 below) -- no backend/codegen
+;; change anywhere, since `pair`/`pair-first`/`pair-second` were already
+;; host-imported capabilities before this change (backend/wasm.clj), not
+;; WASM-linear-memory-managed by the guest itself.
+(def logical-operations '#{and or when})
+(def map-operations '#{get assoc})
 (def reserved-function-names
   (set/union forbidden-heads arithmetic comparisons (set (keys heap-operations))
-             list-operations predicate-operations '#{let if cap-call ns defn}))
+             list-operations predicate-operations logical-operations map-operations
+             '#{let if cap-call ns defn}))
 (def max-functions 1024)
 (def max-expression-nodes 50000)
 (def max-lowered-nodes 100000)
@@ -74,9 +86,97 @@
   (reduce (fn [tail item] (list 'pair (desugar-expr item) tail))
           0 (reverse args)))
 
+(defn- desugar-and
+  "`(and a b c ...)` -> nested `let`/`if`, ported from kotoba-lang/kotoba's
+  runtime.clj `desugar-and` (verified live there, ADR-2607150000): binds
+  each argument's value once (never re-evaluated) and branches on it.
+  `(and)` is vacuously truthy (1); `(and a)` is just a."
+  [args]
+  (cond
+    (empty? args) 1
+    (empty? (rest args)) (desugar-expr (first args))
+    :else (let [tmp (gensym "and-tmp__")]
+            (list 'let [tmp (desugar-expr (first args))]
+                  (list 'if tmp (desugar-and (rest args)) tmp)))))
+
+(defn- desugar-or
+  "Mirror of desugar-and for `(or a b c ...)`. `(or)` is vacuously falsy
+  (0); `(or a)` is just a."
+  [args]
+  (cond
+    (empty? args) 0
+    (empty? (rest args)) (desugar-expr (first args))
+    :else (let [tmp (gensym "or-tmp__")]
+            (list 'let [tmp (desugar-expr (first args))]
+                  (list 'if tmp tmp (desugar-or (rest args)))))))
+
+(defn- fnv1a-i64
+  "Deterministic 64-bit FNV-1a hash of S's UTF-8 bytes, used to intern
+  keyword literals as distinct i64 constants (ADR-2607150000). Not
+  Clojure's own `hash` -- FNV-1a is a fixed, dependency-free algorithm
+  whose output is reproducible forever, matching this compiler's byte-
+  for-byte reproducibility gates (coverage_evidence.clj/release.clj).
+  Collision probability for the realistically small keyword vocabulary of
+  one .kotoba module is astronomically low but not proven zero -- a known,
+  documented limitation, not eliminated."
+  [^String s]
+  (let [bs (.getBytes s "UTF-8")
+        offset-basis -3750763034362895579  ; 0xcbf29ce484222325 as signed i64
+        prime 1099511628211]                ; 0x100000001b3
+    (reduce (fn [h b] (unchecked-multiply (bit-xor h (bit-and (long b) 0xff)) prime))
+            offset-basis bs)))
+
+(defn- keyword->i64 [kw] (fnv1a-i64 (str kw)))
+
+(defn- desugar-map
+  "`{:k1 v1 :k2 v2 ...}` -> a cons-list of `(pair key value)` pairs, reusing
+  the EXISTING heap-pair/list primitives (`pair`/`pair-first`/`pair-second`)
+  entirely -- no backend/codegen change (ADR-2607150000). Entries are
+  sorted by the SOURCE TEXT of their key (`pr-str`, not the interned i64,
+  which isn't computable for non-literal keys) for deterministic codegen
+  regardless of Clojure's own map-literal iteration order (unspecified for
+  >8 entries) -- required by this compiler's reproducible-build gates."
+  [form]
+  (when (> (count form) max-list-items)
+    (reject! "map entry count exceeds admission limit" form))
+  (let [entries (sort-by (fn [[k _]] (pr-str k)) (seq form))
+        pairs (map (fn [[k v]] (list 'pair (desugar-expr k) (desugar-expr v))) entries)]
+    (reduce (fn [tail item] (list 'pair item tail)) 0 (reverse pairs))))
+
+(def ^:private map-get-helper-name '__kotoba_map_get)
+
+(def ^:private map-get-helper
+  "Compiler-synthesized recursive linear scan over a desugar-map cons-list,
+  injected into a module's function set only when `get` is actually used
+  (analyze's uses-map-get? scan) -- ADR-2607150000. Written directly in
+  already-primitive form (if/=/pair-first/pair-second/self-call), not run
+  through desugar-expr. Each recursive step costs 1 unit of this
+  compiler's existing fixed 256-instruction-call fuel budget (ir.clj/
+  backend/wasm.clj/core.clj's `default-fuel`/global fuel counter) -- a
+  map lookup on a long map, or a miss, can exhaust it; not a new limit,
+  the existing one now also bounds map-walk depth."
+  {:name map-get-helper-name
+   :params '[m k default]
+   :result :i64
+   :effects #{}
+   :body '(if (= m 0)
+            default
+            (if (= (pair-first (pair-first m)) k)
+              (pair-second (pair-first m))
+              (__kotoba_map_get (pair-second m) k default)))})
+
+(defn- uses-map-get? [form]
+  (cond
+    (seq? form) (or (= map-get-helper-name (first form)) (some uses-map-get? (rest form)))
+    (coll? form) (some uses-map-get? form)
+    :else false))
+
 (defn- desugar-expr [form]
-  (if-not (seq? form)
-    form
+  (cond
+    (keyword? form) (keyword->i64 form)
+    (map? form) (desugar-map form)
+    (not (seq? form)) form
+    :else
     (let [[op & args] form]
       (case op
         list (desugar-list args form)
@@ -98,6 +198,23 @@
                  (list '> (desugar-expr (first args)) 0))
         neg? (do (when-not (= 1 (count args)) (reject! "neg? requires one operand" form))
                  (list '< (desugar-expr (first args)) 0))
+        and (desugar-and args)
+        or (desugar-or args)
+        when (do (when-not (= 2 (count args))
+                   (reject! "when requires a test and exactly one result expression (this profile has no `do`, unlike kotoba-lang/kotoba's)" form))
+                 (list 'if (desugar-expr (first args)) (desugar-expr (second args)) 0))
+        get (do (when-not (<= 2 (count args) 3)
+                  (reject! "get requires a map, a key, and an optional default" form))
+                (let [[m k default] args]
+                  (list map-get-helper-name (desugar-expr m) (desugar-expr k)
+                        (if (some? default) (desugar-expr default) 0))))
+        assoc (do (when-not (and (>= (count args) 3) (odd? (count args)))
+                    (reject! "assoc requires a map followed by one or more key/value pairs" form))
+                  (let [[m & kvs] args]
+                    (reduce (fn [acc-map [k v]]
+                              (list 'pair (list 'pair (desugar-expr k) (desugar-expr v)) acc-map))
+                            (desugar-expr m)
+                            (partition 2 kvs))))
         (apply list op (map desugar-expr args))))))
 
 (defn- valid-name? [value]
@@ -261,6 +378,14 @@
                          {:name name :params params :result :i64 :effects #{}
                           :body (desugar-expr (first body))}))
                      defs)
+        ;; ADR-2607150000: inject the synthesized `get` helper only when a
+        ;; desugared body actually calls it -- keeps modules that never use
+        ;; `get` byte-identical to before this change. A user `defn` that
+        ;; collides with the helper's reserved name is caught for free by
+        ;; the existing :duplicate-function-name check below (signatures'
+        ;; map semantics silently drop one entry, count mismatch trips it).
+        parsed (cond-> parsed
+                 (some #(uses-map-get? (:body %)) parsed) (conj map-get-helper))
         signatures (into {} (map (juxt :name :params) parsed))]
     (when (seq other) (reject! "only ns and defn are allowed at top level" (first other)))
     (when (empty? parsed) (reject! "at least one defn is required" forms))
