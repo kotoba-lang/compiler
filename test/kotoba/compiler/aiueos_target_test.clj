@@ -165,6 +165,16 @@
       (is (= expected (:export object)))
       (is (empty? (:imports object))))))
 
+(deftest kernel-target-exports-storage-read-validators
+  (doseq [[entry params expected]
+          [['aiueos-mutable-object-valid '[object object-length sequence transaction transaction-length]
+            "kotoba_aiueos_mutable_object_valid"]
+           ['aiueos-superblock-valid '[base length] "kotoba_aiueos_superblock_valid"]]]
+    (let [source (str "(defn " entry " " params " 1) (defn main [] 0)")
+          {:keys [object]} (compiler/compile-source source :x86_64-aiueos-kernel-v1)]
+      (is (= expected (:export object)))
+      (is (empty? (:imports object))))))
+
 
 (deftest firmware-target-emits-a-real-import-free-pe32+-efi-image
   (let [{:keys [binary]} (compiler/compile-source "(defn main [] 0)"
