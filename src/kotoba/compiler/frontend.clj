@@ -11,7 +11,7 @@
 (def arithmetic '#{+ - * quot bit-xor bit-and})
 (def comparisons '#{= < > <= >=})
 (def heap-operations '{pair 2 pair-first 1 pair-second 1})
-(def kernel-memory-operations '{kernel-load-u8 3})
+(def kernel-memory-operations '{kernel-load-u8 3 kernel-store-u8 4})
 (def list-operations '#{list cons first second rest empty?})
 (def predicate-operations '#{not zero? pos? neg?})
 ;; ADR-2607150000: and/or/when mirror kotoba-lang/kotoba's already-proven

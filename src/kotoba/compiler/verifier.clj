@@ -128,9 +128,9 @@
             (reject! "runtime KIR heap operation arity rejected" {:operation op}))
           (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
 
-        (= op 'kernel-load-u8)
+        (contains? '#{kernel-load-u8 kernel-store-u8} op)
         (do
-          (when-not (= 3 (count args))
+          (when-not (= ({'kernel-load-u8 3 'kernel-store-u8 4} op) (count args))
             (reject! "runtime KIR kernel memory operation arity rejected" {:operation op}))
           (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
 
@@ -213,7 +213,7 @@
         expected-profile (target-profile/profile target)
         {expected-lowering :lowering emit :emit} (get target-contracts backend)]
     (when (and (not= target :x86_64-aiueos-kernel-v1)
-               (some #(and (seq? %) (= 'kernel-load-u8 (first %)))
+               (some #(and (seq? %) (contains? '#{kernel-load-u8 kernel-store-u8} (first %)))
                      (tree-seq coll? seq (:functions program))))
       (reject! "bounded kernel memory operation requires the aiueos kernel target"
                {:target target}))

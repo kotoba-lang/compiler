@@ -175,6 +175,19 @@
       (is (= expected (:export object)))
       (is (empty? (:imports object))))))
 
+(deftest kernel-target-lowers-bounded-byte-store
+  (let [source "(defn aiueos-journal-record-build [base length value] (kernel-store-u8 base length 0 value)) (defn main [] 0)"
+        {:keys [object]} (compiler/compile-source source :x86_64-aiueos-kernel-v1)]
+    (is (= "kotoba_aiueos_journal_record_build" (:export object)))
+    (is (empty? (:imports object)))
+    (is (some #(= [0x88 0x04 0x3a] %) (partition 3 1 (:bytes object))))
+    (is (some #(= [0x0f 0x0b] %) (partition 2 1 (:bytes object))))))
+
+(deftest bounded-byte-store-requires-four-operands
+  (is (thrown-with-msg?
+       clojure.lang.ExceptionInfo #"kernel memory operation arity mismatch"
+       (compiler/check-source "(defn main [] (kernel-store-u8 1 2 3))"))))
+
 
 (deftest firmware-target-emits-a-real-import-free-pe32+-efi-image
   (let [{:keys [binary]} (compiler/compile-source "(defn main [] 0)"

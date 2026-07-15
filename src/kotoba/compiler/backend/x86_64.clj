@@ -105,6 +105,25 @@
          0x0f 0xb6 0x04 0x02                    ; movzx eax,byte [rdx+rax]
          0xeb 0x02 0x0f 0x0b])))                ; skip UD2 / trap
 
+(defn- emit-kernel-store-u8 [[base length index value] env {:keys [temp-depth] :as ctx}]
+  ;; Evaluate once and perform the same null/length/index checks as load-u8.
+  ;; AL is stored only after every check succeeds; RAX remains the expression
+  ;; result. Invalid writes trap before mutating memory.
+  (vec (concat
+        (emit-expr base env ctx) [0x50]
+        (emit-expr length env (update ctx :temp-depth inc)) [0x50]
+        (emit-expr index env (update ctx :temp-depth + 2)) [0x50]
+        (emit-expr value env (update ctx :temp-depth + 3))
+        [0x5f 0x59 0x5a                         ; rdi=index, rcx=length, rdx=base
+         0x48 0x81 0xf9 0x00 0x02 0x00 0x00    ; cmp rcx,512
+         0x0f 0x87 0x17 0x00 0x00 0x00         ; ja trap
+         0x48 0x85 0xd2                         ; test rdx,rdx
+         0x0f 0x84 0x0e 0x00 0x00 0x00         ; jz trap
+         0x48 0x39 0xcf                         ; cmp rdi,rcx
+         0x0f 0x83 0x05 0x00 0x00 0x00         ; jae trap
+         0x88 0x04 0x3a                         ; mov byte [rdx+rdi],al
+         0xeb 0x02 0x0f 0x0b])))                ; skip UD2 / trap
+
 (defn emit-expr [form env {:keys [param-count pad? temp-depth] :as ctx}]
   (cond
     (integer? form) (into [0x48 0xb8] (le64 form))
@@ -129,6 +148,9 @@
 
         (= op 'kernel-load-u8)
         (emit-kernel-load-u8 args env ctx)
+
+        (= op 'kernel-store-u8)
+        (emit-kernel-store-u8 args env ctx)
 
         (and (= op '-) (= 1 (count args)))
         (vec (concat (emit-expr (first args) env ctx) [0x48 0xf7 0xd8]))
