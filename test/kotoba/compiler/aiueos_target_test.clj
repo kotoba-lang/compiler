@@ -116,6 +116,16 @@
   (is (nil? (:binary (compiler/compile-source "(defn main [] 0)"
                                               :x86_64-linux-kotoba-v1)))))
 
+(deftest kernel-target-exports-four-argument-journal-planner
+  (let [{:keys [object]}
+        (compiler/compile-source
+         "(defn aiueos-journal-plan [valid0 sequence0 valid1 sequence1] (if valid0 sequence0 sequence1)) (defn main [] 0)"
+         :x86_64-aiueos-kernel-v1)]
+    (is (= "kotoba_aiueos_journal_plan" (:export object)))
+    (is (= :sysv (:abi object)))
+    (is (empty? (:imports object)))))
+
+
 (deftest firmware-target-emits-a-real-import-free-pe32+-efi-image
   (let [{:keys [binary]} (compiler/compile-source "(defn main [] 0)"
                                                   :x86_64-aiueos-uefi-v1)
