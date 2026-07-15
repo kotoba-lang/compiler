@@ -198,7 +198,9 @@
            ['aiueos-syscall-range-valid '[pointer length lower upper]
             "kotoba_aiueos_syscall_range_valid"]
            ['aiueos-copy-in '[source source-length destination destination-length count]
-            "kotoba_aiueos_copy_in"]]]
+            "kotoba_aiueos_copy_in"]
+           ['aiueos-capability-plan '[slot generation type state-rights request]
+            "kotoba_aiueos_capability_plan"]]]
     (let [source (str "(defn " entry " " params " 1) (defn main [] 0)")
           {:keys [object]} (compiler/compile-source source :x86_64-aiueos-kernel-v1)]
       (is (= expected (:export object)))

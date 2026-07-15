@@ -22,7 +22,8 @@
    'aiueos-pci-extent-valid {:arity 2 :symbol "kotoba_aiueos_pci_extent_valid"}
    'aiueos-pci-region-valid {:arity 3 :symbol "kotoba_aiueos_pci_region_valid"}
    'aiueos-syscall-range-valid {:arity 4 :symbol "kotoba_aiueos_syscall_range_valid"}
-   'aiueos-copy-in {:arity 5 :symbol "kotoba_aiueos_copy_in"}})
+   'aiueos-copy-in {:arity 5 :symbol "kotoba_aiueos_copy_in"}
+   'aiueos-capability-plan {:arity 5 :symbol "kotoba_aiueos_capability_plan"}})
 
 (defn- le [n width]
   (mapv #(bit-and (unsigned-bit-shift-right (long n) (* 8 %)) 0xff)
