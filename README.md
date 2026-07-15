@@ -212,7 +212,16 @@ than an OS executable: an aiueos loader must verify it, map code W^X, and expose
 only policy-derived capability trampolines.
 
 The aiueos freestanding profiles additionally produce boot artifacts. The
-kernel profile packages its sealed x86-64 code as an import-free ELF64 image.
+kernel profile packages its sealed x86-64 code as an import-free ELF64 image
+and writes a linkable ELF64 object exporting `kotoba_aiueos_probe`:
+
+```sh
+bin/kotoba-compiler compile examples/aiueos-probe.kotoba \
+  --target x86_64-aiueos-kernel-v1 --output kotoba_aiueos_probe.o
+```
+
+The object is emitted directly by the Kotoba compiler—no generated C or host
+runtime—and is intended to be linked and boot-tested by the aiueos repository.
 The UEFI profile packages a deterministic PE32+ EFI application with `.text`,
 `.data`, and `.reloc` sections and no import directory. Its entry shim satisfies
 the Microsoft x64 stack/shadow-space boundary only for the language's required

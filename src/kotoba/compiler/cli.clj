@@ -235,6 +235,7 @@
                      (str input (case (:execution (target-profile/profile target))
                                   :wasm ".wasm"
                                   :cljs ".cljs"
+                                  :kernel ".o"
                                   ".kexe")))
           policy-path (option args "--policy")
           policy (if policy-path (bounded-edn/read-file policy-path) {})
@@ -249,6 +250,10 @@
         ;; text "nil" to --output, since :artifact is absent from a
         ;; :cljs/v1 result).
         :cljs/v1 (atomic-output/write-text! output (:source result))
+        :kexe/v1 (if-let [object (:object result)]
+                   (atomic-output/write-bytes!
+                    output (byte-array (map unchecked-byte (:bytes object))))
+                   (atomic-output/write-edn! output (:artifact result)))
         (atomic-output/write-edn! output (:artifact result)))
       (println (pr-str {:ok true :target target :output output})))
     "package-ios"

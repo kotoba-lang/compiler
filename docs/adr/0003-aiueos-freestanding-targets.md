@@ -1,6 +1,6 @@
 # ADR 0003: aiueos freestanding target contracts
 
-- Status: Accepted, kernel ELF64 packaging implemented; UEFI packaging incomplete
+- Status: Accepted, kernel ELF64 image/object and UEFI PE32+ packaging implemented
 - Date: 2026-07-14
 
 ## Decision
@@ -24,6 +24,15 @@ initializes the hidden freestanding context, calls the sealed Kotoba program
 entry, then halts. The image contains no `PT_INTERP`, dynamic section, imports,
 host runtime, or ambient syscall dependency.
 
+The compiler also directly emits an ELF64 `ET_REL` link artifact. It exports
+`kotoba_aiueos_probe` with the SysV `uint64_t(void)` boundary, initializes the
+same private context, and calls the compiler-generated Kotoba entry. The
+object has `.text`, `.data`, `.rela.text`, `.symtab`, `.strtab`, and
+`.shstrtab`; its sole `R_X86_64_PC32` relocation binds the context without an
+unresolved host symbol. `kotoba-compiler compile ... --target
+x86_64-aiueos-kernel-v1` writes this object directly, without generating C or
+invoking a C compiler.
+
 The static context currently admits pure computation only: its capability
 bitmap is empty and its capability function pointers are null. Hardware and
 kernel services must be introduced through a versioned aiueos context ABI,
@@ -31,11 +40,8 @@ not accidental host linkage.
 
 ## Remaining boundary
 
-`x86_64-aiueos-uefi-v1` still emits the verified Kotoba instruction body and
-KEXE envelope but not a PE/COFF application, relocations, or Microsoft-x64
-entry shim. Therefore the UEFI profile remains a compiler contract rather
-than a directly firmware-loadable compiler output.
-
-The Kotoba integration repository supplies the small audited UEFI bootstrap
-for the first Phase 1 boot evidence. A subsequent backend change must replace
-that bootstrap with PE32+ output where possible.
+The linkable probe is deliberately a narrow vertical slice. It supports a
+zero-argument Kotoba entry and pure integer computation; it is not yet a
+general freestanding standard library, driver ABI, linker, or replacement for
+the architecture interrupt/context-switch assembly. aiueos owns the final
+kernel link and boot evidence.
