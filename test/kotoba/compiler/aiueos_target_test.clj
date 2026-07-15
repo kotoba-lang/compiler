@@ -188,6 +188,18 @@
        clojure.lang.ExceptionInfo #"kernel memory operation arity mismatch"
        (compiler/check-source "(defn main [] (kernel-store-u8 1 2 3))"))))
 
+(deftest kernel-target-exports-pci-planners
+  (doseq [[entry params expected]
+          [['aiueos-virtio-cap-valid '[pointer cap-length bar offset length]
+            "kotoba_aiueos_virtio_cap_valid"]
+           ['aiueos-pci-extent-valid '[value size] "kotoba_aiueos_pci_extent_valid"]
+           ['aiueos-pci-region-valid '[offset bytes bar-length]
+            "kotoba_aiueos_pci_region_valid"]]]
+    (let [source (str "(defn " entry " " params " 1) (defn main [] 0)")
+          {:keys [object]} (compiler/compile-source source :x86_64-aiueos-kernel-v1)]
+      (is (= expected (:export object)))
+      (is (empty? (:imports object))))))
+
 
 (deftest firmware-target-emits-a-real-import-free-pe32+-efi-image
   (let [{:keys [binary]} (compiler/compile-source "(defn main [] 0)"
