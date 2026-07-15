@@ -18,6 +18,7 @@
    'aiueos-fnv1a {:arity 2 :symbol "kotoba_aiueos_fnv1a"}
    'aiueos-journal-record-valid {:arity 2 :symbol "kotoba_aiueos_journal_record_valid"}
    'aiueos-object-transaction-valid {:arity 2 :symbol "kotoba_aiueos_object_transaction_valid"}
+   'aiueos-object-transaction-route {:arity 2 :symbol "kotoba_aiueos_object_transaction_route"}
    'aiueos-mutable-object-valid {:arity 5 :symbol "kotoba_aiueos_mutable_object_valid"}
    'aiueos-superblock-valid {:arity 2 :symbol "kotoba_aiueos_superblock_valid"}
    'aiueos-journal-record-build {:arity 3 :symbol "kotoba_aiueos_journal_record_build"}
@@ -239,7 +240,8 @@
     (let [high-fuel? (contains? '#{aiueos-user-object-journal-build
                                     aiueos-user-object-journal-valid} object-entry)
           bounded-memory? (or high-fuel? (contains? '#{aiueos-fnv1a aiueos-journal-record-valid
-                                        aiueos-object-transaction-valid aiueos-mutable-object-valid
+                                        aiueos-object-transaction-valid aiueos-object-transaction-route
+                                        aiueos-mutable-object-valid
                                         aiueos-superblock-valid aiueos-journal-record-build
                                         aiueos-mutable-object-build aiueos-copy-in
                                         aiueos-user-object-journal-value

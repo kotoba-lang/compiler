@@ -194,7 +194,8 @@
 (deftest kernel-target-exports-record-validators
   (doseq [[entry expected]
           [['aiueos-journal-record-valid "kotoba_aiueos_journal_record_valid"]
-           ['aiueos-object-transaction-valid "kotoba_aiueos_object_transaction_valid"]]]
+           ['aiueos-object-transaction-valid "kotoba_aiueos_object_transaction_valid"]
+           ['aiueos-object-transaction-route "kotoba_aiueos_object_transaction_route"]]]
     (let [source (str "(defn " entry " [base length] (bit-and (kernel-load-u8 base length 0) 255)) (defn main [] 0)")
           {:keys [object]} (compiler/compile-source source :x86_64-aiueos-kernel-v1)]
       (is (= expected (:export object)))
