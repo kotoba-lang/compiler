@@ -49,6 +49,11 @@ capability ID, scalar value, and that handle; programs still receive no ambient
 syscalls, host imports, or kernel addresses. Kernel and firmware contexts keep
 their sealed callback slots null unless their own ABI explicitly supplies one.
 
+The kernel-object export set also includes the five-argument
+`aiueos-user-object-journal-build` boundary. It lets aiueos link a Kotoba-owned
+serializer for domain-routed user transactions while the native substrate
+retains only queue ownership and sector I/O.
+
 ## Remaining boundary
 
 The linkable probe is deliberately a narrow vertical slice. It supports a

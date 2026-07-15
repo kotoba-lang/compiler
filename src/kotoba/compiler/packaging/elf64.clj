@@ -28,7 +28,8 @@
    'aiueos-copy-in {:arity 5 :symbol "kotoba_aiueos_copy_in"}
    'aiueos-capability-plan {:arity 5 :symbol "kotoba_aiueos_capability_plan"}
    'aiueos-service-lifecycle {:arity 4 :symbol "kotoba_aiueos_service_lifecycle"}
-   'aiueos-service-registry-build {:arity 5 :symbol "kotoba_aiueos_service_registry_build"}})
+   'aiueos-service-registry-build {:arity 5 :symbol "kotoba_aiueos_service_registry_build"}
+   'aiueos-user-object-journal-build {:arity 5 :symbol "kotoba_aiueos_user_object_journal_build"}})
 
 (defn- le [n width]
   (mapv #(bit-and (unsigned-bit-shift-right (long n) (* 8 %)) 0xff)

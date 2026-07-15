@@ -239,7 +239,9 @@
            ['aiueos-service-lifecycle '[generation restarts event budget]
             "kotoba_aiueos_service_lifecycle"]
            ['aiueos-service-registry-build '[base length sequence state0 state1]
-            "kotoba_aiueos_service_registry_build"]]]
+            "kotoba_aiueos_service_registry_build"]
+           ['aiueos-user-object-journal-build '[base length sequence domain value]
+            "kotoba_aiueos_user_object_journal_build"]]]
     (let [source (str "(defn " entry " " params " 1) (defn main [] 0)")
           {:keys [object]} (compiler/compile-source source :x86_64-aiueos-kernel-v1)]
       (is (= expected (:export object)))
