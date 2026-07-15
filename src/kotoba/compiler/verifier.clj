@@ -24,7 +24,7 @@
 (def ^:private max-bindings 4096)
 (def ^:private max-parameters 5)
 (def ^:private max-symbol-chars 128)
-(def ^:private arithmetic '#{+ - * quot})
+(def ^:private arithmetic '#{+ - * quot bit-xor})
 (def ^:private comparisons '#{= < > <= >=})
 (def ^:private heap-operations '{pair 2 pair-first 1 pair-second 1})
 
@@ -112,7 +112,7 @@
 
         (contains? arithmetic op)
         (do
-          (when (or (empty? args) (and (= op 'quot) (not= 2 (count args))))
+          (when (or (empty? args) (and (contains? '#{quot bit-xor} op) (not= 2 (count args))))
             (reject! "runtime KIR arithmetic arity rejected" {:operation op}))
           (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
 
@@ -126,6 +126,12 @@
         (do
           (when-not (= (get heap-operations op) (count args))
             (reject! "runtime KIR heap operation arity rejected" {:operation op}))
+          (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
+
+        (= op 'kernel-load-u8)
+        (do
+          (when-not (= 3 (count args))
+            (reject! "runtime KIR kernel memory operation arity rejected" {:operation op}))
           (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
 
         (contains? signatures op)
@@ -206,6 +212,11 @@
   (let [backend (target-profile/backend target)
         expected-profile (target-profile/profile target)
         {expected-lowering :lowering emit :emit} (get target-contracts backend)]
+    (when (and (not= target :x86_64-aiueos-kernel-v1)
+               (some #(and (seq? %) (= 'kernel-load-u8 (first %)))
+                     (tree-seq coll? seq (:functions program))))
+      (reject! "bounded kernel memory operation requires the aiueos kernel target"
+               {:target target}))
     (when-not (= expected-profile profile-value)
       (reject! "native target profile does not match target identity" {:target target}))
     (when-not emit (reject! "not a native verifier target" {:target target}))

@@ -125,6 +125,37 @@
     (is (= :sysv (:abi object)))
     (is (empty? (:imports object)))))
 
+(deftest kernel-target-lowers-bounded-byte-load-without-imports
+  (let [{:keys [object]}
+        (compiler/compile-source
+         "(defn aiueos-journal-plan [base length index unused] (kernel-load-u8 base length index)) (defn main [] 0)"
+         :x86_64-aiueos-kernel-v1)
+        bytes (:bytes object)]
+    (is (= "kotoba_aiueos_journal_plan" (:export object)))
+    (is (empty? (:imports object)))
+    (is (some #(= [0x0f 0xb6 0x04 0x02] %)
+              (partition 4 1 bytes)))
+    (is (some #(= [0x0f 0x0b] %) (partition 2 1 bytes)))))
+
+(deftest bounded-byte-load-requires-base-length-index
+  (is (thrown-with-msg?
+       clojure.lang.ExceptionInfo #"kernel memory operation arity mismatch"
+       (compiler/check-source "(defn main [] (kernel-load-u8 1 2))"))))
+
+(deftest kernel-target-exports-bounded-fnv-function
+  (let [source "(defn aiueos-fnv1a [base length] (bit-xor (kernel-load-u8 base length 0) 7)) (defn main [] 0)"
+        {:keys [object]} (compiler/compile-source source :x86_64-aiueos-kernel-v1)]
+    (is (= "kotoba_aiueos_fnv1a" (:export object)))
+    (is (empty? (:imports object)))
+    (is (some #(= [0x49 0xc7 0x41 0x08 0x00 0x04 0x00 0x00] %)
+              (partition 8 1 (:bytes object))))))
+
+(deftest bounded-kernel-memory-is-rejected-for-host-targets
+  (let [source "(defn read-byte [base length index] (kernel-load-u8 base length index)) (defn main [] 0)"]
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo #"requires the aiueos kernel target"
+         (compiler/compile-source source :x86_64-linux-kotoba-v1)))))
+
 
 (deftest firmware-target-emits-a-real-import-free-pe32+-efi-image
   (let [{:keys [binary]} (compiler/compile-source "(defn main [] 0)"

@@ -81,7 +81,10 @@
         (= op 'pair-second)
         (read-pair heap (eval-expr (first args) env functions fuel heap call-stack cap-call) 1)
 
-        (contains? '#{+ - * quot = < > <= >=} op)
+        (= op 'kernel-load-u8)
+        (trap! :kernel-memory-unavailable {:operation op})
+
+        (contains? '#{+ - * quot bit-xor = < > <= >=} op)
         (let [xs (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
           (case op
             + (reduce i64-add xs)
@@ -92,6 +95,7 @@
                    (when (and (= x Long/MIN_VALUE) (= y -1))
                      (trap! :signed-division-overflow {}))
                    (quot x y))
+            bit-xor (apply bit-xor xs)
             = (if (apply = xs) 1 0)
             < (if (apply < xs) 1 0)
             > (if (apply > xs) 1 0)

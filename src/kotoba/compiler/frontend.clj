@@ -8,9 +8,10 @@
      future pmap agent send send-off new . .. set! defmacro throw try catch
      locking dosync atom ref volatile!})
 
-(def arithmetic '#{+ - * quot})
+(def arithmetic '#{+ - * quot bit-xor})
 (def comparisons '#{= < > <= >=})
 (def heap-operations '{pair 2 pair-first 1 pair-second 1})
+(def kernel-memory-operations '{kernel-load-u8 3})
 (def list-operations '#{list cons first second rest empty?})
 (def predicate-operations '#{not zero? pos? neg?})
 ;; ADR-2607150000: and/or/when mirror kotoba-lang/kotoba's already-proven
@@ -26,6 +27,7 @@
 (def map-operations '#{get assoc})
 (def reserved-function-names
   (set/union forbidden-heads arithmetic comparisons (set (keys heap-operations))
+             (set (keys kernel-memory-operations))
              list-operations predicate-operations logical-operations map-operations
              '#{let if cap-call ns defn}))
 (def max-functions 1024)
@@ -528,7 +530,7 @@
           (validate-expr value locals functions (inc depth) budget))
 
         (contains? arithmetic op)
-        (do (when (or (empty? args) (and (= op 'quot) (not= 2 (count args))))
+            (do (when (or (empty? args) (and (contains? '#{quot bit-xor} op) (not= 2 (count args))))
               (reject! "invalid arithmetic arity" form))
             (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
 
@@ -539,6 +541,11 @@
         (contains? heap-operations op)
         (do (when-not (= (get heap-operations op) (count args))
               (reject! "heap operation arity mismatch" form))
+            (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
+        (contains? kernel-memory-operations op)
+        (do (when-not (= (get kernel-memory-operations op) (count args))
+              (reject! "kernel memory operation arity mismatch" form))
             (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
 
         (contains? functions op)

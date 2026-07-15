@@ -9,6 +9,9 @@
 (def ^:private context-size 80)
 
 (def ^:private journal-entry 'aiueos-journal-plan)
+(def ^:private kernel-object-entries
+  {journal-entry {:arity 4 :symbol "kotoba_aiueos_journal_plan"}
+   'aiueos-fnv1a {:arity 2 :symbol "kotoba_aiueos_fnv1a"}})
 
 (defn- le [n width]
   (mapv #(bit-and (unsigned-bit-shift-right (long n) (* 8 %)) 0xff)
@@ -129,21 +132,26 @@
     (throw (ex-info "ELF64 kernel object packaging requires a freestanding profile"
                     {:target-profile (:target-profile artifact)})))
   (let [source-entry (get-in artifact [:program :entry])
-        object-entry (if (contains? (:exports artifact) journal-entry)
-                       journal-entry source-entry)
+        object-entry (or (some #(when (contains? (:exports artifact) %) %)
+                               (keys kernel-object-entries))
+                         source-entry)
         export (get-in artifact [:exports object-entry])
-        public-symbol (if (= object-entry journal-entry)
-                        "kotoba_aiueos_journal_plan" "kotoba_aiueos_probe")]
-    (when-not (and export (= (:arity export) (if (= object-entry journal-entry) 4 0)))
+        contract (get kernel-object-entries object-entry {:arity 0 :symbol "kotoba_aiueos_probe"})
+        public-symbol (:symbol contract)]
+    (when-not (and export (= (:arity export) (:arity contract)))
       (throw (ex-info "Kotoba kernel object entry has an invalid SysV arity"
                       {:entry object-entry :arity (:arity export)})))
-    ;; lea r9,[rip+.data] (relocated); sub rsp,8; call local Kotoba entry;
-    ;; add rsp,8; ret.  The stack adjustment establishes the SysV pre-call
-    ;; alignment expected by the compiler backend.
-    (let [wrapper [0x4c 0x8d 0x0d 0 0 0 0 0x48 0x83 0xec 0x08 0xe8]
-          ;; Keep arithmetic explicit: wrapper prefix 12 + disp32 4 + suffix 5.
-          main-offset (+ 21 (:offset export))
-          call-disp (- main-offset 16)
+    ;; lea r9,[rip+.data] (relocated); optionally replenish bounded-memory
+    ;; fuel; sub rsp,8; call local Kotoba entry; add rsp,8; ret.
+    (let [bounded-memory? (= object-entry 'aiueos-fnv1a)
+          replenish (when bounded-memory?
+                      [0x49 0xc7 0x41 0x08 0x00 0x04 0x00 0x00]) ; [r9+8]=1024
+          wrapper (vec (concat [0x4c 0x8d 0x0d 0 0 0 0] replenish
+                               [0x48 0x83 0xec 0x08 0xe8]))
+          call-end (+ (count wrapper) 4)
+          wrapper-size (+ call-end 5)
+          main-offset (+ wrapper-size (:offset export))
+          call-disp (- main-offset call-end)
           text (vec (concat wrapper (le call-disp 4)
                             [0x48 0x83 0xc4 0x08 0xc3]
                             (:code artifact)))
