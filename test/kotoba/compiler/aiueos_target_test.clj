@@ -21,7 +21,10 @@
              :entry-contract :microsoft-x64-zero-arity-efi-status-v1}]
            [:x86_64-aiueos-kernel-v1
             {:execution :kernel :artifact :elf64
-             :entry :aiueos_kernel_entry :abi :aiueos-kernel-v1}]]]
+             :entry :aiueos_kernel_entry :abi :aiueos-kernel-v1}]
+           [:x86_64-aiueos-user-v1
+            {:execution :process :artifact :elf64
+             :entry :aiueos_process_entry :abi :aiueos-user-v1}]]]
     (testing (str name)
       (let [profile (target/profile name)]
         (is (= :aiueos (:os profile)))
@@ -31,7 +34,8 @@
 
 (deftest aiueos-targets-bind-profile-identity-into-artifacts
   (let [source "(defn main [] (+ 40 2))"]
-    (doseq [name [:x86_64-aiueos-uefi-v1 :x86_64-aiueos-kernel-v1]]
+    (doseq [name [:x86_64-aiueos-uefi-v1 :x86_64-aiueos-kernel-v1
+                  :x86_64-aiueos-user-v1]]
       (let [artifact (:artifact (compiler/compile-source source name))]
         (is (= name (:target artifact)))
         (is (= (target/profile name) (:target-profile artifact)))
@@ -115,6 +119,19 @@
 (deftest elf64-packaging-is-not-applied-to-firmware-or-host-targets
   (is (nil? (:binary (compiler/compile-source "(defn main [] 0)"
                                               :x86_64-linux-kotoba-v1)))))
+
+(deftest user-target-emits-loadable-cpl3-elf64-image
+  (let [{:keys [binary]} (compiler/compile-source "(defn main [] (+ 40 2))"
+                                                  :x86_64-aiueos-user-v1)
+        bytes (:bytes binary)]
+    (is (= 2 (read-le bytes 16 2)))
+    (is (= 0x1e1000 (:entry-address binary)))
+    (is (= 0x1e2000 (:result-address binary)))
+    (is (= 2 (read-le bytes 56 2)))
+    (is (= [0x4c 0x8d 0x0d] (subvec bytes 0x1000 0x1003)))
+    (is (= [0x48 0x89 0x05] (subvec bytes 0x100c 0x100f)))
+    (is (= :kotoba-sysv-context-r9-result-v1 (:entry-contract binary)))
+    (is (empty? (:imports binary)))))
 
 (deftest kernel-target-exports-four-argument-journal-planner
   (let [{:keys [object]}
