@@ -194,7 +194,9 @@
             "kotoba_aiueos_virtio_cap_valid"]
            ['aiueos-pci-extent-valid '[value size] "kotoba_aiueos_pci_extent_valid"]
            ['aiueos-pci-region-valid '[offset bytes bar-length]
-            "kotoba_aiueos_pci_region_valid"]]]
+            "kotoba_aiueos_pci_region_valid"]
+           ['aiueos-syscall-range-valid '[pointer length lower upper]
+            "kotoba_aiueos_syscall_range_valid"]]]
     (let [source (str "(defn " entry " " params " 1) (defn main [] 0)")
           {:keys [object]} (compiler/compile-source source :x86_64-aiueos-kernel-v1)]
       (is (= expected (:export object)))
