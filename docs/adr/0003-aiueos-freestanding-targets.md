@@ -50,10 +50,12 @@ syscalls, host imports, or kernel addresses. Kernel and firmware contexts keep
 their sealed callback slots null unless their own ABI explicitly supplies one.
 
 The kernel-object export set also includes the five-argument
-`aiueos-user-object-journal-build` boundary. It lets aiueos link a Kotoba-owned
-serializer for domain-routed user transactions while the native substrate
+`aiueos-user-object-journal-build` and three-argument
+`aiueos-user-object-journal-valid` boundaries. They let aiueos link a
+Kotoba-owned fixed-stack serializer and validator for domain-routed user
+transactions while the native substrate
 retains only queue ownership and sector I/O.
-The diagnostic kernel `ET_EXEC` packaging reserves three pages for generated
+The diagnostic kernel `ET_EXEC` packaging reserves seven pages for generated
 RX text before its RW context page, so nontrivial bounded serializers are not
 artificially limited to a single text page. The relocatable object layout and
 aiueos user-image addresses remain unchanged.
