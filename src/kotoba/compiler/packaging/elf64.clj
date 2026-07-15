@@ -2,11 +2,13 @@
   (:require [kotoba.compiler.artifact :as artifact]))
 
 (def ^:private kernel-target :x86_64-aiueos-kernel-v1)
+(def ^:private user-target :x86_64-aiueos-user-v1)
 (def ^:private page-size 0x1000)
 (def ^:private image-base 0x100000)
 (def ^:private text-offset page-size)
 (def ^:private data-offset (* 2 page-size))
 (def ^:private context-size 80)
+(def ^:private user-image-base 0x1e0000)
 
 (def ^:private journal-entry 'aiueos-journal-plan)
 (def ^:private kernel-object-entries
@@ -70,6 +72,17 @@
                  [0xe8] (le (- main-address after-call) 4)
                  [0xfa 0xf4 0xeb 0xfd]))))
 
+(defn- user-entry-shim [main-address context-address]
+  (let [entry-address (+ user-image-base text-offset)
+        after-lea (+ entry-address 7)
+        after-call (+ entry-address 12)
+        after-store (+ entry-address 19)]
+    (vec (concat [0x4c 0x8d 0x0d] (le (- context-address after-lea) 4)
+                 [0xe8] (le (- main-address after-call) 4)
+                 [0x48 0x89 0x05] (le (- context-address after-store) 4)
+                 [0xf3 0x90 0xeb 0xfc]
+                 (repeat 9 0x90)))))
+
 (defn package-kernel
   "Package a sealed aiueos kernel artifact as a freestanding ELF64 ET_EXEC.
   The returned byte vector has no interpreter, dynamic section, or host imports."
@@ -116,6 +129,44 @@
        :imports []
        :interpreter nil
        :bytes bytes})))
+
+(defn package-user
+  "Package a sealed zero-arity Kotoba program as an aiueos CPL3 ELF64 image."
+  [artifact]
+  (when-not (artifact/valid-seal? artifact)
+    (throw (ex-info "ELF64 user packaging requires a sealed artifact" {})))
+  (when-not (= user-target (:target artifact))
+    (throw (ex-info "ELF64 user packaging requires the aiueos user target"
+                    {:target (:target artifact)})))
+  (let [source-entry (get-in artifact [:program :entry])
+        export (get-in artifact [:exports source-entry])]
+    (when-not (and export (zero? (:arity export)))
+      (throw (ex-info "aiueos process entry requires zero arguments" {:entry source-entry})))
+    (let [entry-address (+ user-image-base text-offset)
+          context-address (+ user-image-base data-offset)
+          shim (user-entry-shim (+ entry-address 32 (:offset export)) context-address)
+          text (into shim (:code artifact))
+          context (into (vec (repeat 8 0)) (concat (le 256 8) (repeat (- context-size 16) 0)))
+          names (mapv int (.getBytes "\u0000.text\u0000.data\u0000.shstrtab\u0000" "UTF-8"))
+          names-offset (+ data-offset context-size)
+          section-offset (+ names-offset (count names)
+                            (mod (- 8 (mod (+ names-offset (count names)) 8)) 8))
+          sections [(vec (repeat 64 0))
+                    (section-header 1 1 0x6 entry-address text-offset (count text) 16)
+                    (section-header 7 1 0x3 context-address data-offset context-size 8)
+                    (section-header 13 3 0 0 names-offset (count names) 1)]
+          header (elf-header entry-address 2 section-offset (count sections))
+          phdrs (concat (program-header 0x5 text-offset entry-address (count text) (count text))
+                        (program-header 0x6 data-offset context-address context-size context-size))
+          before-text (padded (concat header phdrs) text-offset)
+          before-data (padded (concat before-text text) data-offset)
+          before-sections (padded (concat before-data context names) section-offset)]
+      {:format :elf64/v1 :target user-target :entry :aiueos_process_entry
+       :source-entry source-entry :entry-address entry-address
+       :result-address context-address :sections [:text :data :shstrtab]
+       :imports [] :interpreter nil
+       :entry-contract :kotoba-sysv-context-r9-result-v1
+       :bytes (vec (concat before-sections (mapcat identity sections)))})))
 
 (defn- rela [offset symbol type addend]
   (vec (concat (le offset 8)

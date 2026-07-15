@@ -1,6 +1,6 @@
 # ADR 0003: aiueos freestanding target contracts
 
-- Status: Accepted, kernel ELF64 image/object and UEFI PE32+ packaging implemented
+- Status: Accepted, kernel/process ELF64 and UEFI PE32+ packaging implemented
 - Date: 2026-07-14
 
 ## Decision
@@ -10,7 +10,9 @@ The compiler reserves two fail-closed x86_64 target identities:
 - `x86_64-aiueos-uefi-v1`: Microsoft x64 ABI, PE32+ EFI application,
   `efi_main` entry point;
 - `x86_64-aiueos-kernel-v1`: aiueos kernel ABI v1, ELF64 image,
-  `aiueos_kernel_entry` entry point.
+  `aiueos_kernel_entry` entry point;
+- `x86_64-aiueos-user-v1`: aiueos ring-3 ABI v1, ELF64 image,
+  `aiueos_process_entry` entry point and loader-readable result context.
 
 Both profiles declare `runtime :none` and `ambient-syscalls false`. Their
 identity is included in the sealed KEXE artifact, so a hosted artifact cannot
@@ -23,6 +25,12 @@ For `x86_64-aiueos-kernel-v1`, compilation also emits a loadable ELF64
 initializes the hidden freestanding context, calls the sealed Kotoba program
 entry, then halts. The image contains no `PT_INTERP`, dynamic section, imports,
 host runtime, or ambient syscall dependency.
+
+The user profile emits an import-free `ET_EXEC` with a separate RX text page
+and RW context page in aiueos's process image window. Its shim initializes the
+hidden `r9` context, invokes a zero-arity Kotoba entry, stores the result in
+the context page, and remains schedulable until kernel teardown. aiueos must
+validate the ELF and map both segments W^X before entering CPL3.
 
 The compiler also directly emits an ELF64 `ET_REL` link artifact. It exports
 `kotoba_aiueos_probe` with the SysV `uint64_t(void)` boundary, initializes the
