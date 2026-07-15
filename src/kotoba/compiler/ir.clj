@@ -84,7 +84,7 @@
         (= op 'kernel-load-u8)
         (trap! :kernel-memory-unavailable {:operation op})
 
-        (contains? '#{+ - * quot bit-xor = < > <= >=} op)
+        (contains? '#{+ - * quot bit-xor bit-and = < > <= >=} op)
         (let [xs (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
           (case op
             + (reduce i64-add xs)
@@ -96,6 +96,7 @@
                      (trap! :signed-division-overflow {}))
                    (quot x y))
             bit-xor (apply bit-xor xs)
+            bit-and (apply bit-and xs)
             = (if (apply = xs) 1 0)
             < (if (apply < xs) 1 0)
             > (if (apply > xs) 1 0)
