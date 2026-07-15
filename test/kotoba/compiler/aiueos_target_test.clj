@@ -83,6 +83,17 @@
     (is (some #{0xe9} helper) "tail recur jumps back to the expression body")
     (is (not-any? #{0xe8} helper) "tail recur emits no native self-call")))
 
+(deftest x86-non-tail-recursion-remains-a-call
+  (let [source "(defn fact [n] (if (<= n 1) 1 (* n (fact (- n 1))))) (defn main [] (fact 10))"
+        artifact (:artifact (compiler/compile-source source :x86_64-aiueos-kernel-v1))
+        {:keys [offset length]} (get-in artifact [:exports 'fact])
+        fact-code (subvec (:code artifact) offset (+ offset length))]
+    (is (= 3628800 (:value artifact)))
+    (is (some #{0xe8} fact-code)
+        "a recursive call nested under multiplication is not a tail position")
+    (is (not-any? #{0xe9} fact-code)
+        "non-tail recursion must retain its continuation")))
+
 (deftest kernel-target-emits-linkable-relocatable-probe-object
   (let [{:keys [object]} (compiler/compile-source "(defn main [] 42)"
                                                   :x86_64-aiueos-kernel-v1)

@@ -35,11 +35,12 @@
     (into [0x48 0x8b 0x84 0x24] (le32 disp))))
 
 (defn- emit-binary [left right opcode env ctx]
-  (vec (concat (emit-expr left env ctx)
+  (let [ctx (assoc ctx :tail? false)]
+    (vec (concat (emit-expr left env ctx)
                [0x50]
                (emit-expr right env (update ctx :temp-depth inc))
                [0x48 0x89 0xc1 0x58]
-               opcode)))
+               opcode))))
 
 (defn- emit-tail-self-call [args env {:keys [param-count pad? temp-depth] :as ctx}]
   ;; All arguments are evaluated before any parameter slot is overwritten.
@@ -90,7 +91,7 @@
         align? (even? temp-depth)]
     (vec (concat
           [0x41 0xf6 0x41 byte-offset mask 0x75 0x02 0x0f 0x0b]
-          (emit-expr value env ctx)
+          (emit-expr value env (assoc ctx :tail? false))
           [0x48 0x89 0xc2 0x41 0x51]             ; rdx=value; push r9
           (when align? [0x50])
           [0xbe] (le32 cap-id)                    ; esi=cap-id
@@ -99,7 +100,8 @@
           [0x41 0x59]))))                         ; pop r9
 
 (defn- emit-heap-call [op args env {:keys [temp-depth] :as ctx}]
-  (let [offset ({'pair 56 'pair-first 64 'pair-second 72} op)
+  (let [ctx (assoc ctx :tail? false)
+        offset ({'pair 56 'pair-first 64 'pair-second 72} op)
         pair? (= op 'pair)
         values (if pair?
                  (concat (emit-expr (first args) env ctx) [0x50]
@@ -116,7 +118,8 @@
   ;; Evaluate exactly once, then enforce a non-null base, an unsigned index
   ;; below length, and the x86_64-aiueos-kernel-v1 maximum transfer of 512
   ;; bytes. Every violation reaches UD2 before memory is touched.
-  (vec (concat
+  (let [ctx (assoc ctx :tail? false)]
+    (vec (concat
         (emit-expr base env ctx) [0x50]
         (emit-expr length env (update ctx :temp-depth inc)) [0x50]
         (emit-expr index env (update ctx :temp-depth + 2))
@@ -128,13 +131,14 @@
          0x48 0x39 0xc8                         ; cmp rax,rcx
          0x0f 0x83 0x06 0x00 0x00 0x00         ; jae trap
          0x0f 0xb6 0x04 0x02                    ; movzx eax,byte [rdx+rax]
-         0xeb 0x02 0x0f 0x0b])))                ; skip UD2 / trap
+         0xeb 0x02 0x0f 0x0b]))))               ; skip UD2 / trap
 
 (defn- emit-kernel-store-u8 [[base length index value] env {:keys [temp-depth] :as ctx}]
   ;; Evaluate once and perform the same null/length/index checks as load-u8.
   ;; AL is stored only after every check succeeds; RAX remains the expression
   ;; result. Invalid writes trap before mutating memory.
-  (vec (concat
+  (let [ctx (assoc ctx :tail? false)]
+    (vec (concat
         (emit-expr base env ctx) [0x50]
         (emit-expr length env (update ctx :temp-depth inc)) [0x50]
         (emit-expr index env (update ctx :temp-depth + 2)) [0x50]
@@ -147,7 +151,7 @@
          0x48 0x39 0xcf                         ; cmp rdi,rcx
          0x0f 0x83 0x05 0x00 0x00 0x00         ; jae trap
          0x88 0x04 0x3a                         ; mov byte [rdx+rdi],al
-         0xeb 0x02 0x0f 0x0b])))                ; skip UD2 / trap
+         0xeb 0x02 0x0f 0x0b]))))               ; skip UD2 / trap
 
 (defn emit-expr [form env {:keys [param-count pad? temp-depth] :as ctx}]
   (cond
@@ -178,10 +182,11 @@
         (emit-kernel-store-u8 args env ctx)
 
         (and (= op '-) (= 1 (count args)))
-        (vec (concat (emit-expr (first args) env ctx) [0x48 0xf7 0xd8]))
+        (vec (concat (emit-expr (first args) env (assoc ctx :tail? false)) [0x48 0xf7 0xd8]))
 
         (contains? '#{+ - * quot bit-xor bit-and} op)
-        (reduce (fn [left-code right]
+        (let [ctx (assoc ctx :tail? false)]
+          (reduce (fn [left-code right]
                   (vec (concat left-code [0x50]
                                (emit-expr right env (update ctx :temp-depth inc))
                                [0x48 0x89 0xc1 0x58]
@@ -190,7 +195,7 @@
                                       quot [0x48 0x99 0x48 0xf7 0xf9]
                                       bit-xor [0x48 0x31 0xc8]
                                       bit-and [0x48 0x21 0xc8]))))
-                (emit-expr (first args) env ctx) (rest args))
+                  (emit-expr (first args) env ctx) (rest args)))
 
         (contains? '#{= < > <= >=} op)
         (let [[left right] args setcc ({'= 0x94 '< 0x9c '> 0x9f '<= 0x9e '>= 0x9d} op)]
