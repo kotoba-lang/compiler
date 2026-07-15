@@ -7,7 +7,7 @@
 (def ^:private image-base 0x100000)
 (def ^:private text-offset page-size)
 (def ^:private data-offset (* 2 page-size))
-(def ^:private kernel-data-offset (* 4 page-size))
+(def ^:private kernel-data-offset (* 8 page-size))
 (def ^:private context-size 80)
 (def ^:private user-context-size 88)
 (def ^:private user-image-base 0x1e0000)
@@ -30,7 +30,8 @@
    'aiueos-capability-plan {:arity 5 :symbol "kotoba_aiueos_capability_plan"}
    'aiueos-service-lifecycle {:arity 4 :symbol "kotoba_aiueos_service_lifecycle"}
    'aiueos-service-registry-build {:arity 5 :symbol "kotoba_aiueos_service_registry_build"}
-   'aiueos-user-object-journal-build {:arity 5 :symbol "kotoba_aiueos_user_object_journal_build"}})
+   'aiueos-user-object-journal-build {:arity 5 :symbol "kotoba_aiueos_user_object_journal_build"}
+   'aiueos-user-object-journal-valid {:arity 3 :symbol "kotoba_aiueos_user_object_journal_valid"}})
 
 (defn- le [n width]
   (mapv #(bit-and (unsigned-bit-shift-right (long n) (* 8 %)) 0xff)
@@ -233,12 +234,16 @@
                       {:entry object-entry :arity (:arity export)})))
     ;; lea r9,[rip+.data] (relocated); optionally replenish bounded-memory
     ;; fuel; sub rsp,8; call local Kotoba entry; add rsp,8; ret.
-    (let [bounded-memory? (contains? '#{aiueos-fnv1a aiueos-journal-record-valid
+    (let [high-fuel? (contains? '#{aiueos-user-object-journal-build
+                                    aiueos-user-object-journal-valid} object-entry)
+          bounded-memory? (or high-fuel? (contains? '#{aiueos-fnv1a aiueos-journal-record-valid
                                         aiueos-object-transaction-valid aiueos-mutable-object-valid
                                         aiueos-superblock-valid aiueos-journal-record-build
-                                        aiueos-mutable-object-build aiueos-copy-in} object-entry)
+                                        aiueos-mutable-object-build aiueos-copy-in} object-entry))
           replenish (when bounded-memory?
-                      [0x49 0xc7 0x41 0x08 0x00 0x04 0x00 0x00]) ; [r9+8]=1024
+                      (if high-fuel?
+                        [0x49 0xc7 0x41 0x08 0x00 0x10 0x00 0x00] ; [r9+8]=4096
+                        [0x49 0xc7 0x41 0x08 0x00 0x04 0x00 0x00])) ; [r9+8]=1024
           wrapper (vec (concat [0x4c 0x8d 0x0d 0 0 0 0] replenish
                                [0x48 0x83 0xec 0x08 0xe8]))
           call-end (+ (count wrapper) 4)
