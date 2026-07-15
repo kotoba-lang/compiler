@@ -30,6 +30,7 @@
    'aiueos-capability-plan {:arity 5 :symbol "kotoba_aiueos_capability_plan"}
    'aiueos-service-lifecycle {:arity 4 :symbol "kotoba_aiueos_service_lifecycle"}
    'aiueos-service-registry-build {:arity 5 :symbol "kotoba_aiueos_service_registry_build"}
+   'aiueos-service-registry-state {:arity 3 :symbol "kotoba_aiueos_service_registry_state"}
    'aiueos-user-object-journal-build {:arity 5 :symbol "kotoba_aiueos_user_object_journal_build"}
    'aiueos-user-object-journal-valid {:arity 3 :symbol "kotoba_aiueos_user_object_journal_valid"}
    'aiueos-user-object-journal-value {:arity 2 :symbol "kotoba_aiueos_user_object_journal_value"}})
@@ -241,7 +242,8 @@
                                         aiueos-object-transaction-valid aiueos-mutable-object-valid
                                         aiueos-superblock-valid aiueos-journal-record-build
                                         aiueos-mutable-object-build aiueos-copy-in
-                                        aiueos-user-object-journal-value} object-entry))
+                                        aiueos-user-object-journal-value
+                                        aiueos-service-registry-state} object-entry))
           replenish (when bounded-memory?
                       (if high-fuel?
                         [0x49 0xc7 0x41 0x08 0x00 0x10 0x00 0x00] ; [r9+8]=4096
