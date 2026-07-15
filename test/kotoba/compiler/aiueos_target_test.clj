@@ -240,6 +240,8 @@
             "kotoba_aiueos_service_lifecycle"]
            ['aiueos-service-registry-build '[base length sequence state0 state1]
             "kotoba_aiueos_service_registry_build"]
+           ['aiueos-service-registry-state '[base length service]
+            "kotoba_aiueos_service_registry_state"]
            ['aiueos-user-object-journal-build '[base length sequence domain value]
             "kotoba_aiueos_user_object_journal_build"]
            ['aiueos-user-object-journal-valid '[base length domain]
