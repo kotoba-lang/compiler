@@ -196,11 +196,23 @@
            ['aiueos-pci-region-valid '[offset bytes bar-length]
             "kotoba_aiueos_pci_region_valid"]
            ['aiueos-syscall-range-valid '[pointer length lower upper]
-            "kotoba_aiueos_syscall_range_valid"]]]
+            "kotoba_aiueos_syscall_range_valid"]
+           ['aiueos-copy-in '[source source-length destination destination-length count]
+            "kotoba_aiueos_copy_in"]]]
     (let [source (str "(defn " entry " " params " 1) (defn main [] 0)")
           {:keys [object]} (compiler/compile-source source :x86_64-aiueos-kernel-v1)]
       (is (= expected (:export object)))
       (is (empty? (:imports object))))))
+
+(deftest kernel-target-copy-in-retains-bounded-load-store-and-fuel
+  (let [source "(defn aiueos-copy-in [source source-length destination destination-length count] (kernel-store-u8 destination destination-length 0 (kernel-load-u8 source source-length 0))) (defn main [] 0)"
+        {:keys [object]} (compiler/compile-source source :x86_64-aiueos-kernel-v1)
+        bytes (:bytes object)]
+    (is (= "kotoba_aiueos_copy_in" (:export object)))
+    (is (some #(= [0x0f 0xb6 0x04 0x02] %) (partition 4 1 bytes)))
+    (is (some #(= [0x88 0x04 0x3a] %) (partition 3 1 bytes)))
+    (is (some #(= [0x49 0xc7 0x41 0x08 0x00 0x04 0x00 0x00] %)
+              (partition 8 1 bytes)))))
 
 
 (deftest firmware-target-emits-a-real-import-free-pe32+-efi-image
