@@ -97,6 +97,18 @@
       (is (str/ends-with? (:output report) ".cljs"))
       (is (str/includes? (slurp (:output report)) "(defn main")))))
 
+(deftest compile-aiueos-user-target-writes-elf-not-kexe-edn
+  (let [source (temp-kotoba-source! "(defn main [] (+ 40 2))")
+        output (.getPath (doto (java.io.File/createTempFile "kotoba-aiueos-user-" ".elf")
+                           (.deleteOnExit)))
+        out (StringWriter.)]
+    (binding [*out* out]
+      (cli/-main "compile" source "--target" "x86_64-aiueos-user-v1"
+                 "--output" output))
+    (let [bytes (java.nio.file.Files/readAllBytes (.toPath (java.io.File. output)))]
+      (is (= [0x7f 0x45 0x4c 0x46]
+             (mapv #(bit-and % 0xff) (take 4 bytes)))))))
+
 (deftest compile-wasm-target-is-unaffected-by-the-cljs-output-fix
   (let [source (temp-kotoba-source! "(defn main [] (let [x 40 y 2] (+ x y)))")
         output (.getPath (doto (java.io.File/createTempFile "kotoba-cli-wasm-out-" ".wasm")
