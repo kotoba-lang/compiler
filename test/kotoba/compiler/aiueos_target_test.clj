@@ -68,6 +68,30 @@
     ;; Context fuel is initialized to 256; no host process populates it.
     (is (= 256 (read-le bytes (+ 0x8000 8) 8)))))
 
+(deftest x86-loop-recur-reuses-its-native-stack-frame
+  (let [source "(defn main [] (loop [i 0 acc 0] (if (= i 20) acc (recur (+ i 1) (+ acc i)))))"
+        artifact (:artifact (compiler/compile-source source :x86_64-aiueos-kernel-v1))
+        {:keys [offset length]} (get-in artifact [:exports '__kotoba_loop_1])
+        helper (subvec (:code artifact) offset (+ offset length))]
+    (is (= 190 (:value artifact)))
+    (is (some #(= [0x4c 0x8d 0x9c 0x24] %) (partition 4 1 helper))
+        "tail recur anchors the existing parameter frame")
+    (is (some #(= [0x49 0x89 0x83] %) (partition 3 1 helper))
+        "new loop values replace existing parameter slots")
+    (is (some #(= [0x49 0xff 0x49 0x08] %) (partition 4 1 helper))
+        "every back edge still consumes fuel")
+    (is (some #{0xe9} helper) "tail recur jumps back to the expression body")
+    (is (not-any? #{0xe8} helper) "tail recur emits no native self-call")))
+
+(deftest x86-non-tail-recursion-remains-a-call
+  (let [source "(defn fact [n] (if (<= n 1) 1 (* n (fact (- n 1))))) (defn main [] (fact 10))"
+        artifact (:artifact (compiler/compile-source source :x86_64-aiueos-kernel-v1))
+        {:keys [offset length]} (get-in artifact [:exports 'fact])
+        fact-code (subvec (:code artifact) offset (+ offset length))]
+    (is (= 3628800 (:value artifact)))
+    (is (some #{0xe8} fact-code)
+        "a recursive call nested under multiplication is not a tail position")))
+
 (deftest kernel-target-emits-linkable-relocatable-probe-object
   (let [{:keys [object]} (compiler/compile-source "(defn main [] 42)"
                                                   :x86_64-aiueos-kernel-v1)
