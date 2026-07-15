@@ -79,4 +79,5 @@
           (assoc :binary (pe32plus/package-efi artifact))
 
           (= target :x86_64-aiueos-kernel-v1)
-          (assoc :binary (elf64/package-kernel artifact))))))))
+          (assoc :binary (elf64/package-kernel artifact)
+                 :object (elf64/package-kernel-object artifact))))))))

@@ -8,6 +8,8 @@
 (def ^:private data-offset (* 2 page-size))
 (def ^:private context-size 80)
 
+(def ^:private probe-symbol "kotoba_aiueos_probe")
+
 (defn- le [n width]
   (mapv #(bit-and (unsigned-bit-shift-right (long n) (* 8 %)) 0xff)
         (range width)))
@@ -94,6 +96,100 @@
        :source-entry source-entry
        :entry-address entry-address
        :sections [:text :data :shstrtab]
+       :imports []
+       :interpreter nil
+       :bytes bytes})))
+
+(defn- rela [offset symbol type addend]
+  (vec (concat (le offset 8)
+               (le (bit-or (bit-shift-left symbol 32) type) 8)
+               (le addend 8))))
+
+(defn- symbol-entry [name info section value size]
+  (vec (concat (le name 4) [info 0] (le section 2)
+               (le value 8) (le size 8))))
+
+(defn- reloc-section-header [name type flags offset size link info alignment entry-size]
+  (vec (concat (le name 4) (le type 4) (le flags 8) (le 0 8)
+               (le offset 8) (le size 8) (le link 4) (le info 4)
+               (le alignment 8) (le entry-size 8))))
+
+(defn package-kernel-object
+  "Emit a linkable x86-64 ET_REL object whose public SysV probe calls the
+  compiler-generated Kotoba entry with a private freestanding context.  The
+  object deliberately contains no dynamic metadata or unresolved host symbol."
+  [artifact]
+  (when-not (artifact/valid-seal? artifact)
+    (throw (ex-info "ELF64 kernel object packaging requires a sealed artifact" {})))
+  (when-not (= kernel-target (:target artifact))
+    (throw (ex-info "ELF64 kernel object packaging requires the aiueos kernel target"
+                    {:target (:target artifact)})))
+  (when-not (and (= :none (get-in artifact [:target-profile :runtime]))
+                 (false? (get-in artifact [:target-profile :ambient-syscalls])))
+    (throw (ex-info "ELF64 kernel object packaging requires a freestanding profile"
+                    {:target-profile (:target-profile artifact)})))
+  (let [source-entry (get-in artifact [:program :entry])
+        export (get-in artifact [:exports source-entry])]
+    (when-not (and export (zero? (:arity export)))
+      (throw (ex-info "Kotoba kernel probe entry must be exported with zero arity"
+                      {:entry source-entry :arity (:arity export)})))
+    ;; lea r9,[rip+.data] (relocated); sub rsp,8; call local Kotoba entry;
+    ;; add rsp,8; ret.  The stack adjustment establishes the SysV pre-call
+    ;; alignment expected by the compiler backend.
+    (let [wrapper [0x4c 0x8d 0x0d 0 0 0 0 0x48 0x83 0xec 0x08 0xe8]
+          ;; Keep arithmetic explicit: wrapper prefix 12 + disp32 4 + suffix 5.
+          main-offset 21
+          call-disp (- main-offset 16)
+          text (vec (concat wrapper (le call-disp 4)
+                            [0x48 0x83 0xc4 0x08 0xc3]
+                            (:code artifact)))
+          context (vec (concat (repeat 8 0) (le 256 8)
+                               (repeat (- context-size 16) 0)))
+          shstr "\u0000.text\u0000.data\u0000.rela.text\u0000.symtab\u0000.strtab\u0000.shstrtab\u0000"
+          shstr-bytes (mapv int (.getBytes shstr "UTF-8"))
+          strtab (mapv int (.getBytes (str "\u0000" probe-symbol "\u0000kotoba_source_entry\u0000") "UTF-8"))
+          text-off 64
+          data-off (+ text-off (count text))
+          rela-off (+ data-off (count context))
+          reloc (rela 3 2 2 -4) ; R_X86_64_PC32 against section symbol .data
+          symtab-off (+ rela-off (count reloc))
+          ;; null, local .text/.data section symbols, local source, global probe.
+          ;; ELF requires every local symbol to precede the first global one.
+          symbols (vec (concat (repeat 24 0)
+                               (symbol-entry 0 0x03 1 0 0)
+                               (symbol-entry 0 0x03 2 0 0)
+                               (symbol-entry (+ 2 (count probe-symbol)) 0x02 1 main-offset
+                                             (count (:code artifact)))
+                               (symbol-entry 1 0x12 1 0 main-offset)))
+          strtab-off (+ symtab-off (count symbols))
+          shstr-off (+ strtab-off (count strtab))
+          section-off (+ shstr-off (count shstr-bytes)
+                         (mod (- 8 (mod (+ shstr-off (count shstr-bytes)) 8)) 8))
+          header (vec (concat
+                       [0x7f 0x45 0x4c 0x46 2 1 1 0] (repeat 8 0)
+                       (le 1 2) (le 0x3e 2) (le 1 4) ; ET_REL, EM_X86_64
+                       (le 0 8) (le 0 8) (le section-off 8) (le 0 4)
+                       (le 64 2) (le 0 2) (le 0 2) (le 64 2) (le 7 2) (le 6 2)))
+          sections [(vec (repeat 64 0))
+                    (reloc-section-header 1 1 0x6 text-off (count text) 0 0 16 0)
+                    (reloc-section-header 7 1 0x3 data-off (count context) 0 0 8 0)
+                    (reloc-section-header 13 4 0 rela-off (count reloc) 4 1 8 24)
+                    (reloc-section-header 24 2 0 symtab-off (count symbols) 5 4 8 24)
+                    (reloc-section-header 32 3 0 strtab-off (count strtab) 0 0 1 0)
+                    (reloc-section-header 40 3 0 shstr-off (count shstr-bytes) 0 0 1 0)]
+          before-sections (padded (concat header text context reloc symbols strtab shstr-bytes)
+                                  section-off)
+          bytes (vec (concat before-sections (mapcat identity sections)))]
+      {:format :elf64-relocatable/v1
+       :target kernel-target
+       :elf-type :relocatable
+       :machine :x86_64
+       :abi :sysv
+       :export probe-symbol
+       :source-entry source-entry
+       :sections [:text :data :rela.text :symtab :strtab :shstrtab]
+       :relocations [{:section :text :offset 3 :type :r-x86-64-pc32
+                      :symbol :data :addend -4}]
        :imports []
        :interpreter nil
        :bytes bytes})))
