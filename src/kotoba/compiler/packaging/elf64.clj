@@ -8,7 +8,7 @@
 (def ^:private data-offset (* 2 page-size))
 (def ^:private context-size 80)
 
-(def ^:private probe-symbol "kotoba_aiueos_probe")
+(def ^:private journal-entry 'aiueos-journal-plan)
 
 (defn- le [n width]
   (mapv #(bit-and (unsigned-bit-shift-right (long n) (* 8 %)) 0xff)
@@ -129,16 +129,20 @@
     (throw (ex-info "ELF64 kernel object packaging requires a freestanding profile"
                     {:target-profile (:target-profile artifact)})))
   (let [source-entry (get-in artifact [:program :entry])
-        export (get-in artifact [:exports source-entry])]
-    (when-not (and export (zero? (:arity export)))
-      (throw (ex-info "Kotoba kernel probe entry must be exported with zero arity"
-                      {:entry source-entry :arity (:arity export)})))
+        object-entry (if (contains? (:exports artifact) journal-entry)
+                       journal-entry source-entry)
+        export (get-in artifact [:exports object-entry])
+        public-symbol (if (= object-entry journal-entry)
+                        "kotoba_aiueos_journal_plan" "kotoba_aiueos_probe")]
+    (when-not (and export (= (:arity export) (if (= object-entry journal-entry) 4 0)))
+      (throw (ex-info "Kotoba kernel object entry has an invalid SysV arity"
+                      {:entry object-entry :arity (:arity export)})))
     ;; lea r9,[rip+.data] (relocated); sub rsp,8; call local Kotoba entry;
     ;; add rsp,8; ret.  The stack adjustment establishes the SysV pre-call
     ;; alignment expected by the compiler backend.
     (let [wrapper [0x4c 0x8d 0x0d 0 0 0 0 0x48 0x83 0xec 0x08 0xe8]
           ;; Keep arithmetic explicit: wrapper prefix 12 + disp32 4 + suffix 5.
-          main-offset 21
+          main-offset (+ 21 (:offset export))
           call-disp (- main-offset 16)
           text (vec (concat wrapper (le call-disp 4)
                             [0x48 0x83 0xc4 0x08 0xc3]
@@ -147,7 +151,7 @@
                                (repeat (- context-size 16) 0)))
           shstr "\u0000.text\u0000.data\u0000.rela.text\u0000.symtab\u0000.strtab\u0000.shstrtab\u0000"
           shstr-bytes (mapv int (.getBytes shstr "UTF-8"))
-          strtab (mapv int (.getBytes (str "\u0000" probe-symbol "\u0000kotoba_source_entry\u0000") "UTF-8"))
+          strtab (mapv int (.getBytes (str "\u0000" public-symbol "\u0000kotoba_source_entry\u0000") "UTF-8"))
           text-off 64
           data-off (+ text-off (count text))
           rela-off (+ data-off (count context))
@@ -158,9 +162,9 @@
           symbols (vec (concat (repeat 24 0)
                                (symbol-entry 0 0x03 1 0 0)
                                (symbol-entry 0 0x03 2 0 0)
-                               (symbol-entry (+ 2 (count probe-symbol)) 0x02 1 main-offset
+                               (symbol-entry (+ 2 (count public-symbol)) 0x02 1 main-offset
                                              (count (:code artifact)))
-                               (symbol-entry 1 0x12 1 0 main-offset)))
+                               (symbol-entry 1 0x12 1 0 (count (:code artifact)))))
           strtab-off (+ symtab-off (count symbols))
           shstr-off (+ strtab-off (count strtab))
           section-off (+ shstr-off (count shstr-bytes)
@@ -185,8 +189,8 @@
        :elf-type :relocatable
        :machine :x86_64
        :abi :sysv
-       :export probe-symbol
-       :source-entry source-entry
+       :export public-symbol
+       :source-entry object-entry
        :sections [:text :data :rela.text :symtab :strtab :shstrtab]
        :relocations [{:section :text :offset 3 :type :r-x86-64-pc32
                       :symbol :data :addend -4}]
