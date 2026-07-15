@@ -8,7 +8,7 @@
      future pmap agent send send-off new . .. set! defmacro throw try catch
      locking dosync atom ref volatile!})
 
-(def arithmetic '#{+ - * quot bit-xor})
+(def arithmetic '#{+ - * quot bit-xor bit-and})
 (def comparisons '#{= < > <= >=})
 (def heap-operations '{pair 2 pair-first 1 pair-second 1})
 (def kernel-memory-operations '{kernel-load-u8 3})
@@ -530,7 +530,7 @@
           (validate-expr value locals functions (inc depth) budget))
 
         (contains? arithmetic op)
-            (do (when (or (empty? args) (and (contains? '#{quot bit-xor} op) (not= 2 (count args))))
+            (do (when (or (empty? args) (and (contains? '#{quot bit-xor bit-and} op) (not= 2 (count args))))
               (reject! "invalid arithmetic arity" form))
             (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
 

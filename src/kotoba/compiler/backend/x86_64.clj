@@ -133,7 +133,7 @@
         (and (= op '-) (= 1 (count args)))
         (vec (concat (emit-expr (first args) env ctx) [0x48 0xf7 0xd8]))
 
-        (contains? '#{+ - * quot bit-xor} op)
+        (contains? '#{+ - * quot bit-xor bit-and} op)
         (reduce (fn [left-code right]
                   (vec (concat left-code [0x50]
                                (emit-expr right env (update ctx :temp-depth inc))
@@ -141,7 +141,8 @@
                                (case op + [0x48 0x01 0xc8] - [0x48 0x29 0xc8]
                                       * [0x48 0x0f 0xaf 0xc1]
                                       quot [0x48 0x99 0x48 0xf7 0xf9]
-                                      bit-xor [0x48 0x31 0xc8]))))
+                                      bit-xor [0x48 0x31 0xc8]
+                                      bit-and [0x48 0x21 0xc8]))))
                 (emit-expr (first args) env ctx) (rest args))
 
         (contains? '#{= < > <= >=} op)

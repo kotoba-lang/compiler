@@ -24,7 +24,7 @@
 (def ^:private max-bindings 4096)
 (def ^:private max-parameters 5)
 (def ^:private max-symbol-chars 128)
-(def ^:private arithmetic '#{+ - * quot bit-xor})
+(def ^:private arithmetic '#{+ - * quot bit-xor bit-and})
 (def ^:private comparisons '#{= < > <= >=})
 (def ^:private heap-operations '{pair 2 pair-first 1 pair-second 1})
 
@@ -112,7 +112,7 @@
 
         (contains? arithmetic op)
         (do
-          (when (or (empty? args) (and (contains? '#{quot bit-xor} op) (not= 2 (count args))))
+          (when (or (empty? args) (and (contains? '#{quot bit-xor bit-and} op) (not= 2 (count args))))
             (reject! "runtime KIR arithmetic arity rejected" {:operation op}))
           (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
 

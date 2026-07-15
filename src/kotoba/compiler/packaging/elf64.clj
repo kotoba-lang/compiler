@@ -11,7 +11,9 @@
 (def ^:private journal-entry 'aiueos-journal-plan)
 (def ^:private kernel-object-entries
   {journal-entry {:arity 4 :symbol "kotoba_aiueos_journal_plan"}
-   'aiueos-fnv1a {:arity 2 :symbol "kotoba_aiueos_fnv1a"}})
+   'aiueos-fnv1a {:arity 2 :symbol "kotoba_aiueos_fnv1a"}
+   'aiueos-journal-record-valid {:arity 2 :symbol "kotoba_aiueos_journal_record_valid"}
+   'aiueos-object-transaction-valid {:arity 2 :symbol "kotoba_aiueos_object_transaction_valid"}})
 
 (defn- le [n width]
   (mapv #(bit-and (unsigned-bit-shift-right (long n) (* 8 %)) 0xff)
@@ -143,7 +145,8 @@
                       {:entry object-entry :arity (:arity export)})))
     ;; lea r9,[rip+.data] (relocated); optionally replenish bounded-memory
     ;; fuel; sub rsp,8; call local Kotoba entry; add rsp,8; ret.
-    (let [bounded-memory? (= object-entry 'aiueos-fnv1a)
+    (let [bounded-memory? (contains? '#{aiueos-fnv1a aiueos-journal-record-valid
+                                        aiueos-object-transaction-valid} object-entry)
           replenish (when bounded-memory?
                       [0x49 0xc7 0x41 0x08 0x00 0x04 0x00 0x00]) ; [r9+8]=1024
           wrapper (vec (concat [0x4c 0x8d 0x0d 0 0 0 0] replenish
