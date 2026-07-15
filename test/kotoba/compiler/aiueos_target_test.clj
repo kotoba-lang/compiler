@@ -221,9 +221,9 @@
     (is (some #(= [0x48 0x81 0xf9 0x00 0x02 0x00 0x00] %)
               (partition 7 1 bytes))
         "the output store retains the 512-byte bound")
-    (is (some #(= [0x49 0xc7 0x41 0x08 0x40 0x42 0x0f 0x00] %)
+    (is (some #(= [0x49 0xc7 0x41 0x08 0x80 0x96 0x98 0x00] %)
               (partition 8 1 bytes))
-        "the freestanding wrapper supplies one million metered iterations")))
+        "the freestanding wrapper supplies ten million metered iterations")))
 
 (deftest bounded-kernel-memory-is-rejected-for-host-targets
   (let [source "(defn read-byte [base length index] (kernel-load-u8 base length index)) (defn main [] 0)"]
