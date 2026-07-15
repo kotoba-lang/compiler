@@ -202,7 +202,9 @@
            ['aiueos-capability-plan '[slot generation type state-rights request]
             "kotoba_aiueos_capability_plan"]
            ['aiueos-service-lifecycle '[generation restarts event budget]
-            "kotoba_aiueos_service_lifecycle"]]]
+            "kotoba_aiueos_service_lifecycle"]
+           ['aiueos-service-registry-build '[base length sequence state0 state1]
+            "kotoba_aiueos_service_registry_build"]]]
     (let [source (str "(defn " entry " " params " 1) (defn main [] 0)")
           {:keys [object]} (compiler/compile-source source :x86_64-aiueos-kernel-v1)]
       (is (= expected (:export object)))
