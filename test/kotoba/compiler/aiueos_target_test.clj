@@ -28,7 +28,9 @@
     (testing (str name)
       (let [profile (target/profile name)]
         (is (= :aiueos (:os profile)))
-        (is (= :none (:runtime profile)))
+        (is (= (if (= name :x86_64-aiueos-user-v1)
+                 :kotoba-aiueos-user-v1 :none)
+               (:runtime profile)))
         (is (false? (:ambient-syscalls profile)))
         (is (= expected (select-keys profile (keys expected))))))))
 
@@ -39,7 +41,9 @@
       (let [artifact (:artifact (compiler/compile-source source name))]
         (is (= name (:target artifact)))
         (is (= (target/profile name) (:target-profile artifact)))
-        (is (= :none (get-in artifact [:target-profile :runtime])))))))
+        (is (= (if (= name :x86_64-aiueos-user-v1)
+                 :kotoba-aiueos-user-v1 :none)
+               (get-in artifact [:target-profile :runtime])))))))
 
 (deftest kernel-target-emits-a-real-freestanding-elf64-image
   (let [{:keys [binary]} (compiler/compile-source "(defn main [] (+ 40 2))"
@@ -130,8 +134,22 @@
     (is (= 2 (read-le bytes 56 2)))
     (is (= [0x4c 0x8d 0x0d] (subvec bytes 0x1000 0x1003)))
     (is (= [0x48 0x89 0x05] (subvec bytes 0x100c 0x100f)))
-    (is (= :kotoba-sysv-context-r9-result-v1 (:entry-contract binary)))
+    (is (= :kotoba-sysv-context-r9-aiueos-runtime-v2 (:entry-contract binary)))
+    (is (= 80 (:runtime-handle-offset binary)))
     (is (empty? (:imports binary)))))
+
+(deftest user-target-lowers-admitted-capability-to-aiueos-runtime-syscall
+  (let [{:keys [binary]}
+        (compiler/compile-source "(defn main [] (cap-call 2 0))"
+                                 :x86_64-aiueos-user-v1
+                                 {:allow #{[:cap/call 2]}})
+        bytes (:bytes binary)]
+    (is (= 4 (read-le bytes (+ 0x2000 16) 1)) "only capability 2 is admitted")
+    (is (= 0x1e1020 (read-le bytes (+ 0x2000 48) 8)))
+    (is (= [0xb8 5 0 0 0 0x48 0x8b 0x7f 0x50 0x0f 5 0xc3]
+           (subvec bytes 0x1020 0x102c)))
+    (is (zero? (read-le bytes (+ 0x2000 80) 8))
+        "the loader, never the compiler, installs the domain-owned handle")))
 
 (deftest kernel-target-exports-four-argument-journal-planner
   (let [{:keys [object]}

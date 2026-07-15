@@ -41,10 +41,13 @@ unresolved host symbol. `kotoba-compiler compile ... --target
 x86_64-aiueos-kernel-v1` writes this object directly, without generating C or
 invoking a C compiler.
 
-The static context currently admits pure computation only: its capability
-bitmap is empty and its capability function pointers are null. Hardware and
-kernel services must be introduced through a versioned aiueos context ABI,
-not accidental host linkage.
+The user context carries a compiler-derived capability bitmap, a fixed RX
+capability-call trampoline, and an initially zero runtime-handle slot at offset
+80. The authenticated aiueos loader installs a domain-owned handle before CPL3
+entry. An admitted Kotoba `cap-call` reaches syscall 5 with only its literal
+capability ID, scalar value, and that handle; programs still receive no ambient
+syscalls, host imports, or kernel addresses. Kernel and firmware contexts keep
+their sealed callback slots null unless their own ABI explicitly supplies one.
 
 ## Remaining boundary
 

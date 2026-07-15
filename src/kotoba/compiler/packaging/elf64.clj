@@ -8,6 +8,7 @@
 (def ^:private text-offset page-size)
 (def ^:private data-offset (* 2 page-size))
 (def ^:private context-size 80)
+(def ^:private user-context-size 88)
 (def ^:private user-image-base 0x1e0000)
 
 (def ^:private journal-entry 'aiueos-journal-plan)
@@ -76,12 +77,28 @@
   (let [entry-address (+ user-image-base text-offset)
         after-lea (+ entry-address 7)
         after-call (+ entry-address 12)
-        after-store (+ entry-address 19)]
+        after-store (+ entry-address 19)
+        runtime-trampoline (+ entry-address 32)]
     (vec (concat [0x4c 0x8d 0x0d] (le (- context-address after-lea) 4)
                  [0xe8] (le (- main-address after-call) 4)
                  [0x48 0x89 0x05] (le (- context-address after-store) 4)
                  [0xf3 0x90 0xeb 0xfc]
-                 (repeat 9 0x90)))))
+                 (repeat 9 0x90)
+                 ;; Kotoba cap-call callback: the compiler-derived bitmap has
+                 ;; already admitted rsi=capability-id. rdx carries its scalar
+                 ;; argument. Load the kernel-issued, domain-owned handle from
+                 ;; context+80 and enter aiueos syscall 5. No ambient address or
+                 ;; host import is exposed to the program.
+                 [0xb8 0x05 0x00 0x00 0x00       ; mov eax,5
+                  0x48 0x8b 0x7f 0x50            ; mov rdi,[rdi+80]
+                  0x0f 0x05 0xc3]                ; syscall; ret
+                 (repeat (- 64 44) 0x90)))))
+
+(defn- capability-bitmap [effects]
+  (reduce (fn [bitmap [_ id]]
+            (update bitmap (quot id 8) bit-or (bit-shift-left 1 (mod id 8))))
+          (vec (repeat 32 0))
+          (filter #(= :cap/call (first %)) effects)))
 
 (defn package-kernel
   "Package a sealed aiueos kernel artifact as a freestanding ELF64 ET_EXEC.
@@ -144,20 +161,25 @@
       (throw (ex-info "aiueos process entry requires zero arguments" {:entry source-entry})))
     (let [entry-address (+ user-image-base text-offset)
           context-address (+ user-image-base data-offset)
-          shim (user-entry-shim (+ entry-address 32 (:offset export)) context-address)
+          shim (user-entry-shim (+ entry-address 64 (:offset export)) context-address)
           text (into shim (:code artifact))
-          context (into (vec (repeat 8 0)) (concat (le 256 8) (repeat (- context-size 16) 0)))
+          bitmap (capability-bitmap (:effects artifact))
+          callback (if (some #(= :cap/call (first %)) (:effects artifact))
+                     (+ entry-address 32) 0)
+          context (vec (concat (repeat 8 0) (le 256 8) bitmap
+                               (le callback 8) (repeat 24 0)
+                               (repeat 8 0)))
           names (mapv int (.getBytes "\u0000.text\u0000.data\u0000.shstrtab\u0000" "UTF-8"))
-          names-offset (+ data-offset context-size)
+          names-offset (+ data-offset user-context-size)
           section-offset (+ names-offset (count names)
                             (mod (- 8 (mod (+ names-offset (count names)) 8)) 8))
           sections [(vec (repeat 64 0))
                     (section-header 1 1 0x6 entry-address text-offset (count text) 16)
-                    (section-header 7 1 0x3 context-address data-offset context-size 8)
+                    (section-header 7 1 0x3 context-address data-offset user-context-size 8)
                     (section-header 13 3 0 0 names-offset (count names) 1)]
           header (elf-header entry-address 2 section-offset (count sections))
           phdrs (concat (program-header 0x5 text-offset entry-address (count text) (count text))
-                        (program-header 0x6 data-offset context-address context-size context-size))
+                        (program-header 0x6 data-offset context-address user-context-size user-context-size))
           before-text (padded (concat header phdrs) text-offset)
           before-data (padded (concat before-text text) data-offset)
           before-sections (padded (concat before-data context names) section-offset)]
@@ -165,7 +187,8 @@
        :source-entry source-entry :entry-address entry-address
        :result-address context-address :sections [:text :data :shstrtab]
        :imports [] :interpreter nil
-       :entry-contract :kotoba-sysv-context-r9-result-v1
+       :entry-contract :kotoba-sysv-context-r9-aiueos-runtime-v2
+       :runtime-handle-offset 80
        :bytes (vec (concat before-sections (mapcat identity sections)))})))
 
 (defn- rela [offset symbol type addend]
