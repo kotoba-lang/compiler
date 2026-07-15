@@ -25,7 +25,8 @@
           (normalize-expr body env'))
         (apply list op (map #(normalize-expr % env) args))))))
 
-(defn- token-size [token] (if (and (map? token) (:call token)) 5 1))
+(defn- token-size [token]
+  (if (and (map? token) (or (:call token) (:tail-self token))) 5 1))
 (defn- code-size [tokens] (reduce + (map token-size tokens)))
 (declare emit-expr)
 
@@ -40,21 +41,45 @@
                [0x48 0x89 0xc1 0x58]
                opcode)))
 
-(defn- emit-call [op args env {:keys [temp-depth] :as ctx}]
+(defn- emit-tail-self-call [args env {:keys [param-count pad? temp-depth] :as ctx}]
+  ;; All arguments are evaluated before any parameter slot is overwritten.
+  ;; r11 then anchors the existing function frame while the temporary values
+  ;; are popped in reverse order into their corresponding slots.  Charging
+  ;; fuel here preserves ordinary call semantics; the final jump re-enters
+  ;; the expression body without growing the native stack.
+  (let [argc (count args)
+        values (loop [remaining args depth temp-depth out []]
+                 (if-let [arg (first remaining)]
+                   (recur (next remaining) (inc depth)
+                          (into out (concat (emit-expr arg env (assoc ctx :tail? false :temp-depth depth))
+                                            [0x50])))
+                   out))
+        anchor [0x4c 0x8d 0x9c 0x24] ; lea r11,[rsp+argc*8]
+        stores (mapcat (fn [param-index]
+                         (let [disp (* 8 (+ (if pad? 1 0)
+                                              (- param-count 1 param-index)))]
+                           (concat [0x58 0x49 0x89 0x83] (le32 disp))))
+                       (reverse (range argc)))]
+    (vec (concat values anchor (le32 (* argc 8)) stores fuel-charge
+                 [{:tail-self true}]))))
+
+(defn- emit-call [op args env {:keys [temp-depth function-name tail?] :as ctx}]
   (let [argc (count args)]
     (when (> argc 5)
       (throw (ex-info "x86-64 fuel ABI supports at most five arguments"
                       {:phase :x86-64 :function op :arity argc})))
-    (loop [remaining args depth temp-depth out []]
+    (if (and tail? (= op function-name))
+      (emit-tail-self-call args env ctx)
+      (loop [remaining args depth temp-depth out []]
       (if-let [arg (first remaining)]
         (recur (next remaining) (inc depth)
-               (into out (concat (emit-expr arg env (assoc ctx :temp-depth depth)) [0x50])))
+               (into out (concat (emit-expr arg env (assoc ctx :tail? false :temp-depth depth)) [0x50])))
         (let [pops (mapcat #(nth arg-pops %) (reverse (range argc)))
               ;; SysV requires rsp%16==0 immediately before CALL. The fixed
               ;; function frame is aligned; expression temporaries may flip it.
               align? (odd? temp-depth)]
           (vec (concat out pops (when align? [0x50]) [{:call op}]
-                       (when align? [0x48 0x83 0xc4 0x08]))))))))
+                       (when align? [0x48 0x83 0xc4 0x08])))))))))
 
 (defn- emit-cap-call [cap-id value env {:keys [temp-depth] :as ctx}]
   (let [byte-offset (+ 16 (quot cap-id 8))
@@ -133,7 +158,7 @@
       (cond
         (= op 'if)
         (let [[test then else] args
-              test-code (emit-expr test env ctx)
+              test-code (emit-expr test env (assoc ctx :tail? false))
               then-code (emit-expr then env ctx)
               else-code (emit-expr else env ctx)]
           (vec (concat test-code [0x48 0x85 0xc0]
@@ -184,34 +209,46 @@
         env (zipmap params (range))
         prologue (concat fuel-charge (mapcat #(nth param-pushes %) (range n))
                          (when pad? [0x50]))
-        expression (emit-expr normalized env {:param-count n :pad? pad? :temp-depth 0})
+        expression (emit-expr normalized env {:param-count n :pad? pad? :temp-depth 0
+                                              :function-name name :tail? true})
         frame-bytes (* 8 (+ n (if pad? 1 0)))
         epilogue (concat [0x48 0x81 0xc4] (le32 frame-bytes) [0xc3])]
-    (vec (concat prologue expression epilogue))))
+    {:tokens (vec (concat prologue expression epilogue))
+     :expression-start (count prologue)}))
 
-(defn- finalize [tokens function-offset offsets]
+(defn- finalize [tokens function-offset expression-offset offsets]
   (loop [remaining tokens position 0 out []]
     (if-let [token (first remaining)]
-      (if (and (map? token) (:call token))
+      (cond
+        (and (map? token) (:call token))
         (let [absolute (+ function-offset position)
               target (get offsets (:call token))]
           (when-not target
             (throw (ex-info "unknown x86-64 call target" {:target (:call token)})))
           (recur (next remaining) (+ position 5)
                  (into out (concat [0xe8] (le32 (- target (+ absolute 5)))))))
+
+        (and (map? token) (:tail-self token))
+        (let [absolute (+ function-offset position)]
+          (recur (next remaining) (+ position 5)
+                 (into out (concat [0xe9] (le32 (- expression-offset (+ absolute 5)))))))
+
+        :else
         (recur (next remaining) (inc position) (conj out token)))
       out)))
 
 (defn emit-program [kir]
   (let [token-bodies (mapv (fn [f] [f (emit-function f)]) (:functions kir))
         offsets (loop [items token-bodies offset 0 out {}]
-                  (if-let [[f body] (first items)]
-                    (recur (next items) (+ offset (code-size body)) (assoc out (:name f) offset))
+                  (if-let [[f emitted] (first items)]
+                    (recur (next items) (+ offset (code-size (:tokens emitted)))
+                           (assoc out (:name f) offset))
                     out))]
     (loop [items token-bodies code [] exports {}]
-      (if-let [[function tokens] (first items)]
+      (if-let [[function emitted] (first items)]
         (let [offset (get offsets (:name function))
-              body (finalize tokens offset offsets)]
+              tokens (:tokens emitted)
+              body (finalize tokens offset (+ offset (:expression-start emitted)) offsets)]
           (recur (next items) (into code body)
                  (assoc exports (:name function)
                         {:offset offset :length (count body) :arity (count (:params function))})))
