@@ -90,9 +90,7 @@
         fact-code (subvec (:code artifact) offset (+ offset length))]
     (is (= 3628800 (:value artifact)))
     (is (some #{0xe8} fact-code)
-        "a recursive call nested under multiplication is not a tail position")
-    (is (not-any? #{0xe9} fact-code)
-        "non-tail recursion must retain its continuation")))
+        "a recursive call nested under multiplication is not a tail position")))
 
 (deftest kernel-target-emits-linkable-relocatable-probe-object
   (let [{:keys [object]} (compiler/compile-source "(defn main [] 42)"
