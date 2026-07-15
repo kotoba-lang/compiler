@@ -209,8 +209,30 @@
     (is (some #(= [0x49 0xc7 0x41 0x08 0x00 0x04 0x00 0x00] %)
               (partition 8 1 (:bytes object))))))
 
+(deftest kernel-target-exports-wide-bounded-sha256-function
+  (let [source "(defn aiueos-sha256 [input input-length output workspace workspace-length] (kernel-store-u8 output 32 0 (kernel-load-u8-16k input input-length 0))) (defn main [] 0)"
+        {:keys [object]} (compiler/compile-source source :x86_64-aiueos-kernel-v1)
+        bytes (:bytes object)]
+    (is (= "kotoba_aiueos_sha256" (:export object)))
+    (is (empty? (:imports object)))
+    (is (some #(= [0x48 0x81 0xf9 0x00 0x40 0x00 0x00] %)
+              (partition 7 1 bytes))
+        "the SHA input primitive admits at most 16 KiB")
+    (is (some #(= [0x48 0x81 0xf9 0x00 0x02 0x00 0x00] %)
+              (partition 7 1 bytes))
+        "the output store retains the 512-byte bound")
+    (is (some #(= [0x49 0xc7 0x41 0x08 0x40 0x42 0x0f 0x00] %)
+              (partition 8 1 bytes))
+        "the freestanding wrapper supplies one million metered iterations")))
+
 (deftest bounded-kernel-memory-is-rejected-for-host-targets
   (let [source "(defn read-byte [base length index] (kernel-load-u8 base length index)) (defn main [] 0)"]
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo #"requires the aiueos kernel target"
+         (compiler/compile-source source :x86_64-linux-kotoba-v1)))))
+
+(deftest wide-bounded-kernel-memory-is-rejected-for-host-targets
+  (let [source "(defn read-byte [base length index] (kernel-load-u8-16k base length index)) (defn main [] 0)"]
     (is (thrown-with-msg?
          clojure.lang.ExceptionInfo #"requires the aiueos kernel target"
          (compiler/compile-source source :x86_64-linux-kotoba-v1)))))
