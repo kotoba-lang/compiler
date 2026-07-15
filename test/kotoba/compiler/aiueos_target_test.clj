@@ -200,7 +200,9 @@
            ['aiueos-copy-in '[source source-length destination destination-length count]
             "kotoba_aiueos_copy_in"]
            ['aiueos-capability-plan '[slot generation type state-rights request]
-            "kotoba_aiueos_capability_plan"]]]
+            "kotoba_aiueos_capability_plan"]
+           ['aiueos-service-lifecycle '[generation restarts event budget]
+            "kotoba_aiueos_service_lifecycle"]]]
     (let [source (str "(defn " entry " " params " 1) (defn main [] 0)")
           {:keys [object]} (compiler/compile-source source :x86_64-aiueos-kernel-v1)]
       (is (= expected (:export object)))
