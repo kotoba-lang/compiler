@@ -243,7 +243,9 @@
            ['aiueos-user-object-journal-build '[base length sequence domain value]
             "kotoba_aiueos_user_object_journal_build"]
            ['aiueos-user-object-journal-valid '[base length domain]
-            "kotoba_aiueos_user_object_journal_valid"]]]
+            "kotoba_aiueos_user_object_journal_valid"]
+           ['aiueos-user-object-journal-value '[base length]
+            "kotoba_aiueos_user_object_journal_value"]]]
     (let [source (str "(defn " entry " " params " 1) (defn main [] 0)")
           {:keys [object]} (compiler/compile-source source :x86_64-aiueos-kernel-v1)]
       (is (= expected (:export object)))
