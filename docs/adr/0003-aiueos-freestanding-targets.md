@@ -53,6 +53,10 @@ The kernel-object export set also includes the five-argument
 `aiueos-user-object-journal-build` boundary. It lets aiueos link a Kotoba-owned
 serializer for domain-routed user transactions while the native substrate
 retains only queue ownership and sector I/O.
+The diagnostic kernel `ET_EXEC` packaging reserves three pages for generated
+RX text before its RW context page, so nontrivial bounded serializers are not
+artificially limited to a single text page. The relocatable object layout and
+aiueos user-image addresses remain unchanged.
 
 ## Remaining boundary
 
