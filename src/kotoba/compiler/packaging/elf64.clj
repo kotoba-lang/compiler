@@ -164,7 +164,9 @@
                                (symbol-entry 0 0x03 2 0 0)
                                (symbol-entry (+ 2 (count public-symbol)) 0x02 1 main-offset
                                              (count (:code artifact)))
-                               (symbol-entry 1 0x12 1 0 (count (:code artifact)))))
+                               ;; The public symbol owns the wrapper prefix; the
+                               ;; selected Kotoba function remains a local symbol.
+                               (symbol-entry 1 0x12 1 0 main-offset)))
           strtab-off (+ symtab-off (count symbols))
           shstr-off (+ strtab-off (count strtab))
           section-off (+ shstr-off (count shstr-bytes)
