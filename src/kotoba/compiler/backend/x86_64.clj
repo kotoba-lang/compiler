@@ -114,9 +114,9 @@
                  [0x4c 0x89 0xcf 0x41 0xff 0x51 offset]
                  (when align? [0x48 0x83 0xc4 0x08]) [0x41 0x59]))))
 
-(defn- emit-kernel-load-u8 [[base length index] env {:keys [temp-depth] :as ctx}]
+(defn- emit-kernel-load-u8 [[base length index] maximum env {:keys [temp-depth] :as ctx}]
   ;; Evaluate exactly once, then enforce a non-null base, an unsigned index
-  ;; below length, and the x86_64-aiueos-kernel-v1 maximum transfer of 512
+  ;; below length, and the operation profile's maximum transfer
   ;; bytes. Every violation reaches UD2 before memory is touched.
   (let [ctx (assoc ctx :tail? false)]
     (vec (concat
@@ -124,8 +124,8 @@
         (emit-expr length env (update ctx :temp-depth inc)) [0x50]
         (emit-expr index env (update ctx :temp-depth + 2))
         [0x59 0x5a                              ; rcx=length, rdx=base
-         0x48 0x81 0xf9 0x00 0x02 0x00 0x00    ; cmp rcx,512
-         0x0f 0x87 0x18 0x00 0x00 0x00         ; ja trap
+         0x48 0x81 0xf9] (le32 maximum)          ; cmp rcx,maximum
+        [0x0f 0x87 0x18 0x00 0x00 0x00         ; ja trap
          0x48 0x85 0xd2                         ; test rdx,rdx
          0x0f 0x84 0x0f 0x00 0x00 0x00         ; jz trap
          0x48 0x39 0xc8                         ; cmp rax,rcx
@@ -176,7 +176,10 @@
         (emit-heap-call op args env ctx)
 
         (= op 'kernel-load-u8)
-        (emit-kernel-load-u8 args env ctx)
+        (emit-kernel-load-u8 args 512 env ctx)
+
+        (= op 'kernel-load-u8-16k)
+        (emit-kernel-load-u8 args 16384 env ctx)
 
         (= op 'kernel-store-u8)
         (emit-kernel-store-u8 args env ctx)
