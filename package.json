@@ -21,6 +21,7 @@
     "test-wasmtime": "nbb scripts/test-wasmtime.cljs",
     "test-android-ndk": "nbb scripts/android-ndk-conformance.cljs",
     "test-ios-aot": "nbb scripts/ios-aot-conformance.cljs",
+    "test-ios-simulator": "nbb scripts/ios-simulator-conformance.cljs",
     "test-kind-server": "nbb scripts/kind-server-conformance.cljs",
     "test-release": "nbb scripts/release-conformance.cljs",
     "test-browsers": "nbb scripts/browser-matrix.cljs",

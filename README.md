@@ -181,6 +181,14 @@ Mach-O `__TEXT,__text`, and binds artifact, code, entry, and assembly digests in
 the manifest. Pinned Xcode 16.2 CI builds the text object and a no-JIT static
 host archive twice byte-identically. Device code signing, app embedding, trap
 isolation, and physical iPhone/iPad execution remain release gates.
+A separate CI job additionally links that same static host archive into a
+plain executable against the `iphonesimulator` SDK and runs it for real inside
+the iOS Simulator (`npm run test-ios-simulator`, arm64-native on the Apple
+Silicon CI runner, no Rosetta) -- unlike the device path above, this actually
+executes the compiled code and checks the result, not just static Mach-O
+shape. This needs no physical hardware or paid signing (Simulator binaries
+run unsigned), but does not by itself count toward this repo's coverage
+percentage -- see ADR-0001's Phase 3 for why.
 
 `wasm32-wasi` is the first server/component profile. Its Wasm custom section
 seals `wasm32-wasi-kotoba-v1`; the dependency-free host rejects missing or
