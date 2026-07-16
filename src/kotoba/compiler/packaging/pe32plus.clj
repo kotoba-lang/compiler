@@ -205,12 +205,23 @@
                               :filesz (read-le kernel (+ offset 32) 8)
                               :memsz (read-le kernel (+ offset 40) 8)}))
                          (range phnum))]
+      (let [first-segment (first segments) second-segment (second segments)
+            entry-segment (some #(and (= 5 (:flags %))
+                                      (<= (:paddr %) entry)
+                                      (< entry (+ (:paddr %) (:memsz %)))) segments)
+            non-overlap (or (<= (+ (:paddr first-segment) (:memsz first-segment))
+                                (:paddr second-segment))
+                            (<= (+ (:paddr second-segment) (:memsz second-segment))
+                                (:paddr first-segment)))]
       (when-not (and (= 2 phnum) (= 56 phentsize)
                      (every? #(and (= 1 (:type %)) (pos? (:filesz %))
                                    (= (:filesz %) (:memsz %))
+                                   (<= 0x100000 (:paddr %))
+                                   (<= (:memsz %) 0x100000)
+                                   (<= (:paddr %) (- 0x40000000 (:memsz %)))
                                    (zero? (mod (:paddr %) 4096))
                                    (<= (+ (:offset %) (:filesz %)) (count kernel))) segments)
-                     (= [5 6] (mapv :flags segments)))
+                     (= [5 6] (mapv :flags segments)) entry-segment non-overlap)
         (throw (ex-info "embedded kernel PT_LOAD contract rejected" {:segments segments})))
       (let [data-addresses [0 8]
             variables-size 56
@@ -294,4 +305,4 @@
         {:format :pe32+-embedded-kernel/v1 :target firmware-target
          :entry :efi_main :entry-rva text-rva :sections [:text :data :reloc]
          :imports [] :embedded-kernel-sha256 (artifact/sha256 kernel)
-         :bytes bytes}))))
+         :bytes bytes})))))
