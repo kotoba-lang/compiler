@@ -303,6 +303,15 @@
     (is (= "kotoba_aiueos_page_mapping_plan" (:export object)))
     (is (empty? (:imports object)))))
 
+(deftest kernel-target-exports-bounded-process-create-plan
+  (let [source "(defn aiueos-process-create-plan [table length domain count stride] (kernel-load-u8 table length 0)) (defn main [] 0)"
+        {:keys [object]} (compiler/compile-source source :x86_64-aiueos-kernel-v1)
+        bytes (:bytes object)]
+    (is (= "kotoba_aiueos_process_create_plan" (:export object)))
+    (is (empty? (:imports object)))
+    (is (some #(= [0x48 0x81 0xf9 0x00 0x02 0x00 0x00] %)
+              (partition 7 1 bytes)))))
+
 (deftest bounded-kernel-memory-is-rejected-for-host-targets
   (let [source "(defn read-byte [base length index] (kernel-load-u8 base length index)) (defn main [] 0)"]
     (is (thrown-with-msg?
