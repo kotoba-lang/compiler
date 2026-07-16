@@ -312,6 +312,12 @@
     (is (some #(= [0x48 0x81 0xf9 0x00 0x02 0x00 0x00] %)
               (partition 7 1 bytes)))))
 
+(deftest kernel-target-exports-process-teardown-plan
+  (let [source "(defn aiueos-process-teardown-plan [domain reaped revoked reclaimed stage] (+ domain (+ reaped (+ revoked (+ reclaimed stage))))) (defn main [] 0)"
+        {:keys [object]} (compiler/compile-source source :x86_64-aiueos-kernel-v1)]
+    (is (= "kotoba_aiueos_process_teardown_plan" (:export object)))
+    (is (empty? (:imports object)))))
+
 (deftest bounded-kernel-memory-is-rejected-for-host-targets
   (let [source "(defn read-byte [base length index] (kernel-load-u8 base length index)) (defn main [] 0)"]
     (is (thrown-with-msg?
