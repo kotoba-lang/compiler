@@ -29,6 +29,7 @@
    'aiueos-syscall-range-valid {:arity 4 :symbol "kotoba_aiueos_syscall_range_valid"}
    'aiueos-copy-in {:arity 5 :symbol "kotoba_aiueos_copy_in"}
    'aiueos-capability-plan {:arity 5 :symbol "kotoba_aiueos_capability_plan"}
+   'aiueos-capability-mutation-plan {:arity 5 :symbol "kotoba_aiueos_capability_mutation_plan"}
    'aiueos-service-lifecycle {:arity 4 :symbol "kotoba_aiueos_service_lifecycle"}
    'aiueos-service-registry-build {:arity 5 :symbol "kotoba_aiueos_service_registry_build"}
    'aiueos-service-registry-state {:arity 3 :symbol "kotoba_aiueos_service_registry_state"}
