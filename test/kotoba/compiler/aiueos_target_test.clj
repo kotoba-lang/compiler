@@ -225,6 +225,19 @@
               (partition 8 1 bytes))
         "the freestanding wrapper supplies ten million metered iterations")))
 
+(deftest kernel-target-exports-bounded-rsa2048-verifier
+  (let [source "(defn aiueos-rsa2048-sha256-verify [signature digest workspace workspace-length unused] (if (< workspace-length 1280) 0 (kernel-store-u8-4k workspace workspace-length 0 (kernel-load-u8-4k signature 256 0)))) (defn main [] 0)"
+        {:keys [object]} (compiler/compile-source source :x86_64-aiueos-kernel-v1)
+        bytes (:bytes object)]
+    (is (= "kotoba_aiueos_rsa2048_sha256_verify" (:export object)))
+    (is (empty? (:imports object)))
+    (is (some #(= [0x48 0x81 0xf9 0x00 0x10 0x00 0x00] %)
+              (partition 7 1 bytes))
+        "RSA inputs and workspace retain the compiler's 4 KiB bound")
+    (is (some #(= [0x49 0xc7 0x41 0x08 0x80 0xb2 0xe6 0x0e] %)
+              (partition 8 1 bytes))
+        "the RSA wrapper supplies 250 million metered iterations")))
+
 (deftest bounded-kernel-memory-is-rejected-for-host-targets
   (let [source "(defn read-byte [base length index] (kernel-load-u8 base length index)) (defn main [] 0)"]
     (is (thrown-with-msg?

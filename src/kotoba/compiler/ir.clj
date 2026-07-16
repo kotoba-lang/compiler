@@ -81,7 +81,8 @@
         (= op 'pair-second)
         (read-pair heap (eval-expr (first args) env functions fuel heap call-stack cap-call) 1)
 
-        (contains? '#{kernel-load-u8 kernel-load-u8-16k kernel-store-u8} op)
+        (contains? '#{kernel-load-u8 kernel-load-u8-4k kernel-load-u8-16k
+                      kernel-store-u8 kernel-store-u8-4k} op)
         (trap! :kernel-memory-unavailable {:operation op})
 
         (contains? '#{+ - * quot bit-xor bit-and = < > <= >=} op)
