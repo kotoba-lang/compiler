@@ -196,6 +196,7 @@
         (= op 'kernel-store-u8-4k)
         (emit-kernel-store-u8 args 4096 env ctx)
 
+        (= op 'kernel-boot-info) [0x49 0x8b 0x41 0x50]
         (= op 'kernel-read-cr2) [0x0f 0x20 0xd0]
         (= op 'kernel-read-cr3) [0x0f 0x20 0xd8]
         (= op 'kernel-write-cr3)

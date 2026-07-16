@@ -9,6 +9,7 @@
 (def ^:private data-offset (* 2 page-size))
 (def ^:private kernel-data-offset (* 8 page-size))
 (def ^:private context-size 80)
+(def ^:private kernel-image-context-size 88)
 (def ^:private user-context-size 88)
 (def ^:private user-image-base 0x1e0000)
 
@@ -85,12 +86,14 @@
                (le alignment 8) (le 0 8))))
 
 (defn- entry-shim [main-address context-address]
-  ;; lea r9,[rip+context]; call Kotoba entry; cli; hlt forever. The static
-  ;; context supplies fuel and an empty capability bitmap without a host ABI.
+  ;; Preserve the loader's SysV rdi boot-info pointer in context+80, then
+  ;; initialize r9 and call the zero-arity Kotoba entry.
   (let [shim-address (+ image-base text-offset)
-        after-lea (+ shim-address 7)
-        after-call (+ shim-address 12)]
-    (vec (concat [0x4c 0x8d 0x0d] (le (- context-address after-lea) 4)
+        after-store (+ shim-address 7)
+        after-lea (+ shim-address 14)
+        after-call (+ shim-address 19)]
+    (vec (concat [0x48 0x89 0x3d] (le (- (+ context-address 80) after-store) 4)
+                 [0x4c 0x8d 0x0d] (le (- context-address after-lea) 4)
                  [0xe8] (le (- main-address after-call) 4)
                  [0xfa 0xf4 0xeb 0xfd]))))
 
@@ -140,20 +143,22 @@
       (throw (ex-info "Kotoba kernel entry is not exported" {:entry source-entry})))
     (let [entry-address (+ image-base text-offset)
           context-address (+ image-base kernel-data-offset)
-          shim (entry-shim (+ entry-address 16 (:offset export)) context-address)
+          shim (entry-shim (+ entry-address 23 (:offset export)) context-address)
           text (into shim (:code artifact))
-          context (into (vec (repeat 8 0)) (concat (le 256 8) (repeat (- context-size 16) 0)))
+          context (into (vec (repeat 8 0))
+                        (concat (le 256 8) (repeat (- kernel-image-context-size 16) 0)))
           names (mapv int (.getBytes "\u0000.text\u0000.data\u0000.shstrtab\u0000" "UTF-8"))
-          names-offset (+ kernel-data-offset context-size)
+          names-offset (+ kernel-data-offset kernel-image-context-size)
           section-offset (+ names-offset (count names)
                             (mod (- 8 (mod (+ names-offset (count names)) 8)) 8))
           sections [(vec (repeat 64 0))
                     (section-header 1 1 0x6 entry-address text-offset (count text) 16)
-                    (section-header 7 1 0x3 context-address kernel-data-offset context-size 8)
+                    (section-header 7 1 0x3 context-address kernel-data-offset kernel-image-context-size 8)
                     (section-header 13 3 0 0 names-offset (count names) 1)]
           header (elf-header entry-address 2 section-offset (count sections))
           phdrs (concat (program-header 0x5 text-offset entry-address (count text) (count text))
-                        (program-header 0x6 kernel-data-offset context-address context-size context-size))
+                        (program-header 0x6 kernel-data-offset context-address
+                                        kernel-image-context-size kernel-image-context-size))
           before-text (padded (concat header phdrs) text-offset)
           before-data (padded (concat before-text text) kernel-data-offset)
           before-sections (padded (concat before-data context names) section-offset)
