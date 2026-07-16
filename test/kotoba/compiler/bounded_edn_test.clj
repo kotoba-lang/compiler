@@ -19,7 +19,13 @@
                                  (apply str (repeat 129 "]"))) #"nesting"]
            ["oversized atom" (apply str (repeat 4097 "9")) #"token"]
            ["tagged object" "#inst \"2026-07-11\"" #"dispatch forms"]
-           ["discard form" "{:safe true} #_ :hidden" #"dispatch forms"]]]
+           ["discard form" "{:safe true} #_ :hidden" #"dispatch forms"]
+           ;; Previously untested here even though bounded-edn/validate-shape!
+           ;; has enforced both since this namespace's introduction -- added
+           ;; alongside porting these same two limits to the nbb-native path
+           ;; (kotoba.compiler.nbb.cli/validate-edn-shape!, scripts/conformance.cljs).
+           ["oversized string" (str "\"" (apply str (repeat 1048577 "a")) "\"") #"string exceeds"]
+           ["too many nodes" (str "[" (clojure.string/join " " (repeat 200001 "1")) "]") #"too many nodes"]]]
     (testing label
       (let [error (trap #(bounded-edn/read-string input))]
         (is (instance? clojure.lang.ExceptionInfo error))
