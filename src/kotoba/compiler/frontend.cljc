@@ -1,7 +1,15 @@
 (ns kotoba.compiler.frontend
+  ;; `clojure.set` is required on both runtimes, so `:require` is never
+  ;; empty -- an empty `(:require)` (what results if EVERY item inside it
+  ;; were individually `#?()`-conditional and none matched) fails ns-form
+  ;; spec validation (confirmed live; see `kotoba.compiler.ir`'s ns form
+  ;; for the fuller explanation). `#?@` (splicing) rather than `#?` here
+  ;; because each branch below is more than one require-spec.
   (:require [clojure.set :as set]
-            [clojure.tools.reader :as reader]
-            [clojure.tools.reader.reader-types :as rt]))
+            #?@(:clj [[clojure.tools.reader :as reader]
+                      [clojure.tools.reader.reader-types :as rt]]
+                :cljs [[kotoba.compiler.kotoba-reader :as kr]
+                       [kotoba.compiler.cljs-i64 :as i64]])))
 
 (def forbidden-heads
   '#{eval load load-file require use import ns-resolve resolve alter-var-root
@@ -40,6 +48,21 @@
 (def max-symbol-chars 128)
 (def max-list-items 128)
 
+(defn- kotoba-integer?
+  "True for a value that is (or stands for) a `.kotoba` integer literal --
+  plain `integer?` on `:clj`. On `:cljs` a literal may be EITHER a JS
+  `bigint` (read from `.kotoba` source via `kotoba.compiler.kotoba-reader`)
+  OR a plain cljs number (synthesized directly by this namespace's own
+  desugaring, e.g. `desugar-and`'s vacuous `1`, `when`'s trailing `0`, `get`'s
+  default `0` -- ordinary Clojure literals in THIS file's source, never
+  routed through the reader) -- both are valid until
+  `kotoba.compiler.ir/eval-expr` coerces every literal to `bigint` via
+  `cljs-i64/->bigint` at the single point it enters the runtime value
+  stream. Plain cljs `integer?`/`int?` do not recognize `bigint`
+  (confirmed live), so this checks both forms explicitly."
+  [form]
+  #?(:clj (integer? form) :cljs (or (i64/bigint-value? form) (integer? form))))
+
 (defn- check-reader-depth! [source]
   (loop [index 0 depth 0 in-string? false escaped? false in-comment? false]
     (when (< index (count source))
@@ -68,16 +91,33 @@
   (when (re-find #"#=" source)
     (throw (ex-info "reader evaluation is forbidden" {:phase :read})))
   (check-reader-depth! source)
-  (let [r (rt/string-push-back-reader source)]
-    (loop [out []]
-      (when (> (count out) 10000)
-        (throw (ex-info "too many top-level forms" {:phase :read})))
-      (let [x (try
-                (reader/read {:read-cond :allow :features #{:kotoba} :eof ::eof} r)
-                (catch Exception error
-                  (throw (ex-info "source reader rejected input"
-                                  {:phase :read} error))))]
-        (if (= x ::eof) out (recur (conj out x)))))))
+  #?(:clj
+     (let [r (rt/string-push-back-reader source)]
+       (loop [out []]
+         (when (> (count out) 10000)
+           (throw (ex-info "too many top-level forms" {:phase :read})))
+         (let [x (try
+                   (reader/read {:read-cond :allow :features #{:kotoba} :eof ::eof} r)
+                   (catch Exception error
+                     (throw (ex-info "source reader rejected input"
+                                     {:phase :read} error))))]
+           (if (= x ::eof) out (recur (conj out x))))))
+     ;; kotoba-reader (kr) is a purpose-built substitute for the JVM-only
+     ;; clojure.tools.reader -- see its own ns docstring for why
+     ;; cljs.tools.reader (the nominal ClojureScript sibling) isn't used
+     ;; instead. It parses the whole source in one pass rather than one form
+     ;; at a time, so the >10000 admission check runs post-hoc here instead
+     ;; of per-iteration -- equivalent outcome, same 1 MiB source cap already
+     ;; bounds how large that one pass can be.
+     :cljs
+     (let [out (try
+                 (kr/read-forms source)
+                 (catch :default error
+                   (throw (ex-info "source reader rejected input"
+                                   {:phase :read} error))))]
+       (when (> (count out) 10000)
+         (throw (ex-info "too many top-level forms" {:phase :read})))
+       out)))
 
 (defn- reject! [message form]
   (throw (ex-info message {:phase :subset :form form})))
@@ -150,12 +190,25 @@
   Collision probability for the realistically small keyword vocabulary of
   one .kotoba module is astronomically low but not proven zero -- a known,
   documented limitation, not eliminated."
-  [^String s]
-  (let [bs (.getBytes s "UTF-8")
-        offset-basis -3750763034362895579  ; 0xcbf29ce484222325 as signed i64
-        prime 1099511628211]                ; 0x100000001b3
-    (reduce (fn [h b] (unchecked-multiply (bit-xor h (bit-and (long b) 0xff)) prime))
-            offset-basis bs)))
+  [s]
+  #?(:clj
+     (let [bs (.getBytes ^String s "UTF-8")
+           offset-basis -3750763034362895579  ; 0xcbf29ce484222325 as signed i64
+           prime 1099511628211]                ; 0x100000001b3
+       (reduce (fn [h b] (unchecked-multiply (bit-xor h (bit-and (long b) 0xff)) prime))
+               offset-basis bs))
+     :cljs
+     ;; Same FNV-1a algorithm, over JS bigint instead of JVM long, so a
+     ;; keyword interned on this path hashes to the IDENTICAL i64 constant
+     ;; the JVM path would emit for the same keyword (this compiler's own
+     ;; reproducible-build gates require byte-for-byte identical output).
+     (let [bs (js/TextEncoder.)
+           bytes (.encode bs s)
+           offset-basis (js/BigInt "-3750763034362895579")
+           prime (js/BigInt "1099511628211")]
+       (reduce (fn [h b]
+                 (i64/wrap-i64 (* (i64/wrap-i64 (bit-xor h (js/BigInt b))) prime)))
+               offset-basis (js/Array.from bytes)))))
 
 (defn- keyword->i64 [kw] (fnv1a-i64 (str kw)))
 
@@ -170,7 +223,16 @@
   [form]
   (when (> (count form) max-list-items)
     (reject! "map entry count exceeds admission limit" form))
-  (let [entries (sort-by (fn [[k _]] (pr-str k)) (seq form))
+  ;; #?(:cljs ...): a plain `pr-str` on a `bigint` key prints as
+  ;; "#object[BigInt 5]" (confirmed live), not "5" like the JVM path's Long
+  ;; -- diverging sort order between an integer key and e.g. a keyword key
+  ;; in the same map literal. `.toString()` on bigint gives the identical
+  ;; plain-digit form Long's own `pr-str` produces, so entries sort
+  ;; byte-identically to the JVM path regardless of key type mix.
+  (let [entries (sort-by (fn [[k _]]
+                            #?(:clj (pr-str k)
+                               :cljs (if (i64/bigint-value? k) (.toString k) (pr-str k))))
+                          (seq form))
         pairs (map (fn [[k v]] (list 'pair (desugar-expr k) (desugar-expr v))) entries)]
     (reduce (fn [tail item] (list 'pair item tail)) 0 (reverse pairs))))
 
@@ -504,8 +566,11 @@
   (when (> depth 256)
     (reject! "expression nesting exceeds admission limit" form))
   (cond
-    (integer? form) (if (<= Long/MIN_VALUE form Long/MAX_VALUE) form
-                        (reject! "integer literal is outside i64" form))
+    (kotoba-integer? form)
+    #?(:clj (if (<= Long/MIN_VALUE form Long/MAX_VALUE) form
+                (reject! "integer literal is outside i64" form))
+       :cljs (if (i64/in-i64-range? form) form
+                 (reject! "integer literal is outside i64" form)))
     (symbol? form) (if (contains? locals form) form
                        (reject! "unbound or dynamic symbol is forbidden" form))
     (seq? form)
@@ -527,7 +592,7 @@
 
         (= op 'cap-call)
         (let [[cap-id value :as call-args] args]
-          (when-not (and (= 2 (count call-args)) (integer? cap-id) (<= 0 cap-id 255))
+          (when-not (and (= 2 (count call-args)) (kotoba-integer? cap-id) (<= 0 cap-id 255))
             (reject! "cap-call requires a literal capability id in [0,255] and one value" form))
           (validate-expr value locals functions (inc depth) budget))
 
@@ -596,7 +661,7 @@
 
 (defn- lowered-cost [form env]
   (cond
-    (integer? form) 1
+    (kotoba-integer? form) 1
     (symbol? form) (get env form 1)
     :else
     (let [[op & args] form]

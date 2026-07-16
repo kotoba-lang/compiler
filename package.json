@@ -6,6 +6,8 @@
     "nbb": "1.4.208"
   },
   "scripts": {
+    "test-nbb-wasm32": "nbb --classpath .:src test/nbb/run.cljs",
+    "generate-nbb-wasm32-golden": "nbb --classpath .:src test/nbb/generate-golden.cljs",
     "conformance": "nbb scripts/conformance.cljs",
     "sanitizer": "nbb scripts/sanitizer.cljs",
     "fuzz": "nbb scripts/fuzz-native.cljs",

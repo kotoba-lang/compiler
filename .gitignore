@@ -7,3 +7,7 @@
 /.tools/
 *.kexe
 *.wasm
+# Golden fixtures for test/nbb/run.cljs are checked in on purpose (the
+# nbb-native wasm32 path's byte-identical cross-check against the JVM
+# path needs them committed, not regenerated on every clone).
+!test/nbb/golden/*.wasm

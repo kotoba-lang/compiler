@@ -67,6 +67,43 @@ source -> inert reader -> typed/effect HIR -> SSA-like KIR
        -> wasm32 | x86_64 | aarch64 | cljs -> independent verifier -> admission
 ```
 
+## Runtime: nbb-native for wasm32, JVM compat for everything else
+
+`bin/kotoba compile`/`check` for a `wasm32`/`wasm32-browser`/`wasm32-wasi`
+`--target` runs entirely under `nbb` (ClojureScript on Node) -- **no JVM
+process is spawned at all** for that path, matching this monorepo's
+repo-wide runtime priority (`kotoba wasm runtime` first, JVM/`bb` demoted to
+last-resort compat). The frontend reader/validator
+(`kotoba.compiler.frontend`), the KIR lowering/compile-time oracle
+(`kotoba.compiler.ir`), the wasm32 backend (`kotoba.compiler.backend.wasm`),
+and capability admission (`kotoba.compiler.admission`) are `.cljc`, sharing
+one source with the JVM path (no behavior fork, no second implementation to
+drift) -- only a handful of reader-conditional branches differ, mainly
+around representing `.kotoba`'s full signed-64-bit integer semantics as JS
+`bigint` (`kotoba.compiler.cljs-i64`) instead of a JVM `long`, and reading
+`.kotoba` source with a small purpose-built reader
+(`kotoba.compiler.kotoba-reader`) instead of the JVM-only
+`clojure.tools.reader` (its nominal ClojureScript sibling,
+`cljs.tools.reader`, depends on several `cljs.core` internals nbb's SCI
+interpreter doesn't resolve -- see that ns's docstring). `test/nbb/run.cljs`
+(`npm run test-nbb-wasm32`) cross-checks this path's output against
+checked-in golden `.wasm` files -- byte-for-byte, not just "looks right" --
+covering every `examples/*.kotoba` fixture plus dedicated i64/sleb128
+boundary cases (true i64 max/min, add-wraparound, the sleb continuation-bit
+crossing at 127/128).
+
+**Every other target (`x86_64*`, `aarch64*`, `aarch64-android`,
+`aarch64-ios`) and every other `kotoba` subcommand** (`package-ios`, `sbom`,
+`attest-release`, `sign`, `run`, receipts, coverage, etc.) still goes through
+`clojure -M:run` (`kotoba.compiler.cli`, JVM) exactly as before -- native
+codegen (`backend/x86_64.clj`/`backend/aarch64.clj`), ELF64/PE32+ packaging,
+signing, the independent verifier, and release/coverage evidence are not
+part of this nbb-native slice and remain JVM/compat, honestly, the same way
+`kototama`'s own R1 (JVM/Chicory tender) is demoted to "compat suite" behind
+its R2 native-WASM-host path. `bin/kotoba` picks the path automatically
+based on the subcommand and `--target`; nothing about the CLI's argument
+shape changes.
+
 `cljs` (ADR-2607151500) is a genuinely different kind of backend from the
 other three: it lowers KIR to plain ClojureScript SOURCE TEXT, not machine
 code or a WASM binary. `:cljs-kotoba-v1` (with `:cljs-node-kotoba-v1`/

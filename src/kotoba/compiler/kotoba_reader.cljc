@@ -1,0 +1,207 @@
+(ns kotoba.compiler.kotoba-reader
+  "A small, purpose-built reader for the admission-gated `.kotoba` grammar
+  (lists, vectors, maps, sets, keywords, symbols, integers, strings, and
+  `#?(...)` reader-conditionals), used ONLY on the `:cljs` (nbb) side.
+
+  This exists because `kotoba.compiler.frontend`'s reference reader is
+  `clojure.tools.reader`, a JVM-only library. Its nominal ClojureScript
+  sibling (`cljs.tools.reader`, same Maven artifact) turned out to depend on
+  several `cljs.core` internals (`cljs.core.ExceptionInfo` instance checks,
+  `IPrintWithWriter`/`pr-writer` protocol dispatch, and a `:require-macros`
+  cross-namespace macro) that nbb's SCI-based interpreter does not resolve --
+  confirmed by spiking it directly (three distinct unresolved-symbol classes
+  in as many fixes, not one isolated gap). Rather than keep chasing an
+  open-ended compatibility surface against a general-purpose reader never
+  designed for SCI, this reader covers exactly the grammar
+  `kotoba.compiler.frontend/analyze` actually accepts (see its
+  `forbidden-heads`/`reserved-function-names` and the total absence of `#{`
+  or `#?` in every checked-in `examples/*.kotoba` fixture) plus `#?()`
+  reader-conditionals and `#{}` sets for read-time parity with the JVM path
+  (frontend still requests `:read-cond :allow` and a set literal must at
+  least PARSE the same on both runtimes, even though `validate-expr` rejects
+  a set value identically on both afterward).
+
+  Integer literals are parsed as JS `bigint` (not `js/Number`), so a literal
+  at the true i64 boundary (e.g. -9223372036854775808) round-trips exactly
+  instead of losing precision the moment it's read -- required for
+  `kotoba.compiler.ir`'s compile-time oracle (constant-folds a pure `main`
+  by literally *executing* it) to match the JVM path's `Long` wraparound
+  arithmetic bit-for-bit, not just within the JS safe-integer range.")
+
+(defn- whitespace-char? [ch]
+  (or (= ch \space) (= ch \tab) (= ch \newline) (= ch \return) (= ch \,)))
+
+(defn- delimiter-char? [ch]
+  (contains? #{\( \) \[ \] \{ \} \" \; nil} ch))
+
+(defrecord ReaderState [source length position])
+
+(defn- peek-ch [st]
+  (let [{:keys [source length position]} st]
+    (when (< position length) (nth source position))))
+
+(defn- peek-ch2 [st]
+  (let [{:keys [source length position]} st]
+    (when (< (inc position) length) (nth source (inc position)))))
+
+(defn- advance [st] (update st :position inc))
+
+(declare read-form)
+
+(defn- reject! [message data]
+  (throw (ex-info message (merge {:phase :read} data))))
+
+(defn- skip-ws+comments [st]
+  (loop [st st]
+    (let [ch (peek-ch st)]
+      (cond
+        (nil? ch) st
+        (whitespace-char? ch) (recur (advance st))
+        (= ch \;) (recur (loop [st (advance st)]
+                           (let [ch (peek-ch st)]
+                             (if (or (nil? ch) (= ch \newline))
+                               st
+                               (recur (advance st))))))
+        :else st))))
+
+(defn- read-while [st pred]
+  (loop [st st acc []]
+    (let [ch (peek-ch st)]
+      (if (and ch (pred ch))
+        (recur (advance st) (conj acc ch))
+        [st (apply str acc)]))))
+
+(defn- token-char? [ch]
+  (not (or (whitespace-char? ch) (delimiter-char? ch))))
+
+(defn- parse-int-token
+  "Returns a JS bigint (via `#?(:cljs js/BigInt :clj bigint)`) for a token
+  matching an optional sign followed by one or more digits, or nil if TOKEN
+  is not an integer literal (so the caller falls back to symbol/keyword
+  handling -- this mirrors `clojure.tools.reader`'s own dispatch: a bare `-`
+  or `+`, or a token like `-foo`, is a symbol, not a number)."
+  [token]
+  (when (re-matches #"[+-]?[0-9]+" token)
+    #?(:clj (bigint token)
+       :cljs (js/BigInt token))))
+
+(defn- read-token [st]
+  (let [[st token] (read-while st token-char?)]
+    (when (zero? (count token)) (reject! "expected a form" {:position (:position st)}))
+    [st token]))
+
+(defn- read-symbol-or-number [st]
+  (let [[st token] (read-token st)]
+    [st (or (parse-int-token token) (symbol token))]))
+
+(defn- read-keyword [st]
+  (let [st (advance st) ; consume leading `:`
+        [st token] (read-token st)]
+    [st (keyword token)]))
+
+(defn- unescape [s]
+  (loop [i 0 acc (transient [])]
+    (if (>= i (count s))
+      (apply str (persistent! acc))
+      (let [ch (nth s i)]
+        (if (and (= ch \\) (< (inc i) (count s)))
+          (let [nxt (nth s (inc i))
+                mapped (case nxt
+                         \n \newline \t \tab \r \return
+                         \\ \\ \" \" \0 (char 0)
+                         (reject! "unsupported string escape" {:escape nxt}))]
+            (recur (+ i 2) (conj! acc mapped)))
+          (recur (inc i) (conj! acc ch)))))))
+
+(defn- read-string-literal [st]
+  (let [st (advance st)] ; consume opening quote
+    (loop [st st acc []]
+      (let [ch (peek-ch st)]
+        (cond
+          (nil? ch) (reject! "unterminated string literal" {})
+          (= ch \") [(advance st) (unescape (apply str acc))]
+          (and (= ch \\) (some? (peek-ch2 st)))
+          (recur (advance (advance st)) (conj acc ch (peek-ch2 st)))
+          :else (recur (advance st) (conj acc ch)))))))
+
+(defn- read-delimited
+  "Reads forms up to CLOSE (already-consumed OPEN), returning `[state forms]`."
+  [st close]
+  (loop [st st acc []]
+    (let [st (skip-ws+comments st)
+          ch (peek-ch st)]
+      (cond
+        (nil? ch) (reject! "unterminated collection" {:expected close})
+        (= ch close) [(advance st) acc]
+        :else (let [[st' form skip?] (read-form st)]
+                (recur st' (if skip? acc (conj acc form))))))))
+
+(defn- reader-conditional-branch
+  "Given the parsed clauses vector `[:kotoba a :clj b :default c ...]`,
+  selects the first clause whose feature is `:kotoba` or `:default` --
+  mirrors `clojure.tools.reader`'s `:features #{:kotoba}` selection this
+  compiler's frontend already requests, without splicing-conditional
+  (`#?@`) support (not used anywhere in this admission-gated grammar)."
+  [clauses]
+  (loop [pairs (partition 2 clauses)]
+    (if-let [[feature form] (first pairs)]
+      (if (or (= feature :kotoba) (= feature :default))
+        [form true]
+        (recur (next pairs)))
+      [nil false])))
+
+(defn- read-form
+  "Returns `[state form skip?]`. `skip?` is true for a `#?()` clause with no
+  matching feature (nothing to splice in) so the caller omits it entirely."
+  [st]
+  (let [st (skip-ws+comments st)
+        ch (peek-ch st)]
+    (cond
+      (nil? ch) (reject! "unexpected end of input" {})
+
+      (= ch \() (let [[st forms] (read-delimited (advance st) \))]
+                  [st (apply list forms) false])
+
+      (= ch \[) (let [[st forms] (read-delimited (advance st) \])]
+                  [st (vec forms) false])
+
+      (= ch \{) (let [[st forms] (read-delimited (advance st) \})]
+                  (when (odd? (count forms))
+                    (reject! "map literal must contain an even number of forms" {}))
+                  [st (apply hash-map forms) false])
+
+      (= ch \") (let [[st s] (read-string-literal st)] [st s false])
+
+      (= ch \:) (read-keyword st)
+
+      (= ch \#)
+      (let [ch2 (peek-ch2 st)]
+        (cond
+          (= ch2 \{) (let [[st forms] (read-delimited (advance (advance st)) \})]
+                       [st (set forms) false])
+          (= ch2 \?) (let [st (advance (advance st))
+                           st (skip-ws+comments st)]
+                       (when-not (= (peek-ch st) \()
+                         (reject! "expected `(` after `#?`" {}))
+                       (let [[st clauses] (read-delimited (advance st) \))
+                             [form matched?] (reader-conditional-branch clauses)]
+                         (if matched? [st form false] [st nil true])))
+          :else (reject! "unsupported reader dispatch" {:next ch2})))
+
+      (= ch \)) (reject! "unmatched `)`" {})
+      (= ch \]) (reject! "unmatched `]`" {})
+      (= ch \}) (reject! "unmatched `}`" {})
+
+      :else (let [[st form] (read-symbol-or-number st)] [st form false]))))
+
+(defn read-forms
+  "Reads every top-level form in SOURCE, returning a vector -- mirrors
+  `kotoba.compiler.frontend`'s own JVM `read-forms` loop (which drives
+  `clojure.tools.reader` one form at a time until EOF)."
+  [source]
+  (loop [st (->ReaderState source (count source) 0) acc []]
+    (let [st (skip-ws+comments st)]
+      (if (nil? (peek-ch st))
+        acc
+        (let [[st' form skip?] (read-form st)]
+          (recur st' (if skip? acc (conj acc form))))))))
