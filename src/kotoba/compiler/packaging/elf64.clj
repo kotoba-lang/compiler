@@ -40,6 +40,7 @@
    'aiueos-app-catalog-valid {:arity 5 :symbol "kotoba_aiueos_app_catalog_valid"}
    'aiueos-app-lookup-plan {:arity 5 :symbol "kotoba_aiueos_app_lookup_plan"}
    'aiueos-user-elf-valid {:arity 2 :symbol "kotoba_aiueos_user_elf_valid"}
+   'aiueos-user-context-build {:arity 4 :symbol "kotoba_aiueos_user_context_build"}
    'aiueos-rsa2048-sha256-verify {:arity 5 :symbol "kotoba_aiueos_rsa2048_sha256_verify"}})
 
 (defn- le [n width]
@@ -245,9 +246,10 @@
     ;; fuel; sub rsp,8; call local Kotoba entry; add rsp,8; ret.
     (let [sha-fuel? (= 'aiueos-sha256 object-entry)
           rsa-fuel? (= 'aiueos-rsa2048-sha256-verify object-entry)
+          context-fuel? (= 'aiueos-user-context-build object-entry)
           high-fuel? (contains? '#{aiueos-user-object-journal-build
                                     aiueos-user-object-journal-valid} object-entry)
-          bounded-memory? (or sha-fuel? rsa-fuel? high-fuel? (contains? '#{aiueos-fnv1a aiueos-journal-record-valid
+          bounded-memory? (or sha-fuel? rsa-fuel? context-fuel? high-fuel? (contains? '#{aiueos-fnv1a aiueos-journal-record-valid
                                         aiueos-object-transaction-valid aiueos-object-transaction-route
                                         aiueos-mutable-object-valid
                                         aiueos-superblock-valid aiueos-journal-record-build
@@ -256,12 +258,14 @@
                                         aiueos-app-catalog-valid
                                         aiueos-app-lookup-plan
                                         aiueos-user-elf-valid
+                                        aiueos-user-context-build
                                         aiueos-user-object-journal-value
                                         aiueos-service-registry-state} object-entry))
           replenish (when bounded-memory?
                       (cond
                         rsa-fuel? [0x49 0xc7 0x41 0x08 0x80 0xb2 0xe6 0x0e] ; 250,000,000
                         sha-fuel? [0x49 0xc7 0x41 0x08 0x80 0x96 0x98 0x00] ; 10,000,000
+                        context-fuel? [0x49 0xc7 0x41 0x08 0x00 0x00 0x01 0x00] ; 65,536
                         high-fuel? [0x49 0xc7 0x41 0x08 0x00 0x10 0x00 0x00] ; 4096
                         :else [0x49 0xc7 0x41 0x08 0x00 0x04 0x00 0x00])) ; 1024
           wrapper (vec (concat [0x4c 0x8d 0x0d 0 0 0 0] replenish
