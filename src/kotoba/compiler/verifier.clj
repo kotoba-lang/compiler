@@ -137,6 +137,18 @@
             (reject! "runtime KIR kernel memory operation arity rejected" {:operation op}))
           (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
 
+        (contains? '#{kernel-read-cr2 kernel-read-cr3 kernel-write-cr3 kernel-invlpg
+                      kernel-cli kernel-sti kernel-hlt kernel-pause
+                      kernel-out-u8 kernel-out-u32} op)
+        (do
+          (when-not (= ({'kernel-read-cr2 0 'kernel-read-cr3 0 'kernel-write-cr3 1
+                         'kernel-invlpg 1 'kernel-cli 0 'kernel-sti 0 'kernel-hlt 0
+                         'kernel-pause 0 'kernel-out-u8 2 'kernel-out-u32 2} op)
+                       (count args))
+            (reject! "runtime KIR kernel privileged operation arity rejected"
+                     {:operation op}))
+          (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
+
         (contains? signatures op)
         (do
           (when-not (= (count (get signatures op)) (count args))
@@ -218,7 +230,10 @@
     (when (and (not= target :x86_64-aiueos-kernel-v1)
                (some #(and (seq? %) (contains? '#{kernel-load-u8 kernel-load-u8-4k
                                                   kernel-load-u8-16k kernel-store-u8
-                                                  kernel-store-u8-4k} (first %)))
+                                                  kernel-store-u8-4k kernel-read-cr2
+                                                  kernel-read-cr3 kernel-write-cr3 kernel-invlpg
+                                                  kernel-cli kernel-sti kernel-hlt kernel-pause
+                                                  kernel-out-u8 kernel-out-u32} (first %)))
                      (tree-seq coll? seq (:functions program))))
       (reject! "bounded kernel memory operation requires the aiueos kernel target"
                {:target target}))
@@ -277,8 +292,15 @@
   (when-not (= kir-sha256 (artifact/sha256 (:program kexe)))
     (reject! "runtime KIR identity mismatch" {}))
   (verify-runtime! kexe)
-  (let [expected-value
-        (when (empty? effects)
+  (let [kernel-operations '#{kernel-load-u8 kernel-load-u8-4k kernel-load-u8-16k
+                             kernel-store-u8 kernel-store-u8-4k kernel-read-cr2
+                             kernel-read-cr3 kernel-write-cr3 kernel-invlpg
+                             kernel-cli kernel-sti kernel-hlt kernel-pause
+                             kernel-out-u8 kernel-out-u32}
+        kernel-native? (some #(and (seq? %) (contains? kernel-operations (first %)))
+                             (tree-seq coll? seq (get-in kexe [:program :functions])))
+        expected-value
+        (when (and (empty? effects) (not kernel-native?))
           (try
             (ir/execute (:program kexe) (get-in kexe [:program :entry]) [])
             (catch Exception error

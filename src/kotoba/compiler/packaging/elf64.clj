@@ -29,6 +29,7 @@
    'aiueos-syscall-range-valid {:arity 4 :symbol "kotoba_aiueos_syscall_range_valid"}
    'aiueos-copy-in {:arity 5 :symbol "kotoba_aiueos_copy_in"}
    'aiueos-capability-plan {:arity 5 :symbol "kotoba_aiueos_capability_plan"}
+   'aiueos-capability-mutation-plan {:arity 5 :symbol "kotoba_aiueos_capability_mutation_plan"}
    'aiueos-service-lifecycle {:arity 4 :symbol "kotoba_aiueos_service_lifecycle"}
    'aiueos-service-registry-build {:arity 5 :symbol "kotoba_aiueos_service_registry_build"}
    'aiueos-service-registry-state {:arity 3 :symbol "kotoba_aiueos_service_registry_state"}
@@ -37,6 +38,17 @@
    'aiueos-user-object-journal-value {:arity 2 :symbol "kotoba_aiueos_user_object_journal_value"}
    'aiueos-sha256 {:arity 5 :symbol "kotoba_aiueos_sha256"}
    'aiueos-digest-equal {:arity 3 :symbol "kotoba_aiueos_digest_equal"}
+   'aiueos-app-catalog-valid {:arity 5 :symbol "kotoba_aiueos_app_catalog_valid"}
+   'aiueos-app-lookup-plan {:arity 5 :symbol "kotoba_aiueos_app_lookup_plan"}
+   'aiueos-user-elf-valid {:arity 2 :symbol "kotoba_aiueos_user_elf_valid"}
+   'aiueos-user-context-build {:arity 4 :symbol "kotoba_aiueos_user_context_build"}
+   'aiueos-page-mapping-plan {:arity 5 :symbol "kotoba_aiueos_page_mapping_plan"}
+   'aiueos-process-create-plan {:arity 5 :symbol "kotoba_aiueos_process_create_plan"}
+   'aiueos-process-teardown-plan {:arity 5 :symbol "kotoba_aiueos_process_teardown_plan"}
+   'aiueos-task-slot-plan {:arity 5 :symbol "kotoba_aiueos_task_slot_plan"}
+   'aiueos-scheduler-dispatch-plan {:arity 5 :symbol "kotoba_aiueos_scheduler_dispatch_plan"}
+   'aiueos-task-exit-route {:arity 5 :symbol "kotoba_aiueos_task_exit_route"}
+   'aiueos-service-task-transition {:arity 5 :symbol "kotoba_aiueos_service_task_transition"}
    'aiueos-rsa2048-sha256-verify {:arity 5 :symbol "kotoba_aiueos_rsa2048_sha256_verify"}})
 
 (defn- le [n width]
@@ -242,20 +254,30 @@
     ;; fuel; sub rsp,8; call local Kotoba entry; add rsp,8; ret.
     (let [sha-fuel? (= 'aiueos-sha256 object-entry)
           rsa-fuel? (= 'aiueos-rsa2048-sha256-verify object-entry)
+          context-fuel? (= 'aiueos-user-context-build object-entry)
           high-fuel? (contains? '#{aiueos-user-object-journal-build
                                     aiueos-user-object-journal-valid} object-entry)
-          bounded-memory? (or sha-fuel? rsa-fuel? high-fuel? (contains? '#{aiueos-fnv1a aiueos-journal-record-valid
+          bounded-memory? (or sha-fuel? rsa-fuel? context-fuel? high-fuel? (contains? '#{aiueos-fnv1a aiueos-journal-record-valid
                                         aiueos-object-transaction-valid aiueos-object-transaction-route
                                         aiueos-mutable-object-valid
                                         aiueos-superblock-valid aiueos-journal-record-build
                                         aiueos-mutable-object-build aiueos-copy-in
                                         aiueos-digest-equal
+                                        aiueos-app-catalog-valid
+                                        aiueos-app-lookup-plan
+                                        aiueos-user-elf-valid
+                                        aiueos-user-context-build
+                                        aiueos-process-create-plan
+                                        aiueos-task-slot-plan
+                                        aiueos-scheduler-dispatch-plan
+                                        aiueos-task-exit-route
                                         aiueos-user-object-journal-value
                                         aiueos-service-registry-state} object-entry))
           replenish (when bounded-memory?
                       (cond
                         rsa-fuel? [0x49 0xc7 0x41 0x08 0x80 0xb2 0xe6 0x0e] ; 250,000,000
                         sha-fuel? [0x49 0xc7 0x41 0x08 0x80 0x96 0x98 0x00] ; 10,000,000
+                        context-fuel? [0x49 0xc7 0x41 0x08 0x00 0x00 0x01 0x00] ; 65,536
                         high-fuel? [0x49 0xc7 0x41 0x08 0x00 0x10 0x00 0x00] ; 4096
                         :else [0x49 0xc7 0x41 0x08 0x00 0x04 0x00 0x00])) ; 1024
           wrapper (vec (concat [0x4c 0x8d 0x0d 0 0 0 0] replenish

@@ -139,6 +139,11 @@
                       kernel-store-u8 kernel-store-u8-4k} op)
         (trap! :kernel-memory-unavailable {:operation op})
 
+        (contains? '#{kernel-read-cr2 kernel-read-cr3 kernel-write-cr3 kernel-invlpg
+                      kernel-cli kernel-sti kernel-hlt kernel-pause
+                      kernel-out-u8 kernel-out-u32} op)
+        (trap! :kernel-privileged-unavailable {:operation op})
+
         (contains? '#{+ - * quot bit-xor bit-and = < > <= >=} op)
         (let [xs (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
           #?(:clj
@@ -217,14 +222,21 @@
                       [] cap-call))))
 
 (defn lower [hir]
-  (let [base {:format :kotoba.kir/v3
+  (let [kernel-operations '#{kernel-load-u8 kernel-load-u8-4k kernel-load-u8-16k
+                             kernel-store-u8 kernel-store-u8-4k kernel-read-cr2
+                             kernel-read-cr3 kernel-write-cr3 kernel-invlpg
+                             kernel-cli kernel-sti kernel-hlt kernel-pause
+                             kernel-out-u8 kernel-out-u32}
+        kernel-native? (some #(and (seq? %) (contains? kernel-operations (first %)))
+                             (tree-seq coll? seq (:functions hir)))
+        base {:format :kotoba.kir/v3
               :entry (:entry hir)
               :signature {:params [] :result :i64}
               :effects (:effects hir)
               :functions (mapv #(select-keys % [:name :params :result :effects :body])
                                (:functions hir))}
         ;; Effectful results require host authority and cannot be constant-oracled.
-        value (when (empty? (:effects hir))
+        value (when (and (empty? (:effects hir)) (not kernel-native?))
                 (execute base (:entry hir) []))]
     (assoc base
            :oracle-value value

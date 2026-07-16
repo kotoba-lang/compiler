@@ -22,6 +22,10 @@
 (def kernel-memory-operations
   '{kernel-load-u8 3 kernel-load-u8-4k 3 kernel-load-u8-16k 3
     kernel-store-u8 4 kernel-store-u8-4k 4})
+(def kernel-privileged-operations
+  '{kernel-read-cr2 0 kernel-read-cr3 0 kernel-write-cr3 1 kernel-invlpg 1
+    kernel-cli 0 kernel-sti 0 kernel-hlt 0 kernel-pause 0
+    kernel-out-u8 2 kernel-out-u32 2})
 (def list-operations '#{list cons first second rest empty?})
 (def predicate-operations '#{not zero? pos? neg?})
 ;; ADR-2607150000: and/or/when mirror kotoba-lang/kotoba's already-proven
@@ -38,6 +42,7 @@
 (def reserved-function-names
   (set/union forbidden-heads arithmetic comparisons (set (keys heap-operations))
              (set (keys kernel-memory-operations))
+             (set (keys kernel-privileged-operations))
              list-operations predicate-operations logical-operations map-operations
              '#{let if cap-call ns defn}))
 (def max-functions 1024)
@@ -613,6 +618,11 @@
         (contains? kernel-memory-operations op)
         (do (when-not (= (get kernel-memory-operations op) (count args))
               (reject! "kernel memory operation arity mismatch" form))
+            (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
+        (contains? kernel-privileged-operations op)
+        (do (when-not (= (get kernel-privileged-operations op) (count args))
+              (reject! "kernel privileged operation arity mismatch" form))
             (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
 
         (contains? functions op)

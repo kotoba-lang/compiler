@@ -109,6 +109,19 @@
       (is (= [0x7f 0x45 0x4c 0x46]
              (mapv #(bit-and % 0xff) (take 4 bytes)))))))
 
+(deftest compile-aiueos-kernel-image-bypasses-the-object-link-stage
+  (let [source (temp-kotoba-source! "(defn main [] (kernel-out-u32 244 16))")
+        output (.getPath (doto (java.io.File/createTempFile "kotoba-aiueos-kernel-" ".elf")
+                           (.deleteOnExit)))
+        out (StringWriter.)]
+    (binding [*out* out]
+      (cli/-main "compile" source "--target" "x86_64-aiueos-kernel-v1"
+                 "--artifact" "image" "--output" output))
+    (let [bytes (java.nio.file.Files/readAllBytes (.toPath (java.io.File. output)))]
+      (is (= [0x7f 0x45 0x4c 0x46]
+             (mapv #(bit-and % 0xff) (take 4 bytes))))
+      (is (= 2 (bit-and (aget bytes 16) 0xff)) "ET_EXEC, not ET_REL"))))
+
 (deftest compile-wasm-target-is-unaffected-by-the-cljs-output-fix
   (let [source (temp-kotoba-source! "(defn main [] (let [x 40 y 2] (+ x y)))")
         output (.getPath (doto (java.io.File/createTempFile "kotoba-cli-wasm-out-" ".wasm")

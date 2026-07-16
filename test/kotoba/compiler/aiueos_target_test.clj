@@ -68,6 +68,28 @@
     ;; Context fuel is initialized to 256; no host process populates it.
     (is (= 256 (read-le bytes (+ 0x8000 8) 8)))))
 
+(deftest kernel-target-lowers-privileged-intrinsics-without-imports
+  (let [source (str "(defn main [] "
+                    "(let [cr3 (kernel-read-cr3) "
+                    "      written (kernel-write-cr3 cr3) "
+                    "      flushed (kernel-invlpg 4096) "
+                    "      marker (kernel-out-u8 233 75)] "
+                    "  (kernel-out-u32 244 (+ cr3 written flushed marker))))")
+        artifact (:artifact (compiler/compile-source source :x86_64-aiueos-kernel-v1))
+        code (:code artifact)]
+    (is (empty? (:imports artifact)))
+    (is (some #(= [0x0f 0x20 0xd8] %) (partition 3 1 code)) "mov rax,cr3")
+    (is (some #(= [0x0f 0x22 0xd8] %) (partition 3 1 code)) "mov cr3,rax")
+    (is (some #(= [0x0f 0x01 0x38] %) (partition 3 1 code)) "invlpg [rax]")
+    (is (some #{0xee} code) "out dx,al")
+    (is (some #{0xef} code) "out dx,eax")))
+
+(deftest privileged-intrinsics-are-rejected-outside-the-kernel-target
+  (doseq [target [:x86_64-linux-kotoba-v1 :x86_64-aiueos-user-v1
+                  :x86_64-aiueos-uefi-v1]]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"requires the aiueos kernel target"
+          (compiler/compile-source "(defn main [] (kernel-read-cr3))" target)))))
+
 (deftest x86-loop-recur-reuses-its-native-stack-frame
   (let [source "(defn main [] (loop [i 0 acc 0] (if (= i 20) acc (recur (+ i 1) (+ acc i)))))"
         artifact (:artifact (compiler/compile-source source :x86_64-aiueos-kernel-v1))
@@ -250,6 +272,103 @@
     (is (some #(= [0x49 0xc7 0x41 0x08 0x00 0x04 0x00 0x00] %)
               (partition 8 1 bytes))
         "the comparison wrapper remains fuel-metered")))
+
+(deftest kernel-target-exports-bounded-app-catalog-policy
+  (let [source "(defn aiueos-app-catalog-valid [catalog length capacity catalog-sector signature-sector] (if (= (kernel-load-u8 catalog length 0) 65) capacity 0)) (defn main [] 0)"
+        {:keys [object]} (compiler/compile-source source :x86_64-aiueos-kernel-v1)
+        bytes (:bytes object)]
+    (is (= "kotoba_aiueos_app_catalog_valid" (:export object)))
+    (is (empty? (:imports object)))
+    (is (some #(= [0x48 0x81 0xf9 0x00 0x02 0x00 0x00] %)
+              (partition 7 1 bytes))
+        "catalog reads retain the compiler's 512-byte bound")
+    (is (some #(= [0x49 0xc7 0x41 0x08 0x00 0x04 0x00 0x00] %)
+              (partition 8 1 bytes))
+        "the catalog policy remains fuel-metered")))
+
+(deftest kernel-target-exports-bounded-app-lookup-plan
+  (let [source "(defn aiueos-app-lookup-plan [id metadata count stride length] (bit-xor (kernel-load-u8 id 16 0) (kernel-load-u8 metadata length 0))) (defn main [] 0)"
+        {:keys [object]} (compiler/compile-source source :x86_64-aiueos-kernel-v1)
+        bytes (:bytes object)]
+    (is (= "kotoba_aiueos_app_lookup_plan" (:export object)))
+    (is (empty? (:imports object)))
+    (is (some #(= [0x48 0x81 0xf9 0x00 0x02 0x00 0x00] %)
+              (partition 7 1 bytes)))
+    (is (some #(= [0x49 0xc7 0x41 0x08 0x00 0x04 0x00 0x00] %)
+              (partition 8 1 bytes)))))
+
+(deftest kernel-target-exports-bounded-user-elf-policy
+  (let [source "(defn aiueos-user-elf-valid [image length] (kernel-load-u8-16k image length 0)) (defn main [] 0)"
+        {:keys [object]} (compiler/compile-source source :x86_64-aiueos-kernel-v1)
+        bytes (:bytes object)]
+    (is (= "kotoba_aiueos_user_elf_valid" (:export object)))
+    (is (empty? (:imports object)))
+    (is (some #(= [0x48 0x81 0xf9 0x00 0x40 0x00 0x00] %)
+              (partition 7 1 bytes)))
+    (is (some #(= [0x49 0xc7 0x41 0x08 0x00 0x04 0x00 0x00] %)
+              (partition 8 1 bytes)))))
+
+(deftest kernel-target-exports-bounded-user-context-builder
+  (let [source "(defn aiueos-user-context-build [stack entry argument user-stack] (kernel-store-u8-4k stack 4096 3936 entry)) (defn main [] 0)"
+        {:keys [object]} (compiler/compile-source source :x86_64-aiueos-kernel-v1)
+        bytes (:bytes object)]
+    (is (= "kotoba_aiueos_user_context_build" (:export object)))
+    (is (empty? (:imports object)))
+    (is (some #(= [0x48 0x81 0xf9 0x00 0x10 0x00 0x00] %)
+              (partition 7 1 bytes)))
+    (is (some #(= [0x49 0xc7 0x41 0x08 0x00 0x00 0x01 0x00] %)
+              (partition 8 1 bytes)))))
+
+(deftest kernel-target-exports-page-mapping-plan
+  (let [source "(defn aiueos-page-mapping-plan [process kind size active existing] (+ process (+ kind (+ size (+ active existing))))) (defn main [] 0)"
+        {:keys [object]} (compiler/compile-source source :x86_64-aiueos-kernel-v1)]
+    (is (= "kotoba_aiueos_page_mapping_plan" (:export object)))
+    (is (empty? (:imports object)))))
+
+(deftest kernel-target-exports-bounded-process-create-plan
+  (let [source "(defn aiueos-process-create-plan [table length domain count stride] (kernel-load-u8 table length 0)) (defn main [] 0)"
+        {:keys [object]} (compiler/compile-source source :x86_64-aiueos-kernel-v1)
+        bytes (:bytes object)]
+    (is (= "kotoba_aiueos_process_create_plan" (:export object)))
+    (is (empty? (:imports object)))
+    (is (some #(= [0x48 0x81 0xf9 0x00 0x02 0x00 0x00] %)
+              (partition 7 1 bytes)))))
+
+(deftest kernel-target-exports-process-teardown-plan
+  (let [source "(defn aiueos-process-teardown-plan [domain reaped revoked reclaimed stage] (+ domain (+ reaped (+ revoked (+ reclaimed stage))))) (defn main [] 0)"
+        {:keys [object]} (compiler/compile-source source :x86_64-aiueos-kernel-v1)]
+    (is (= "kotoba_aiueos_process_teardown_plan" (:export object)))
+    (is (empty? (:imports object)))))
+
+(deftest kernel-target-exports-bounded-task-slot-plan
+  (let [source "(defn aiueos-task-slot-plan [table length count stride request] (kernel-load-u8 table length 0)) (defn main [] 0)"
+        {:keys [object]} (compiler/compile-source source :x86_64-aiueos-kernel-v1)]
+    (is (= "kotoba_aiueos_task_slot_plan" (:export object)))
+    (is (empty? (:imports object)))))
+
+(deftest kernel-target-exports-bounded-scheduler-dispatch-plan
+  (let [source "(defn aiueos-scheduler-dispatch-plan [table length count stride state] (kernel-load-u8 table length 0)) (defn main [] 0)"
+        {:keys [object]} (compiler/compile-source source :x86_64-aiueos-kernel-v1)]
+    (is (= "kotoba_aiueos_scheduler_dispatch_plan" (:export object)))
+    (is (empty? (:imports object)))))
+
+(deftest kernel-target-exports-bounded-task-exit-route
+  (let [source "(defn aiueos-task-exit-route [table length count stride domain] (kernel-load-u8 table length 0)) (defn main [] 0)"
+        {:keys [object]} (compiler/compile-source source :x86_64-aiueos-kernel-v1)]
+    (is (= "kotoba_aiueos_task_exit_route" (:export object)))
+    (is (empty? (:imports object)))))
+
+(deftest kernel-target-exports-service-task-transition
+  (let [source "(defn aiueos-service-task-transition [action active slot current task-active] action) (defn main [] 0)"
+        {:keys [object]} (compiler/compile-source source :x86_64-aiueos-kernel-v1)]
+    (is (= "kotoba_aiueos_service_task_transition" (:export object)))
+    (is (empty? (:imports object)))))
+
+(deftest kernel-target-exports-capability-mutation-plan
+  (let [source "(defn aiueos-capability-mutation-plan [action generation type state request] action) (defn main [] 0)"
+        {:keys [object]} (compiler/compile-source source :x86_64-aiueos-kernel-v1)]
+    (is (= "kotoba_aiueos_capability_mutation_plan" (:export object)))
+    (is (empty? (:imports object)))))
 
 (deftest bounded-kernel-memory-is-rejected-for-host-targets
   (let [source "(defn read-byte [base length index] (kernel-load-u8 base length index)) (defn main [] 0)"]

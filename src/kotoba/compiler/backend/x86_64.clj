@@ -153,6 +153,12 @@
          0x88 0x04 0x3a                         ; mov byte [rdx+rdi],al
          0xeb 0x02 0x0f 0x0b]))))               ; skip UD2 / trap
 
+(defn- emit-kernel-out [[port value] width env {:keys [temp-depth] :as ctx}]
+  (let [ctx (assoc ctx :tail? false)]
+    (vec (concat (emit-expr port env ctx) [0x50]
+                 (emit-expr value env (update ctx :temp-depth inc))
+                 [0x5a] (if (= width 8) [0xee] [0xef])))))
+
 (defn emit-expr [form env {:keys [param-count pad? temp-depth] :as ctx}]
   (cond
     (integer? form) (into [0x48 0xb8] (le64 form))
@@ -189,6 +195,19 @@
 
         (= op 'kernel-store-u8-4k)
         (emit-kernel-store-u8 args 4096 env ctx)
+
+        (= op 'kernel-read-cr2) [0x0f 0x20 0xd0]
+        (= op 'kernel-read-cr3) [0x0f 0x20 0xd8]
+        (= op 'kernel-write-cr3)
+        (vec (concat (emit-expr (first args) env (assoc ctx :tail? false)) [0x0f 0x22 0xd8]))
+        (= op 'kernel-invlpg)
+        (vec (concat (emit-expr (first args) env (assoc ctx :tail? false)) [0x0f 0x01 0x38]))
+        (= op 'kernel-cli) [0xfa 0x31 0xc0]
+        (= op 'kernel-sti) [0xfb 0x31 0xc0]
+        (= op 'kernel-hlt) [0xf4 0x31 0xc0]
+        (= op 'kernel-pause) [0xf3 0x90 0x31 0xc0]
+        (= op 'kernel-out-u8) (emit-kernel-out args 8 env ctx)
+        (= op 'kernel-out-u32) (emit-kernel-out args 32 env ctx)
 
         (and (= op '-) (= 1 (count args)))
         (vec (concat (emit-expr (first args) env (assoc ctx :tail? false)) [0x48 0xf7 0xd8]))
