@@ -324,6 +324,12 @@
     (is (= "kotoba_aiueos_task_slot_plan" (:export object)))
     (is (empty? (:imports object)))))
 
+(deftest kernel-target-exports-bounded-scheduler-dispatch-plan
+  (let [source "(defn aiueos-scheduler-dispatch-plan [table length count stride state] (kernel-load-u8 table length 0)) (defn main [] 0)"
+        {:keys [object]} (compiler/compile-source source :x86_64-aiueos-kernel-v1)]
+    (is (= "kotoba_aiueos_scheduler_dispatch_plan" (:export object)))
+    (is (empty? (:imports object)))))
+
 (deftest bounded-kernel-memory-is-rejected-for-host-targets
   (let [source "(defn read-byte [base length index] (kernel-load-u8 base length index)) (defn main [] 0)"]
     (is (thrown-with-msg?
