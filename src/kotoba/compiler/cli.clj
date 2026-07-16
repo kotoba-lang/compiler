@@ -7,6 +7,7 @@
             [kotoba.compiler.coverage-evidence :as coverage-evidence]
             [kotoba.compiler.ios-aot :as ios-aot]
             [kotoba.compiler.native-executor :as native-executor]
+            [kotoba.compiler.packaging.pe32plus :as pe32plus]
             [kotoba.compiler.receipt :as receipt]
             [kotoba.compiler.release :as release]
             [kotoba.compiler.runtime-identity :as runtime-identity]
@@ -228,6 +229,18 @@
       (println (pr-str {:ok true
                         :effects (get-in result [:hir :effects])
                         :admission (:admission result)})))
+    "package-aiueos-boot"
+    (let [input (second args)
+          output (or (option args "--output") "BOOTX64.EFI")
+          raw (java.nio.file.Files/readAllBytes
+               (java.nio.file.Paths/get input (make-array String 0)))
+          kernel (mapv #(bit-and (int %) 0xff) raw)
+          packaged (pe32plus/package-embedded-kernel kernel)]
+      (atomic-output/write-bytes! output
+        (byte-array (map unchecked-byte (:bytes packaged))))
+      (println (pr-str {:ok true :target :x86_64-aiueos-uefi-v1
+                        :kernel input :output output
+                        :kernel-sha256 (:embedded-kernel-sha256 packaged)})))
     "compile"
     (let [input (kotoba-source! (second args))
           target (parse-target (or (option args "--target") "wasm32"))

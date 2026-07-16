@@ -1,6 +1,7 @@
 (ns kotoba.compiler.aiueos-target-test
   (:require [clojure.test :refer [deftest is testing]]
             [kotoba.compiler.core :as compiler]
+            [kotoba.compiler.packaging.pe32plus :as pe32plus]
             [kotoba.compiler.target :as target]))
 
 (defn- unsigned [n] (bit-and (int n) 0xff))
@@ -89,6 +90,23 @@
                   :x86_64-aiueos-uefi-v1]]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"requires the aiueos kernel target"
           (compiler/compile-source "(defn main [] (kernel-read-cr3))" target)))))
+
+(deftest compiler-packages-an-embedded-kernel-uefi-boot-application
+  (let [kernel (get-in (compiler/compile-source
+                        "(defn main [] (kernel-out-u32 244 16))"
+                        :x86_64-aiueos-kernel-v1) [:binary :bytes])
+        first-image (pe32plus/package-embedded-kernel kernel)
+        second-image (pe32plus/package-embedded-kernel kernel)
+        bytes (:bytes first-image)]
+    (is (= :pe32+-embedded-kernel/v1 (:format first-image)))
+    (is (= [0x4d 0x5a] (subvec bytes 0 2)))
+    (is (= [0x50 0x45 0 0] (subvec bytes 0x80 0x84)))
+    (is (= 3 (read-le bytes (+ 0x84 2) 2)))
+    (is (= 10 (read-le bytes (+ 0x98 68) 2)) "EFI application subsystem")
+    (is (empty? (:imports first-image)))
+    (is (= bytes (:bytes second-image)) "embedded boot image is reproducible")
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"x86-64 ET_EXEC"
+          (pe32plus/package-embedded-kernel (vec (repeat 128 0)))))))
 
 (deftest x86-loop-recur-reuses-its-native-stack-frame
   (let [source "(defn main [] (loop [i 0 acc 0] (if (= i 20) acc (recur (+ i 1) (+ acc i)))))"
