@@ -197,6 +197,22 @@ AOT manifest plus canonical Mach-O text. Pinned Xcode 16.2 builds the Arm64 text
 object and no-JIT host archive twice byte-identically. App integration,
 codesigning, store-compatible packaging, trap isolation, and physical iPhone/
 iPad execution remain required.
+A pinned-Xcode gate now also links that same static host archive into a plain
+Mach-O executable against the `iphonesimulator` SDK and runs it for real inside
+the iOS Simulator (`xcrun simctl spawn`, arm64-native on the Apple Silicon
+runner this repo's CI already uses -- no Rosetta), asserting the executed
+result matches the known-correct value, not just static Mach-O/symbol shape as
+before. This closes the "never actually executed anywhere" gap the device path
+alone left open (no attached iPhone exists in CI to run the device build on),
+without any physical hardware or paid Apple Developer Program signing -- unlike
+the Android emulator path above, booting the iOS Simulator on these runners
+does not time out. It does NOT by itself satisfy this ADR's coverage-definition
+bar above ("physical hardware or a vendor supported CI/device service"):
+whether Simulator execution qualifies as the latter is an open question this
+ADR does not resolve, so no mobile execution or endpoint coverage percentage is
+claimed from it. App integration, codesigning, store-compatible packaging, trap
+isolation, and physical iPhone/iPad execution all remain required and
+unchanged by this addition.
 
 - Implement Android AArch64 as an NDK host library with isolated-process and
   application-sandbox integration.
