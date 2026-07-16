@@ -30,6 +30,19 @@
   (.error js/console message)
   (.exit js/process code))
 
+;; The three wasm32 target names `kotoba.compiler.nbb.cli` covers (mirrors
+;; its own `targets` table). Any other `--target` value, or any subcommand
+;; besides `compile`/`check`, falls through to the JVM `clojure -M:run`
+;; path below unchanged.
+(def ^:private nbb-native-targets #{"wasm32" "wasm32-browser" "wasm32-wasi" nil})
+
+(defn- option [args flag] (second (drop-while #(not= flag %) args)))
+
+(defn- nbb-native-eligible? [sub-args]
+  (let [cmd (first sub-args)]
+    (or (= cmd "check")
+        (and (= cmd "compile") (contains? nbb-native-targets (option sub-args "--target"))))))
+
 (let [args (vec *command-line-args*)
       boundary (first args)]
   (cond
@@ -39,12 +52,37 @@
     (contains? #{"-M" "-M:compiler" "-M:compile"} boundary)
     (let [self (.realpathSync fs *file*)
           root (.resolve path (.dirname path self) "..")
-          result (.spawnSync child "clojure"
-                             (clj->js (into ["-M:run"] (subvec args 1)))
-                             #js {:cwd root :stdio "inherit" :env js/process.env})]
-      (when (.-error result)
-        (fail! "error: unable to start private compiler runtime" 70))
-      (.exit js/process (or (.-status result) 70)))
+          sub-args (subvec args 1)]
+      (if (nbb-native-eligible? sub-args)
+        ;; Fast path: no `clojure` (JVM) process is spawned at all. A fresh
+        ;; nbb process is spawned (not this one) purely so `--classpath`
+        ;; can point at `<root>/src` -- `bin/kotoba` itself is invoked via
+        ;; its shebang with no classpath flags, so it can't `:require`
+        ;; those namespaces directly in its own process. Spawns nbb's own
+        ;; `node_modules/nbb/cli.js` directly via `process.execPath`
+        ;; (same pattern `scripts/browser-matrix.cljs`'s `nbb!` already
+        ;; uses), NOT `npx` -- confirmed live: `spawnSync("npx", ...)`
+        ;; fails on Windows CI ("unable to start nbb-native compiler
+        ;; runtime") because `npx` resolves to `npx.cmd`, which needs
+        ;; shell interpretation `spawnSync` doesn't provide by default;
+        ;; `process.execPath` (the current `node`/`node.exe`) is a real,
+        ;; directly-executable binary on every platform.
+        (let [nbb-cli (.join path root "node_modules" "nbb" "cli.js")
+              result (.spawnSync child js/process.execPath
+                                 (clj->js (into [nbb-cli "--classpath"
+                                                 (.join path root "src")
+                                                 (.join path root "src" "kotoba" "compiler" "nbb" "cli.cljs")]
+                                                sub-args))
+                                 #js {:cwd root :stdio "inherit" :env js/process.env})]
+          (when (.-error result)
+            (fail! "error: unable to start nbb-native compiler runtime" 70))
+          (.exit js/process (or (.-status result) 70)))
+        (let [result (.spawnSync child "clojure"
+                                 (clj->js (into ["-M:run"] sub-args))
+                                 #js {:cwd root :stdio "inherit" :env js/process.env})]
+          (when (.-error result)
+            (fail! "error: unable to start private compiler runtime" 70))
+          (.exit js/process (or (.-status result) 70)))))
 
     :else
     (fail! "error: compiler commands require the -M execution boundary" 2)))

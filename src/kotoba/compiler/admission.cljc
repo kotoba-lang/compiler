@@ -1,5 +1,18 @@
 (ns kotoba.compiler.admission
-  (:require [clojure.set :as set]))
+  (:require [clojure.set :as set]
+            ;; See `kotoba.compiler.ir`'s ns form for why a conditional
+            ;; require needs to be the WHOLE clause, not an item inside it,
+            ;; when the other feature needs none -- not an issue here since
+            ;; `clojure.set` is always required, but kept consistent.
+            #?(:cljs [kotoba.compiler.cljs-i64 :as i64])))
+
+(defn- kotoba-integer?
+  "See `kotoba.compiler.frontend`'s identically-named helper docstring: a
+  policy's cap-id may be a bigint (this file's caller may parse
+  `--policy policy.edn` via `kotoba.compiler.kotoba-reader`, the same
+  reader `.kotoba` source itself uses) or a plain number, on `:cljs`."
+  [form]
+  #?(:clj (integer? form) :cljs (or (i64/bigint-value? form) (integer? form))))
 
 (defn check
   "Deny-by-default capability admission. Policy shape:
@@ -13,7 +26,7 @@
   (let [required (set (:effects hir))
         allowed (set (or (:allow policy) #{}))
         malformed (remove #(and (vector? %) (= :cap/call (first %))
-                                (integer? (second %)) (<= 0 (second %) 255)
+                                (kotoba-integer? (second %)) (<= 0 (second %) 255)
                                 (= 2 (count %))) allowed)
         missing (set/difference required allowed)
         unused (set/difference allowed required)]

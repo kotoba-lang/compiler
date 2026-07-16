@@ -1,19 +1,47 @@
-(ns kotoba.compiler.backend.wasm)
+(ns kotoba.compiler.backend.wasm
+  ;; See `kotoba.compiler.ir`'s ns form for why the whole `:require` clause
+  ;; (not just an item inside it) is behind the reader-conditional.
+  #?(:cljs (:require [kotoba.compiler.cljs-i64 :as i64])))
 
+;; `uleb` only ever encodes small, non-negative, interpreter-internal counts
+;; and indices in this file (section/payload lengths, function/type/import
+;; indices) -- never an arbitrary `.kotoba` i64 VALUE -- so it stays plain
+;; JS-number-based on both runtimes (`(long n)` was already a no-op cast on
+;; :clj for values in this range; dropped for :cljs since cljs has no
+;; `long`).
 (defn- uleb [n]
-  (loop [n (long n) out []]
+  (loop [n #?(:clj (long n) :cljs n) out []]
     (let [b (bit-and n 0x7f) n' (unsigned-bit-shift-right n 7)]
       (if (zero? n') (conj out b) (recur n' (conj out (bit-or b 0x80)))))))
 
+;; `sleb` DOES encode arbitrary `.kotoba` i64 literals (`emit-expr`'s
+;; `i64.const` case, below) across the FULL signed 64-bit range, so this is
+;; the highest-risk port in this file: cljs's own `bit-shift-right` throws
+;; on bigint input ("Cannot mix BigInt and other types" -- confirmed live),
+;; and even if it didn't, cljs bitwise ops are JS int32-coerced and would
+;; silently truncate any constant outside +-2^31 -- a byte-level corruption
+;; of the compiled artifact, not just a value-range check failing loudly
+;; like `frontend`'s admission check does. The `:cljs` branch works over
+;; bigint throughout via `cljs-i64`, using `i64/ashr` (see its own
+;; docstring) in place of `bit-shift-right`.
 (defn- sleb [n]
-  (loop [n (long n) out []]
-    (let [b (bit-and n 0x7f) n' (bit-shift-right n 7)
-          done (or (and (= n' 0) (zero? (bit-and b 0x40)))
-                   (and (= n' -1) (not (zero? (bit-and b 0x40)))))]
-      (if done (conj out b) (recur n' (conj out (bit-or b 0x80)))))))
+  #?(:clj
+     (loop [n (long n) out []]
+       (let [b (bit-and n 0x7f) n' (bit-shift-right n 7)
+             done (or (and (= n' 0) (zero? (bit-and b 0x40)))
+                      (and (= n' -1) (not (zero? (bit-and b 0x40)))))]
+         (if done (conj out b) (recur n' (conj out (bit-or b 0x80))))))
+     :cljs
+     (loop [n (i64/->bigint n) out []]
+       (let [b (js/Number (bit-and n (js/BigInt 0x7f))) n' (i64/ashr n 7)
+             done (or (and (= n' i64/zero) (zero? (bit-and b 0x40)))
+                      (and (= n' (js/BigInt -1)) (not (zero? (bit-and b 0x40)))))]
+         (if done (conj out b) (recur n' (conj out (bit-or b 0x80))))))))
 
 (defn- section [id payload] (into [id] (concat (uleb (count payload)) payload)))
-(defn- utf8 [s] (mapv #(bit-and (int %) 0xff) (.getBytes ^String s "UTF-8")))
+(defn- utf8 [s]
+  #?(:clj (mapv #(bit-and (int %) 0xff) (.getBytes ^String s "UTF-8"))
+     :cljs (vec (js/Array.from (.encode (js/TextEncoder.) s)))))
 (defn- name-bytes [s] (let [bs (utf8 s)] (into (uleb (count bs)) bs)))
 
 (defn- local-count [form]
@@ -34,7 +62,12 @@
 
 (defn emit-expr [form env {:keys [function-indices intrinsic-indices next-local] :as ctx}]
   (cond
-    (integer? form) (into [0x42] (sleb form))                    ; i64.const
+    ;; A literal here may be a bigint (from a `.kotoba` source literal, or
+    ;; from `kotoba.compiler.ir`'s coercion once it passes through there)
+    ;; or a plain number (synthesized directly by `kotoba.compiler.frontend`
+    ;; -- e.g. `when`'s trailing `0`); `sleb` above accepts either.
+    #?(:clj (integer? form) :cljs (or (i64/bigint-value? form) (integer? form)))
+    (into [0x42] (sleb form))                                    ; i64.const
     (symbol? form) [0x20 (get env form)]                         ; local.get
     :else
     (let [[op & args] form]
@@ -144,9 +177,9 @@
                          (mapcat #(function-body % indices intrinsic-indices) functions))
         target-sec (concat (name-bytes "kotoba.target")
                            (utf8 (name target)))]
-    (byte-array
-     (map unchecked-byte
-          (concat [0 0x61 0x73 0x6d 1 0 0 0] (section 0 target-sec)
-                  (section 1 types) (when (seq imports) (section 2 import-sec))
-                  (section 3 function-sec) (section 6 global-sec)
-                  (section 7 export-sec) (section 10 code-sec))))))
+    (let [bytes (concat [0 0x61 0x73 0x6d 1 0 0 0] (section 0 target-sec)
+                        (section 1 types) (when (seq imports) (section 2 import-sec))
+                        (section 3 function-sec) (section 6 global-sec)
+                        (section 7 export-sec) (section 10 code-sec))]
+      #?(:clj (byte-array (map unchecked-byte bytes))
+         :cljs (js/Uint8Array.from (clj->js (map #(bit-and % 0xff) bytes)))))))
