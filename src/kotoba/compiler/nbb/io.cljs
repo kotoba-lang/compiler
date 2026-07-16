@@ -13,18 +13,30 @@
   (:require ["node:fs" :as fs]
             ["node:path" :as path]))
 
+;; Matches `kotoba.compiler.bounded-edn/max-source-bytes` exactly (the
+;; stricter of its two limits -- `.kotoba` source and `--policy` EDN both
+;; go through this same function, so both get the tighter cap). Checked
+;; against the RAW byte count before UTF-8 decoding, same order the JVM
+;; path's `read-bytes` uses -- confirmed live: without this, a >1MiB
+;; `.kotoba` source silently reached `frontend/analyze`'s own (differently
+;; worded) size check instead of failing here with the exact message
+;; `scripts/conformance.cljs` asserts on.
+(def ^:private max-bytes (* 1024 1024))
+
 (defn read-text-file [p]
   (when-not (and (string? p) (seq p))
     (throw (ex-info "input path is required" {:phase :decode})))
   (let [buf (try
               (.readFileSync fs p)
               (catch :default error
-                (throw (ex-info "input could not be read" {:phase :decode :path p} error))))
-        decoder (js/TextDecoder. "utf-8" #js {:fatal true})]
-    (try
-      (.decode decoder buf)
-      (catch :default error
-        (throw (ex-info "input is not valid UTF-8" {:phase :decode :path p} error))))))
+                (throw (ex-info "input could not be read" {:phase :decode :path p} error))))]
+    (when (> (.-length buf) max-bytes)
+      (throw (ex-info "input exceeds byte limit" {:phase :decode :path p})))
+    (let [decoder (js/TextDecoder. "utf-8" #js {:fatal true})]
+      (try
+        (.decode decoder buf)
+        (catch :default error
+          (throw (ex-info "input is not valid UTF-8" {:phase :decode :path p} error)))))))
 
 (defn write-bytes! [output-path ^js bytes]
   (when-not (and (string? output-path) (seq output-path))

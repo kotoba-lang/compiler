@@ -58,9 +58,18 @@
         ;; nbb process is spawned (not this one) purely so `--classpath`
         ;; can point at `<root>/src` -- `bin/kotoba` itself is invoked via
         ;; its shebang with no classpath flags, so it can't `:require`
-        ;; those namespaces directly in its own process.
-        (let [result (.spawnSync child "npx"
-                                 (clj->js (into ["--no-install" "nbb" "--classpath"
+        ;; those namespaces directly in its own process. Spawns nbb's own
+        ;; `node_modules/nbb/cli.js` directly via `process.execPath`
+        ;; (same pattern `scripts/browser-matrix.cljs`'s `nbb!` already
+        ;; uses), NOT `npx` -- confirmed live: `spawnSync("npx", ...)`
+        ;; fails on Windows CI ("unable to start nbb-native compiler
+        ;; runtime") because `npx` resolves to `npx.cmd`, which needs
+        ;; shell interpretation `spawnSync` doesn't provide by default;
+        ;; `process.execPath` (the current `node`/`node.exe`) is a real,
+        ;; directly-executable binary on every platform.
+        (let [nbb-cli (.join path root "node_modules" "nbb" "cli.js")
+              result (.spawnSync child js/process.execPath
+                                 (clj->js (into [nbb-cli "--classpath"
                                                  (.join path root "src")
                                                  (.join path root "src" "kotoba" "compiler" "nbb" "cli.cljs")]
                                                 sub-args))
