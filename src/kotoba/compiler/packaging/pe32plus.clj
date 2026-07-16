@@ -224,7 +224,7 @@
                      (= [5 6] (mapv :flags segments)) entry-segment non-overlap)
         (throw (ex-info "embedded kernel PT_LOAD contract rejected" {:segments segments})))
       (let [data-addresses [0 8]
-            variables-size 56
+            variables-size 72
             embedded-offset (align variables-size 16)
             ;; Build once with provisional external RVAs; instruction length is
             ;; independent of displacement values.
@@ -253,7 +253,8 @@
                     [0x4c 0x89 0xe1 0x48 0x8b 0x15] [(rip :map-key)]
                     [0x41 0xff 0x96 0xe8 0x00 0x00 0x00 0x48 0x85 0xc0
                      0x0f 0x85] [(rip :get-map)]
-                    [0x31 0xff 0x48 0xb8] (le entry 8) [0xff 0xd0]
+                    [0x48 0x8d 0x3d] [(rip :boot-info)]
+                    [0x48 0xb8] (le entry 8) [0xff 0xd0]
                     [(label :fail)]
                     [0x66 0xba 0xe9 0x00 0xb0 0x46 0xee
                      0x66 0xba 0xf4 0x00 0xb8 0x7f 0x00 0x00 0x00 0xef
@@ -261,18 +262,21 @@
             text-size (code-size tokens)
             data-address (align (+ text-rva text-size) section-alignment)
             data (vec (concat (mapcat #(le (:paddr %) 8) segments)
-                              (repeat (- variables-size 16) 0)
+                              (le 0x544f4f4245554941 8)
+                              (le 1 8)
+                              (repeat (- variables-size 32) 0)
                               (repeat (- embedded-offset variables-size) 0)
                               kernel))
             data-raw-size (align (count data) file-alignment)
             reloc-address (align (+ data-address (count data)) section-alignment)
             labels (merge {:address0 (+ data-address (nth data-addresses 0))
                            :address1 (+ data-address (nth data-addresses 1))
-                           :map-pointer (+ data-address 16)
-                           :map-size (+ data-address 24)
-                           :map-key (+ data-address 32)
-                           :descriptor-size (+ data-address 40)
-                           :descriptor-version (+ data-address 48)}
+                           :boot-info (+ data-address 16)
+                           :map-pointer (+ data-address 32)
+                           :map-size (+ data-address 40)
+                           :descriptor-size (+ data-address 48)
+                           :descriptor-version (+ data-address 56)
+                           :map-key (+ data-address 64)}
                           (into {} (map-indexed
                                     (fn [index segment]
                                       [(keyword (str "segment" index))

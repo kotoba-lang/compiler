@@ -139,7 +139,7 @@
                       kernel-store-u8 kernel-store-u8-4k} op)
         (trap! :kernel-memory-unavailable {:operation op})
 
-        (contains? '#{kernel-read-cr2 kernel-read-cr3 kernel-write-cr3 kernel-invlpg
+        (contains? '#{kernel-boot-info kernel-read-cr2 kernel-read-cr3 kernel-write-cr3 kernel-invlpg
                       kernel-cli kernel-sti kernel-hlt kernel-pause
                       kernel-out-u8 kernel-out-u32} op)
         (trap! :kernel-privileged-unavailable {:operation op})
@@ -224,7 +224,7 @@
 (defn lower [hir]
   (let [kernel-operations '#{kernel-load-u8 kernel-load-u8-4k kernel-load-u8-16k
                              kernel-store-u8 kernel-store-u8-4k kernel-read-cr2
-                             kernel-read-cr3 kernel-write-cr3 kernel-invlpg
+                             kernel-boot-info kernel-read-cr3 kernel-write-cr3 kernel-invlpg
                              kernel-cli kernel-sti kernel-hlt kernel-pause
                              kernel-out-u8 kernel-out-u32}
         kernel-native? (some #(and (seq? %) (contains? kernel-operations (first %)))

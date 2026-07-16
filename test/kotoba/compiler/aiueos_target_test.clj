@@ -64,8 +64,9 @@
     (is (empty? (:imports binary)))
     (is (nil? (:interpreter binary)))
     (is (= :aiueos_kernel_entry (:entry binary)))
-    ;; Entry shim initializes r9 from a RIP-relative static context before CALL.
-    (is (= [0x4c 0x8d 0x0d] (subvec bytes 0x1000 0x1003)))
+    ;; Entry shim preserves loader rdi in context+80, then initializes r9.
+    (is (= [0x48 0x89 0x3d] (subvec bytes 0x1000 0x1003)))
+    (is (= [0x4c 0x8d 0x0d] (subvec bytes 0x1007 0x100a)))
     ;; Context fuel is initialized to 256; no host process populates it.
     (is (= 256 (read-le bytes (+ 0x8000 8) 8)))))
 
@@ -84,6 +85,14 @@
     (is (some #(= [0x0f 0x01 0x38] %) (partition 3 1 code)) "invlpg [rax]")
     (is (some #{0xee} code) "out dx,al")
     (is (some #{0xef} code) "out dx,eax")))
+
+(deftest kernel-target-loads-versioned-boot-info-from-its-private-context
+  (let [artifact (:artifact (compiler/compile-source
+                              "(defn main [] (kernel-boot-info))"
+                              :x86_64-aiueos-kernel-v1))]
+    (is (some #(= [0x49 0x8b 0x41 0x50] %)
+              (partition 4 1 (:code artifact))))
+    (is (empty? (:imports artifact)))))
 
 (deftest privileged-intrinsics-are-rejected-outside-the-kernel-target
   (doseq [target [:x86_64-linux-kotoba-v1 :x86_64-aiueos-user-v1

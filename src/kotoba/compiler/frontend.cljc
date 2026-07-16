@@ -23,7 +23,7 @@
   '{kernel-load-u8 3 kernel-load-u8-4k 3 kernel-load-u8-16k 3
     kernel-store-u8 4 kernel-store-u8-4k 4})
 (def kernel-privileged-operations
-  '{kernel-read-cr2 0 kernel-read-cr3 0 kernel-write-cr3 1 kernel-invlpg 1
+  '{kernel-boot-info 0 kernel-read-cr2 0 kernel-read-cr3 0 kernel-write-cr3 1 kernel-invlpg 1
     kernel-cli 0 kernel-sti 0 kernel-hlt 0 kernel-pause 0
     kernel-out-u8 2 kernel-out-u32 2})
 (def list-operations '#{list cons first second rest empty?})
