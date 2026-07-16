@@ -44,6 +44,7 @@
    'aiueos-page-mapping-plan {:arity 5 :symbol "kotoba_aiueos_page_mapping_plan"}
    'aiueos-process-create-plan {:arity 5 :symbol "kotoba_aiueos_process_create_plan"}
    'aiueos-process-teardown-plan {:arity 5 :symbol "kotoba_aiueos_process_teardown_plan"}
+   'aiueos-task-slot-plan {:arity 5 :symbol "kotoba_aiueos_task_slot_plan"}
    'aiueos-rsa2048-sha256-verify {:arity 5 :symbol "kotoba_aiueos_rsa2048_sha256_verify"}})
 
 (defn- le [n width]
@@ -263,6 +264,7 @@
                                         aiueos-user-elf-valid
                                         aiueos-user-context-build
                                         aiueos-process-create-plan
+                                        aiueos-task-slot-plan
                                         aiueos-user-object-journal-value
                                         aiueos-service-registry-state} object-entry))
           replenish (when bounded-memory?
