@@ -42,6 +42,7 @@
    'aiueos-user-elf-valid {:arity 2 :symbol "kotoba_aiueos_user_elf_valid"}
    'aiueos-user-context-build {:arity 4 :symbol "kotoba_aiueos_user_context_build"}
    'aiueos-page-mapping-plan {:arity 5 :symbol "kotoba_aiueos_page_mapping_plan"}
+   'aiueos-process-create-plan {:arity 5 :symbol "kotoba_aiueos_process_create_plan"}
    'aiueos-rsa2048-sha256-verify {:arity 5 :symbol "kotoba_aiueos_rsa2048_sha256_verify"}})
 
 (defn- le [n width]
@@ -260,6 +261,7 @@
                                         aiueos-app-lookup-plan
                                         aiueos-user-elf-valid
                                         aiueos-user-context-build
+                                        aiueos-process-create-plan
                                         aiueos-user-object-journal-value
                                         aiueos-service-registry-state} object-entry))
           replenish (when bounded-memory?
