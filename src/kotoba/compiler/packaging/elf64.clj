@@ -35,7 +35,8 @@
    'aiueos-user-object-journal-build {:arity 5 :symbol "kotoba_aiueos_user_object_journal_build"}
    'aiueos-user-object-journal-valid {:arity 3 :symbol "kotoba_aiueos_user_object_journal_valid"}
    'aiueos-user-object-journal-value {:arity 2 :symbol "kotoba_aiueos_user_object_journal_value"}
-   'aiueos-sha256 {:arity 5 :symbol "kotoba_aiueos_sha256"}})
+   'aiueos-sha256 {:arity 5 :symbol "kotoba_aiueos_sha256"}
+   'aiueos-rsa2048-sha256-verify {:arity 5 :symbol "kotoba_aiueos_rsa2048_sha256_verify"}})
 
 (defn- le [n width]
   (mapv #(bit-and (unsigned-bit-shift-right (long n) (* 8 %)) 0xff)
@@ -239,9 +240,10 @@
     ;; lea r9,[rip+.data] (relocated); optionally replenish bounded-memory
     ;; fuel; sub rsp,8; call local Kotoba entry; add rsp,8; ret.
     (let [sha-fuel? (= 'aiueos-sha256 object-entry)
+          rsa-fuel? (= 'aiueos-rsa2048-sha256-verify object-entry)
           high-fuel? (contains? '#{aiueos-user-object-journal-build
                                     aiueos-user-object-journal-valid} object-entry)
-          bounded-memory? (or sha-fuel? high-fuel? (contains? '#{aiueos-fnv1a aiueos-journal-record-valid
+          bounded-memory? (or sha-fuel? rsa-fuel? high-fuel? (contains? '#{aiueos-fnv1a aiueos-journal-record-valid
                                         aiueos-object-transaction-valid aiueos-object-transaction-route
                                         aiueos-mutable-object-valid
                                         aiueos-superblock-valid aiueos-journal-record-build
@@ -250,6 +252,7 @@
                                         aiueos-service-registry-state} object-entry))
           replenish (when bounded-memory?
                       (cond
+                        rsa-fuel? [0x49 0xc7 0x41 0x08 0x80 0xb2 0xe6 0x0e] ; 250,000,000
                         sha-fuel? [0x49 0xc7 0x41 0x08 0x80 0x96 0x98 0x00] ; 10,000,000
                         high-fuel? [0x49 0xc7 0x41 0x08 0x00 0x10 0x00 0x00] ; 4096
                         :else [0x49 0xc7 0x41 0x08 0x00 0x04 0x00 0x00])) ; 1024

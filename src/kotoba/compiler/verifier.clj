@@ -128,10 +128,12 @@
             (reject! "runtime KIR heap operation arity rejected" {:operation op}))
           (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
 
-        (contains? '#{kernel-load-u8 kernel-load-u8-16k kernel-store-u8} op)
+        (contains? '#{kernel-load-u8 kernel-load-u8-4k kernel-load-u8-16k
+                      kernel-store-u8 kernel-store-u8-4k} op)
         (do
-          (when-not (= ({'kernel-load-u8 3 'kernel-load-u8-16k 3
-                         'kernel-store-u8 4} op) (count args))
+          (when-not (= ({'kernel-load-u8 3 'kernel-load-u8-4k 3
+                         'kernel-load-u8-16k 3 'kernel-store-u8 4
+                         'kernel-store-u8-4k 4} op) (count args))
             (reject! "runtime KIR kernel memory operation arity rejected" {:operation op}))
           (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
 
@@ -214,8 +216,9 @@
         expected-profile (target-profile/profile target)
         {expected-lowering :lowering emit :emit} (get target-contracts backend)]
     (when (and (not= target :x86_64-aiueos-kernel-v1)
-               (some #(and (seq? %) (contains? '#{kernel-load-u8 kernel-load-u8-16k
-                                                  kernel-store-u8} (first %)))
+               (some #(and (seq? %) (contains? '#{kernel-load-u8 kernel-load-u8-4k
+                                                  kernel-load-u8-16k kernel-store-u8
+                                                  kernel-store-u8-4k} (first %)))
                      (tree-seq coll? seq (:functions program))))
       (reject! "bounded kernel memory operation requires the aiueos kernel target"
                {:target target}))
