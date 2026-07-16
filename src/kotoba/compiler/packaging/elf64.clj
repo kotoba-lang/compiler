@@ -38,6 +38,7 @@
    'aiueos-sha256 {:arity 5 :symbol "kotoba_aiueos_sha256"}
    'aiueos-digest-equal {:arity 3 :symbol "kotoba_aiueos_digest_equal"}
    'aiueos-app-catalog-valid {:arity 5 :symbol "kotoba_aiueos_app_catalog_valid"}
+   'aiueos-app-lookup-plan {:arity 5 :symbol "kotoba_aiueos_app_lookup_plan"}
    'aiueos-rsa2048-sha256-verify {:arity 5 :symbol "kotoba_aiueos_rsa2048_sha256_verify"}})
 
 (defn- le [n width]
@@ -252,6 +253,7 @@
                                         aiueos-mutable-object-build aiueos-copy-in
                                         aiueos-digest-equal
                                         aiueos-app-catalog-valid
+                                        aiueos-app-lookup-plan
                                         aiueos-user-object-journal-value
                                         aiueos-service-registry-state} object-entry))
           replenish (when bounded-memory?
