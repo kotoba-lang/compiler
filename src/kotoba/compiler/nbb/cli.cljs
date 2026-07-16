@@ -44,20 +44,76 @@
     (usage-error! "error: input must be a .kotoba file"))
   path)
 
+;; Mirrors `kotoba.compiler.bounded-edn`'s `max-depth`/`max-token-chars`/
+;; `max-nodes`/`max-string-chars` exactly -- applied ONLY to `--policy`
+;; (via read-edn-form! below), the one untrusted-ish EDN side-channel this
+;; fast path reads, same scoping the JVM path's `bounded-edn/read-file`
+;; has (`.kotoba` SOURCE itself goes through `kr/read-forms` with no depth
+;; limit either, matching `clojure.tools.reader`'s own unbounded treatment
+;; of source in `kotoba.compiler.frontend`).
+(def ^:private max-policy-depth 128)
+(def ^:private max-policy-token-chars 4096)
+(def ^:private max-policy-nodes 200000)
+(def ^:private max-policy-string-chars (* 1024 1024))
+
+(defn- validate-edn-shape!
+  "Mirrors `kotoba.compiler.bounded-edn/validate-shape!`'s post-parse walk:
+  bounds total node count and individual string length. Bracket nesting
+  depth AND raw token length (including NUMBER tokens -- a huge digit run
+  becomes a `js/BigInt`, which has no post-parse 'name' to measure) are
+  ALREADY bounded during parsing itself (see
+  `kotoba.compiler.kotoba-reader/read-token`/`read-delimited`'s docstrings
+  for why those two specifically can't wait until after the full value is
+  built, or be checked only on keyword/symbol names).
+
+  Note: the string-length check here is real defense-in-depth (matches
+  bounded-edn's own belt-and-suspenders structure) but is currently
+  UNREACHABLE via this CLI's actual `--policy` path: `nbb.io/read-text-file`
+  enforces its own 1MiB overall file-byte cap first, numerically identical
+  to `max-policy-string-chars`, so any policy file with a string anywhere
+  near that length already fails the coarser file-size check before this
+  function ever runs (see `scripts/conformance.cljs`'s own comment on this,
+  where it was confirmed live). Kept anyway for structural parity with
+  bounded-edn and in case a future caller feeds this function a value from
+  somewhere other than the byte-capped `--policy` file path."
+  [value]
+  (let [nodes (volatile! 0)]
+    (letfn [(walk [x]
+              (when (> (vswap! nodes inc) max-policy-nodes)
+                (throw (ex-info "EDN value contains too many nodes"
+                                {:phase :decode :limit max-policy-nodes})))
+              (when (and (string? x) (> (count x) max-policy-string-chars))
+                (throw (ex-info "EDN string exceeds limit"
+                                {:phase :decode :limit max-policy-string-chars})))
+              (cond
+                (map? x) (doseq [[k v] x] (walk k) (walk v))
+                (coll? x) (doseq [item x] (walk item))))]
+      (walk value)
+      value)))
+
 (defn- read-edn-form!
   "Reads exactly one top-level EDN form from TEXT, same contract
   `kotoba.compiler.bounded-edn/read-string` enforces on the JVM path (empty
   input and trailing forms are both rejected, `:phase :decode` so
   `exit-code` maps it to 65 same as that path) -- `--policy` files go
   through this, not a bare `(first (kr/read-forms ...))` that would
-  silently ignore everything after the first form."
+  silently ignore everything after the first form. Also enforces the same
+  depth/node/token/string bounds `bounded-edn/read-string` does for
+  exactly this reason: `--policy` is the untrusted-ish EDN input those
+  limits exist to harden against structural resource attacks (previously
+  UNENFORCED here -- only the byte-size limit in `nbb.io/read-text-file`
+  and the trailing-form check above ran, confirmed live: a `--policy` file
+  with 500+ levels of `[` nesting, or a single 4097-digit number literal,
+  both parsed here without error, whereas the JVM path's
+  `bounded-edn/read-file` rejects both)."
   [text]
-  (let [forms (kr/read-forms text)]
+  (let [forms (kr/read-forms text {:max-depth max-policy-depth
+                                   :max-token-chars max-policy-token-chars})]
     (when (empty? forms)
       (throw (ex-info "EDN input is empty" {:phase :decode})))
     (when (> (count forms) 1)
       (throw (ex-info "EDN input contains trailing forms" {:phase :decode})))
-    (first forms)))
+    (validate-edn-shape! (first forms))))
 
 (defn- read-policy [args]
   (if-let [p (option args "--policy")]

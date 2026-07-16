@@ -184,6 +184,53 @@
              "trailing EDN diagnostic mismatch")
     (ensure! (not (re-find #"Execution error|Full report|kotoba\.compiler.*\.clj" (:stderr result)))
              "CLI diagnostic leaked stack information"))
+  ;; --policy structural-resource-attack rejections, mirroring
+  ;; kotoba.compiler.bounded-edn-test's "rejects-structural-resource-attacks"
+  ;; cases exactly (same depth/token/node/string limits, now enforced on
+  ;; BOTH the JVM path -- bounded-edn/read-file -- and this repo's
+  ;; nbb-native fast path -- kotoba.compiler.nbb.cli/read-edn-form! --
+  ;; whichever `bin/kotoba` dispatches `check` to, since it always does for
+  ;; this command; see that namespace's own comment for the specific gap
+  ;; this closed).
+  (write! "deep-policy.edn" (str (apply str (repeat 129 "[")) (apply str (repeat 129 "]"))))
+  (let [result (k-fail "check" (file "bounded-source.kotoba") "--policy" (file "deep-policy.edn"))]
+    (ensure! (= 65 (:status result)) "over-depth policy exit must be 65")
+    (ensure! (contains-text? (:stderr result) "nesting exceeds limit")
+             "over-depth policy diagnostic mismatch"))
+  (write! "oversized-token-policy.edn" (apply str (repeat 4097 "9")))
+  (let [result (k-fail "check" (file "bounded-source.kotoba") "--policy" (file "oversized-token-policy.edn"))]
+    (ensure! (= 65 (:status result)) "oversized-token policy exit must be 65")
+    (ensure! (contains-text? (:stderr result) "token exceeds limit")
+             "oversized-token policy diagnostic mismatch"))
+  (write! "too-many-nodes-policy.edn"
+          (str "[" (str/join " " (repeat 200001 "1")) "]"))
+  (let [result (k-fail "check" (file "bounded-source.kotoba") "--policy" (file "too-many-nodes-policy.edn"))]
+    (ensure! (= 65 (:status result)) "too-many-nodes policy exit must be 65")
+    (ensure! (contains-text? (:stderr result) "too many nodes")
+             "too-many-nodes policy diagnostic mismatch"))
+  ;; NOT tested here: kotoba.compiler.nbb.cli/validate-edn-shape!'s
+  ;; max-string-chars check (mirrors bounded-edn's own `max-string-chars`,
+  ;; also 1MiB) is real but PROVABLY UNREACHABLE through this CLI as
+  ;; currently configured -- `nbb.io/read-text-file`'s overall file-byte
+  ;; cap is ALSO exactly 1MiB (a deliberate, documented choice: "the
+  ;; stricter of [bounded-edn's] two limits", see that namespace's own
+  ;; comment), so any policy file containing a string anywhere near
+  ;; max-string-chars in length already exceeds the file-level cap first,
+  ;; failing closed with "input exceeds byte limit" instead (verified live
+  ;; while writing this test: asserting "string exceeds limit" here failed
+  ;; every time with the byte-limit message instead). The JVM path doesn't
+  ;; have this coincidence (`bounded-edn/max-edn-bytes` is 8MiB for
+  ;; `--policy`, well above its own 1MiB `max-string-chars`), so
+  ;; `bounded-edn-test.clj`'s "oversized string" case there DOES exercise
+  ;; the check directly (calling `read-string` on already-decoded text,
+  ;; with no byte-size gate in front of it at all). Both paths fail
+  ;; closed either way -- this is a documented consequence of nbb.io's
+  ;; existing single-limit design, not a gap this change introduces.
+  (write! "dispatch-form-policy.edn" "#inst \"2026-07-11\"")
+  (let [result (k-fail "check" (file "bounded-source.kotoba") "--policy" (file "dispatch-form-policy.edn"))]
+    (ensure! (= 65 (:status result)) "dispatch-form policy exit must be 65")
+    (ensure! (contains-text? (:stderr result) "reader dispatch")
+             "dispatch-form policy diagnostic mismatch"))
   (.writeFileSync fs (file "oversized-source.kotoba") (js/Buffer.alloc 1048577))
   (let [result (k-fail "check" (file "oversized-source.kotoba"))]
     (ensure! (and (= 65 (:status result)) (contains-text? (:stderr result) "input exceeds byte limit"))
