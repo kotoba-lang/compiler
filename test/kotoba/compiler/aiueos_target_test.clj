@@ -68,6 +68,28 @@
     ;; Context fuel is initialized to 256; no host process populates it.
     (is (= 256 (read-le bytes (+ 0x8000 8) 8)))))
 
+(deftest kernel-target-lowers-privileged-intrinsics-without-imports
+  (let [source (str "(defn main [] "
+                    "(let [cr3 (kernel-read-cr3) "
+                    "      written (kernel-write-cr3 cr3) "
+                    "      flushed (kernel-invlpg 4096) "
+                    "      marker (kernel-out-u8 233 75)] "
+                    "  (kernel-out-u32 244 (+ cr3 written flushed marker))))")
+        artifact (:artifact (compiler/compile-source source :x86_64-aiueos-kernel-v1))
+        code (:code artifact)]
+    (is (empty? (:imports artifact)))
+    (is (some #(= [0x0f 0x20 0xd8] %) (partition 3 1 code)) "mov rax,cr3")
+    (is (some #(= [0x0f 0x22 0xd8] %) (partition 3 1 code)) "mov cr3,rax")
+    (is (some #(= [0x0f 0x01 0x38] %) (partition 3 1 code)) "invlpg [rax]")
+    (is (some #{0xee} code) "out dx,al")
+    (is (some #{0xef} code) "out dx,eax")))
+
+(deftest privileged-intrinsics-are-rejected-outside-the-kernel-target
+  (doseq [target [:x86_64-linux-kotoba-v1 :x86_64-aiueos-user-v1
+                  :x86_64-aiueos-uefi-v1]]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"requires the aiueos kernel target"
+          (compiler/compile-source "(defn main [] (kernel-read-cr3))" target)))))
+
 (deftest x86-loop-recur-reuses-its-native-stack-frame
   (let [source "(defn main [] (loop [i 0 acc 0] (if (= i 20) acc (recur (+ i 1) (+ acc i)))))"
         artifact (:artifact (compiler/compile-source source :x86_64-aiueos-kernel-v1))
