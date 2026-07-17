@@ -35,9 +35,16 @@
 (deftest when-is-if-with-implicit-else-zero
   (is (= 42 (oracle "(defn main [] (when 1 42))")))
   (is (= 0 (oracle "(defn main [] (when 0 42))")))
-  (is (= "when requires a test and exactly one result expression (this profile has no `do`, unlike kotoba-lang/kotoba's)"
-         (rejection-message "(defn main [] (when 1 2 3))"))
-      "no implicit do in this profile -- exactly one result expression"))
+  ;; ADR-2607180900 L2: multi-body when is admitted via `do` desugar.
+  (is (= 3 (oracle "(defn main [] (when 1 2 3))"))
+      "multi-body when returns the last body expression")
+  (is (= 0 (oracle "(defn main [] (when 0 2 3))"))
+      "multi-body when still else-zero when test is falsy"))
+
+(deftest do-sequences-and-returns-last
+  (is (= 5 (oracle "(defn main [] (do 1 2 5))")))
+  (is (= 0 (oracle "(defn main [] (do))")))
+  (is (= 9 (oracle "(defn main [] (do 9))"))))
 
 (deftest and-or-when-are-reserved-function-names
   (is (some? (rejection-message "(defn and [] 1) (defn main [] 0)")))

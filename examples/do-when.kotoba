@@ -1,0 +1,6 @@
+(ns examples.do-when)
+
+(defn main []
+  (when 1
+    (do 3 4)
+    42))
