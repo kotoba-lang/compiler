@@ -5,7 +5,8 @@
   existing heap-pair/list primitives -- no backend/codegen change)."
   (:require [clojure.test :refer [deftest is testing]]
             [kotoba.compiler.core :as compiler]
-            [kotoba.compiler.frontend :as frontend]))
+            [kotoba.compiler.frontend :as frontend]
+            [kotoba.compiler.ir :as ir]))
 
 (defn- oracle [source]
   (:oracle-value (:kir (compiler/compile-source source :wasm32-kotoba-v1))))
@@ -162,6 +163,38 @@
          (rejection-message "(def x 1) (defn x [] 2) (defn main [] x)")))
   (is (= 7 (oracle "(def x 99) (defn identity-x [x] x) (defn main [] (identity-x 7))")))
   (is (= 8 (oracle "(def x 99) (defn main [] (let [x 8] x))"))))
+
+(deftest explicit-module-exports-hide-private-functions-across-backends
+  (let [source "(ns pilot.module (:export [main]))
+                (defn- hidden [x] (+ x 1))
+                (defn main [] (hidden 41))"
+        wasm (compiler/compile-source source :wasm32-kotoba-v1)
+        js (compiler/compile-source source :js-kotoba-v1)
+        cljs (compiler/compile-source source :cljs-kotoba-v1)
+        native (compiler/compile-source source :x86_64-kotoba-v1)
+        wasm-text (String. ^bytes (:bytes wasm) "ISO-8859-1")]
+    (is (= ['main] (get-in wasm [:hir :exports])))
+    (is (= ['main] (get-in wasm [:kir :exports])))
+    (is (= 42 (get-in wasm [:kir :oracle-value])))
+    (is (re-find #"main" wasm-text))
+    (is (not (re-find #"hidden" wasm-text)))
+    (is (= #{'main} (set (keys (get-in native [:artifact :exports])))))
+    (is (re-find #"\(defn- hidden" (:source cljs)))
+    (is (not (re-find #"'hidden':k\$hidden" (:source js))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not exported"
+                          (ir/execute (:kir wasm) 'hidden [1])))))
+
+(deftest module-export-declarations-fail-closed
+  (is (= "namespace exports must name declared public functions"
+         (rejection-message "(ns bad (:export [missing])) (defn main [] 0)")))
+  (is (= "namespace exports must name declared public functions"
+         (rejection-message "(ns bad (:export [main hidden])) (defn- hidden [] 1) (defn main [] 0)")))
+  (is (= "namespace exports must be unique bounded function names"
+         (rejection-message "(ns bad (:export [main main])) (defn main [] 0)")))
+  (is (= "main entrypoint must be exported"
+         (rejection-message "(ns bad (:export [helper])) (defn helper [] 1) (defn main [] 0)")))
+  (is (= "only a bounded :export vector is admitted in namespace clauses"
+         (rejection-message "(ns bad (:require [ambient])) (defn main [] 0)"))))
 
 (deftest map-get-recursion-shares-the-existing-fuel-budget
   ;; get/assoc introduce no new resource limit -- they are subject to the

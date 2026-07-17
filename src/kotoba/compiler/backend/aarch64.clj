@@ -289,7 +289,8 @@
       out)))
 
 (defn emit-program [kir]
-  (let [token-bodies (mapv (fn [f] [f (emit-function f)]) (:functions kir))
+  (let [exported-names (set (or (:exports kir) (map :name (:functions kir))))
+        token-bodies (mapv (fn [f] [f (emit-function f)]) (:functions kir))
         offsets (loop [items token-bodies offset 0 out {}]
                   (if-let [[f body] (first items)]
                     (recur (next items) (+ offset (code-size body)) (assoc out (:name f) offset)) out))]
@@ -297,6 +298,8 @@
       (if-let [[function tokens] (first items)]
         (let [offset (get offsets (:name function)) body (finalize tokens offset offsets)]
           (recur (next items) (into code body)
-                 (assoc exports (:name function)
-                        {:offset offset :length (count body) :arity (count (:params function))})))
+                 (cond-> exports
+                   (contains? exported-names (:name function))
+                   (assoc (:name function)
+                          {:offset offset :length (count body) :arity (count (:params function))}))))
         {:code code :exports exports}))))

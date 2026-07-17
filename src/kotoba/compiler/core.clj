@@ -81,7 +81,7 @@
                        :x86_64-kotoba-v1 x86-64/emit-program
                        :aarch64-kotoba-v1 aarch64/emit-program) kir)
             code (:code emitted)
-            program (select-keys kir [:format :entry :signature :effects :functions])
+            program (select-keys kir [:format :entry :exports :signature :effects :functions])
             artifact (artifact/seal
                       {:format :kotoba.kexe/v1 :target target :target-profile profile :value value
                        :kir-sha256 (artifact/sha256 program)

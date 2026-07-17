@@ -205,6 +205,9 @@
   ([kir function-name args] (execute kir function-name args {}))
   ([kir function-name args {:keys [fuel cap-call pair-capacity]
                             :or {fuel default-fuel pair-capacity default-pair-capacity}}]
+   (when (and (contains? kir :exports)
+              (not (some #{function-name} (:exports kir))))
+     (throw (ex-info "function is not exported" {:phase :ir :function function-name})))
    ;; fuel/pair-capacity are interpreter-internal config, never a `.kotoba`
    ;; value -- plain `integer?` is correct for both runtimes here.
    (when-not (and (integer? fuel) (pos? fuel))
@@ -236,6 +239,7 @@
                              (tree-seq coll? seq (:functions hir)))
         base {:format :kotoba.kir/v3
               :entry (:entry hir)
+              :exports (:exports hir)
               :signature {:params [] :result :i64}
               :effects (:effects hir)
               :functions (mapv #(select-keys % [:name :params :result :effects :body])
