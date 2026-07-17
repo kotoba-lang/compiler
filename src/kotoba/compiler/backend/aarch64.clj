@@ -143,6 +143,48 @@
         (branch 8)                           ; b skip
         (insn 0xd4200000))))                 ; trap: brk ; skip:
 
+;; 32-bit MMIO (virtio registers are u32). Same bounds discipline, but the
+;; 4-byte access must fit: index+4 <= length. Byte layout from the first branch:
+;;   +0 cmp x2,x4  +4 b.hi trap  +8 cbz x1,trap  +12 add x5,x3,#4  +16 cmp x5,x2
+;;   +20 b.hi trap +24 add x1,x1,x3 +28 access  +32 b skip  +36 brk(trap)  +40 skip
+(defn- bounds-check-u32 [maximum]
+  (concat (load-constant-reg 4 maximum)
+          (insn 0xeb04005f)          ; cmp x2, x4  (length vs maximum)
+          (b-cond cond-hi 32)        ; b.hi trap
+          (cbz-reg 1 28)             ; cbz x1, trap
+          (insn 0x91001065)          ; add x5, x3, #4   (index + 4)
+          (insn 0xeb0200bf)          ; cmp x5, x2       (index+4 vs length)
+          (b-cond cond-hi 16)))      ; b.hi trap  (index+4 > length)
+
+(defn- emit-kernel-store-u32 [[base length index value] maximum env]
+  (vec (concat
+        (emit-expr base env) (save-x0)
+        (emit-expr length env) (save-x0)
+        (emit-expr index env) (save-x0)
+        (emit-expr value env)                ; x0 = value (also the result)
+        (ldr-sp 3 0) (add-sp 16)             ; x3 = index
+        (ldr-sp 2 0) (add-sp 16)             ; x2 = length
+        (ldr-sp 1 0) (add-sp 16)             ; x1 = base
+        (bounds-check-u32 maximum)
+        (insn 0x8b030021)                    ; add x1, x1, x3
+        (insn 0xb9000020)                    ; str w0, [x1]
+        (branch 8)                           ; b skip
+        (insn 0xd4200000))))                 ; trap: brk ; skip:
+
+(defn- emit-kernel-load-u32 [[base length index] maximum env]
+  (vec (concat
+        (emit-expr base env) (save-x0)
+        (emit-expr length env) (save-x0)
+        (emit-expr index env)                ; x0 = index
+        (mov-reg 3 0)                        ; x3 = index
+        (ldr-sp 2 0) (add-sp 16)             ; x2 = length
+        (ldr-sp 1 0) (add-sp 16)             ; x1 = base
+        (bounds-check-u32 maximum)
+        (insn 0x8b030021)                    ; add x1, x1, x3
+        (insn 0xb9400020)                    ; ldr w0, [x1]  -> x0 = word
+        (branch 8)                           ; b skip
+        (insn 0xd4200000))))                 ; trap: brk ; skip:
+
 (defn- emit-cap-call [cap-id value env]
   (let [word-offset (+ 16 (* 8 (quot cap-id 64)))
         bit-index (mod cap-id 64)]
@@ -200,6 +242,8 @@
         (= op 'kernel-load-u8) (emit-kernel-load-u8 args 512 env)
         (= op 'kernel-load-u8-4k) (emit-kernel-load-u8 args 4096 env)
         (= op 'kernel-load-u8-16k) (emit-kernel-load-u8 args 16384 env)
+        (= op 'kernel-store-u32) (emit-kernel-store-u32 args 512 env)
+        (= op 'kernel-load-u32) (emit-kernel-load-u32 args 512 env)
         :else (emit-call op args env)))))
 
 (defn- emit-function [{:keys [name params body]}]

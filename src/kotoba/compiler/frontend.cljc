@@ -21,7 +21,8 @@
 (def heap-operations '{pair 2 pair-first 1 pair-second 1})
 (def kernel-memory-operations
   '{kernel-load-u8 3 kernel-load-u8-4k 3 kernel-load-u8-16k 3
-    kernel-store-u8 4 kernel-store-u8-4k 4})
+    kernel-store-u8 4 kernel-store-u8-4k 4
+    kernel-load-u32 3 kernel-store-u32 4})
 (def kernel-privileged-operations
   '{kernel-boot-info 0 kernel-read-cr2 0 kernel-read-cr3 0 kernel-write-cr3 1 kernel-invlpg 1
     kernel-cli 0 kernel-sti 0 kernel-hlt 0 kernel-pause 0
