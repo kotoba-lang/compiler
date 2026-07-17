@@ -753,17 +753,105 @@
       (reject! "function docstring exceeds admission limit" docstring))
     {:name name :raw-params raw-params :body body}))
 
+(defn- binding-symbols [pattern]
+  (->> (tree-seq coll? seq pattern)
+       (filter symbol?)
+       (remove #{'&})
+       set))
+
+(defn- constant-literal?
+  "Closed compile-time data admitted for top-level `def`. Constants are
+  substituted before desugaring, so they cannot allocate ambient mutable
+  state or execute code during compilation."
+  [value]
+  (cond
+    (kotoba-integer? value) true
+    (keyword? value) true
+    (vector? value) (and (<= (count value) max-list-items)
+                         (every? constant-literal? value))
+    (map? value) (and (<= (count value) max-list-items)
+                      (every? constant-literal? (mapcat identity value)))
+    :else false))
+
+(defn- def-parts [form]
+  (let [[_ name & declaration] form
+        [docstring declaration] (if (string? (first declaration))
+                                  [(first declaration) (rest declaration)]
+                                  [nil declaration])]
+    (when (and docstring (> (count docstring) max-function-docstring-chars))
+      (reject! "constant docstring exceeds admission limit" docstring))
+    (when-not (= 1 (count declaration))
+      (reject! "constant must contain exactly one literal value" form))
+    (let [value (first declaration)]
+      (when-not (constant-literal? value)
+        (reject! "constant value must be closed bounded integer/keyword/vector/map data" value))
+      {:name name :value value})))
+
+(declare substitute-constants)
+
+(defn- substitute-bindings
+  [op bindings constants bound]
+  (when-not (and (vector? bindings) (even? (count bindings)))
+    (reject! (case op
+               let "let requires an even binding vector"
+               loop "loop requires an even binding vector")
+             bindings))
+  (loop [pairs (partition 2 bindings) bound bound out []]
+    (if-let [[pattern value] (first pairs)]
+      (recur (next pairs)
+             (into bound (binding-symbols pattern))
+             (conj out pattern (substitute-constants value constants bound)))
+      [out bound])))
+
+(defn- substitute-constants
+  "Lexically substitute closed top-level constants without replacing call
+  heads or names shadowed by params/let/loop bindings."
+  [form constants bound]
+  (cond
+    (symbol? form) (if (and (not (contains? bound form))
+                            (contains? constants form))
+                     (get constants form)
+                     form)
+    (seq? form)
+    (let [[op & args] form]
+      (case op
+        quote form
+        (let loop) (let [[bindings & body] args
+                         [bindings' bound'] (substitute-bindings op bindings constants bound)]
+                     (list* op bindings'
+                            (map #(substitute-constants % constants bound') body)))
+        (list* op (map #(substitute-constants % constants bound) args))))
+    (vector? form) (mapv #(substitute-constants % constants bound) form)
+    (map? form) (into (empty form)
+                      (map (fn [[k v]] [(substitute-constants k constants bound)
+                                       (substitute-constants v constants bound)]))
+                      form)
+    :else form))
+
 (defn analyze [source]
   (let [forms (read-forms source)
         namespaces (filter #(and (seq? %) (= 'ns (first %))) forms)
         defs (filter #(and (seq? %) (= 'defn (first %))) forms)
+        constant-forms (filter #(and (seq? %) (= 'def (first %))) forms)
         other (remove #(or (and (seq? %) (= 'ns (first %)))
-                           (and (seq? %) (= 'defn (first %)))) forms)
+                           (and (seq? %) (= 'defn (first %)))
+                           (and (seq? %) (= 'def (first %)))) forms)
         _ (when (> (count defs) max-functions)
             (reject! "function count exceeds admission limit" (count defs)))
         _ (when (or (> (count namespaces) 1)
                     (some #(not (valid-namespace-form? %)) namespaces))
             (reject! "ns must contain one bounded namespace symbol and an optional bounded docstring; namespace clauses are not admitted" namespaces))
+        constants (into {}
+                        (map (fn [form]
+                               (let [{:keys [name value]} (def-parts form)]
+                                 (when-not (valid-name? name)
+                                   (reject! "invalid constant name" name))
+                                 (when (contains? reserved-function-names name)
+                                   (reject! "reserved constant name" name))
+                                 [name value])))
+                        constant-forms)
+        _ (when-not (= (count constants) (count constant-forms))
+            (reject! "duplicate constant name" constant-forms))
         ;; ADR-2607150000: mapcat, not mapv -- a defn using `loop` may
         ;; expand into itself PLUS one or more synthesized loop-helper
         ;; functions (collected via *pending-loop-helpers*, bound fresh
@@ -799,8 +887,12 @@
                            (when-not (and (every? valid-name? params) (= (count params) (count (distinct params))))
                              (reject! "function parameters must be unique bounded symbols with ABI-supported arity" raw-params))
                            (let [loop-helpers (atom [])
+                                 constant-bound (into #{} (mapcat binding-symbols raw-params))
+                                 source-body (substitute-constants
+                                              (wrap-body (first body))
+                                              constants constant-bound)
                                  desugared (binding [*pending-loop-helpers* loop-helpers]
-                                             (desugar-expr (wrap-body (first body))))]
+                                             (desugar-expr source-body))]
                              (into [{:name name :params params :result :i64 :effects #{}
                                      :body desugared}]
                                    @loop-helpers)))))
@@ -816,6 +908,8 @@
                  (some #(uses-map-get? (:body %)) parsed) (conj map-get-helper)
                  (some #(uses-map-without? (:body %)) parsed) (conj map-without-helper))
         signatures (into {} (map (juxt :name :params) parsed))]
+    (when (seq (set/intersection (set (keys constants)) (set (keys signatures))))
+      (reject! "constant and function names must be disjoint" forms))
     (when (seq other) (reject! "only ns and defn are allowed at top level" (first other)))
     (when (empty? parsed) (reject! "at least one defn is required" forms))
     (when-not (= (count parsed) (count signatures)) (reject! "duplicate function name" defs))
