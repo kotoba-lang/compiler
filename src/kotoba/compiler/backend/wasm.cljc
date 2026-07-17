@@ -88,6 +88,14 @@
                   (emit-expr then env ctx) [0x05]
                   (emit-expr else env ctx) [0x0b]))
 
+        ;; `do`: emit each subexpression in order; drop all but the last value
+        ;; from the stack (0x1a = drop). Side effects run once, in order.
+        (= op 'do)
+        (let [n (count args)]
+          (mapcat (fn [i arg]
+                    (concat (emit-expr arg env ctx) (when (< i (dec n)) [0x1a])))
+                  (range n) args))
+
         (= op 'cap-call)
         (let [[cap-id value] args]
           (concat [0x42] (sleb cap-id) (emit-expr value env ctx)

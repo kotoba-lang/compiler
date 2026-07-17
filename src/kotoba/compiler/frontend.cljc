@@ -458,6 +458,18 @@
                      ;; after `analyze`'s `binding` had already exited.
                      (mapv desugar-expr body)))
 
+        ;; `do` sequencing: evaluate each subexpression in order, discard all
+        ;; but the last (which is the value). Unlike `let`, a `do` subexpression
+        ;; is NOT substituted into a body -- so a side-effecting form here runs
+        ;; exactly once, in order, even if its result is unused (kernel MMIO
+        ;; ops). A single-expression `do` collapses to that expression. `do` is
+        ;; kept as a first-class head through desugaring (a nested-`let`
+        ;; desugaring would DCE-drop unused side-effecting subexprs).
+        do (do (when (empty? args) (reject! "do requires at least one expression" form))
+               (if (= 1 (count args))
+                 (desugar-expr (first args))
+                 (list* 'do (mapv desugar-expr args))))
+
         ;; ADR-2607150000: `loop`/`recur` desugars to a compiler-synthesized
         ;; recursive helper function (like `get`'s __kotoba_map_get, but
         ;; freshly gensym'd per loop occurrence rather than one shared fixed
@@ -594,6 +606,10 @@
 
         (= op 'if)
         (do (when-not (= 3 (count args)) (reject! "if requires test, then, else" form))
+            (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
+        (= op 'do)
+        (do (when (empty? args) (reject! "do requires at least one expression" form))
             (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
 
         (= op 'cap-call)

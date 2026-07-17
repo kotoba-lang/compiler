@@ -175,6 +175,16 @@
                        [0x0f 0x84] (le32 (+ (code-size then-code) 5))
                        then-code [0xe9] (le32 (code-size else-code)) else-code)))
 
+        ;; `do`: emit each subexpression in order; each leaves its result in rax,
+        ;; the next overwrites it, so only the last value survives while every
+        ;; subexpression's side effects run exactly once, in order. All but the
+        ;; last are in non-tail position.
+        (= op 'do)
+        (let [n (count args)]
+          (vec (mapcat (fn [i arg]
+                         (emit-expr arg env (if (= i (dec n)) ctx (assoc ctx :tail? false))))
+                       (range n) args)))
+
         (= op 'cap-call)
         (emit-cap-call (first args) (second args) env ctx)
 

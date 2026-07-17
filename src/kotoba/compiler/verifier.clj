@@ -103,6 +103,11 @@
           (when-not (= 3 (count args)) (reject! "runtime KIR if arity rejected" {}))
           (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
 
+        (= op 'do)
+        (do
+          (when (empty? args) (reject! "runtime KIR do arity rejected" {}))
+          (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
+
         (= op 'cap-call)
         (let [[cap-id value :as call-args] args]
           (when-not (and (= 2 (count call-args)) (integer? cap-id) (<= 0 cap-id 255))

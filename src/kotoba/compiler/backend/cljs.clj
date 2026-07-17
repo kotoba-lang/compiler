@@ -86,6 +86,9 @@
         if (let [[test then else] args]
              (list 'if (list 'zero? (lower-expr test)) (lower-expr else) (lower-expr then)))
 
+        ;; `do`: Clojure's own `do` sequences the lowered subexpressions.
+        do (list* 'do (map lower-expr args))
+
         pair (let [[l r] args] (list 'vector (lower-expr l) (lower-expr r)))
         pair-first (list 'nth (lower-expr (first args)) 0)
         pair-second (list 'nth (lower-expr (first args)) 1)
