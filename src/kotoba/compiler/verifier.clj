@@ -129,11 +129,13 @@
           (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
 
         (contains? '#{kernel-load-u8 kernel-load-u8-4k kernel-load-u8-16k
-                      kernel-store-u8 kernel-store-u8-4k} op)
+                      kernel-store-u8 kernel-store-u8-4k
+                      kernel-load-u32 kernel-store-u32} op)
         (do
           (when-not (= ({'kernel-load-u8 3 'kernel-load-u8-4k 3
                          'kernel-load-u8-16k 3 'kernel-store-u8 4
-                         'kernel-store-u8-4k 4} op) (count args))
+                         'kernel-store-u8-4k 4
+                         'kernel-load-u32 3 'kernel-store-u32 4} op) (count args))
             (reject! "runtime KIR kernel memory operation arity rejected" {:operation op}))
           (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
 
@@ -230,7 +232,8 @@
     (when (and (not (contains? #{:x86_64-aiueos-kernel-v1 :aarch64-aiueos-kernel-v1} target))
                (some #(and (seq? %) (contains? '#{kernel-load-u8 kernel-load-u8-4k
                                                   kernel-load-u8-16k kernel-store-u8
-                                                  kernel-store-u8-4k kernel-boot-info kernel-read-cr2
+                                                  kernel-store-u8-4k kernel-load-u32 kernel-store-u32
+                                                  kernel-boot-info kernel-read-cr2
                                                   kernel-read-cr3 kernel-write-cr3 kernel-invlpg
                                                   kernel-cli kernel-sti kernel-hlt kernel-pause
                                                   kernel-out-u8 kernel-out-u32} (first %)))
@@ -294,6 +297,7 @@
   (verify-runtime! kexe)
   (let [kernel-operations '#{kernel-load-u8 kernel-load-u8-4k kernel-load-u8-16k
                              kernel-store-u8 kernel-store-u8-4k kernel-read-cr2
+                             kernel-load-u32 kernel-store-u32
                              kernel-boot-info kernel-read-cr3 kernel-write-cr3 kernel-invlpg
                              kernel-cli kernel-sti kernel-hlt kernel-pause
                              kernel-out-u8 kernel-out-u32}

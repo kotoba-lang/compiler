@@ -137,7 +137,14 @@
     (let [src "(defn main [] (kernel-store-u8 150994952 8 0 1))"
           a (get-in (compiler/compile-source src :aarch64-aiueos-kernel-v1) [:binary :bytes])
           b (get-in (compiler/compile-source src :aarch64-aiueos-kernel-v1) [:binary :bytes])]
-      (is (= a b)))))
+      (is (= a b))))
+  (testing "u32 MMIO intrinsics (virtio registers) compile and emit str/ldr w0,[x1]"
+    (let [artifact (:artifact (compiler/compile-source
+                               "(defn main [] (let [m (kernel-load-u32 167772160 512 0)] (kernel-store-u32 167772160 512 112 m)))"
+                               :aarch64-aiueos-kernel-v1))
+          code (:code artifact)]
+      (is (some #(= [0x20 0x00 0x40 0xb9] %) (partition 4 1 code)) "ldr w0,[x1] (u32 load)")
+      (is (some #(= [0x20 0x00 0x00 0xb9] %) (partition 4 1 code)) "str w0,[x1] (u32 store)"))))
 
 (deftest x86-loop-recur-reuses-its-native-stack-frame
   (let [source "(defn main [] (loop [i 0 acc 0] (if (= i 20) acc (recur (+ i 1) (+ acc i)))))"

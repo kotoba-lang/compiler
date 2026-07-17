@@ -136,7 +136,8 @@
         (read-pair heap (eval-expr (first args) env functions fuel heap call-stack cap-call) 1)
 
         (contains? '#{kernel-load-u8 kernel-load-u8-4k kernel-load-u8-16k
-                      kernel-store-u8 kernel-store-u8-4k} op)
+                      kernel-store-u8 kernel-store-u8-4k
+                      kernel-load-u32 kernel-store-u32} op)
         (trap! :kernel-memory-unavailable {:operation op})
 
         (contains? '#{kernel-boot-info kernel-read-cr2 kernel-read-cr3 kernel-write-cr3 kernel-invlpg
@@ -224,6 +225,7 @@
 (defn lower [hir]
   (let [kernel-operations '#{kernel-load-u8 kernel-load-u8-4k kernel-load-u8-16k
                              kernel-store-u8 kernel-store-u8-4k kernel-read-cr2
+                             kernel-load-u32 kernel-store-u32
                              kernel-boot-info kernel-read-cr3 kernel-write-cr3 kernel-invlpg
                              kernel-cli kernel-sti kernel-hlt kernel-pause
                              kernel-out-u8 kernel-out-u32}
