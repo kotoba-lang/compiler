@@ -11,10 +11,27 @@
                 :cljs [[kotoba.compiler.kotoba-reader :as kr]
                        [kotoba.compiler.cljs-i64 :as i64]])))
 
+(defn- load-catalog-forbidden
+  "P0: merge catalog forbidden-heads when guest-grammar.edn is on classpath."
+  []
+  #?(:clj
+     (try
+       (let [c (or (clojure.java.io/resource "kotoba/lang/guest-grammar.edn")
+                   (clojure.java.io/resource "lang/guest-grammar.edn"))]
+         (if c
+           (with-open [r (clojure.java.io/reader c)]
+             (let [edn (clojure.edn/read (java.io.PushbackReader. r))
+                   heads (:forbidden-heads edn #{})]
+               (into #{} (map (fn [x] (if (symbol? x) x (symbol (name x))))) heads)))
+           #{}))
+       (catch Exception _ #{}))
+     :cljs #{}))
+
 (def forbidden-heads
-  '#{eval load load-file require use import ns-resolve resolve alter-var-root
-     future pmap agent send send-off new . .. set! defmacro throw try catch
-     locking dosync atom ref volatile!})
+  (into '#{eval load load-file require use import ns-resolve resolve alter-var-root
+           future pmap agent send send-off new . .. set! defmacro throw try catch
+           locking dosync atom ref volatile!}
+        (load-catalog-forbidden)))
 
 (def arithmetic '#{+ - * quot bit-xor bit-and})
 (def comparisons '#{= < > <= >=})
