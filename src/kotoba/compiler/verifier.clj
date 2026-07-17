@@ -177,13 +177,14 @@
 
 (defn- verify-program! [program]
   (when-not (and (map? program)
-                 (= #{:format :entry :signature :effects :functions} (set (keys program)))
+                 (= #{:format :entry :exports :signature :effects :functions} (set (keys program)))
                  (= :kotoba.kir/v3 (:format program))
                  (= 'main (:entry program))
                  (= {:params [] :result :i64} (:signature program))
                  (set? (:effects program))
                  (every? valid-effect? (:effects program))
                  (vector? (:functions program))
+                 (vector? (:exports program))
                  (<= 1 (count (:functions program)) max-functions))
     (reject! "runtime KIR module shape rejected" {}))
   (let [functions (:functions program)
@@ -206,7 +207,10 @@
                      [(:name function) (:params function)]))
               functions)]
     (when-not (and (= (count functions) (count signatures)) (contains? signatures 'main)
-                   (empty? (get signatures 'main)))
+                   (empty? (get signatures 'main))
+                   (= (count (:exports program)) (count (distinct (:exports program))))
+                   (every? #(contains? signatures %) (:exports program))
+                   (some #{'main} (:exports program)))
       (reject! "runtime KIR entry or function identity rejected" {}))
     (let [nodes (volatile! 0)
           direct

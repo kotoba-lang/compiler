@@ -111,8 +111,9 @@
 
           :else (apply list op (map lower-expr args)))))))
 
-(defn- lower-function [{:keys [name params body]}]
-  (list 'defn name (vec params) (list 'do '(kotoba$charge!) (lower-expr body))))
+(defn- lower-function [{:keys [name params body]} exported?]
+  (list (if exported? 'defn 'defn-) name (vec params)
+        (list 'do '(kotoba$charge!) (lower-expr body))))
 
 (def ^:private prelude-forms
   '[(defonce kotoba$fuel (atom 256))
@@ -180,7 +181,9 @@
   to resolve symbol: __kotoba_loop_1`, identically to plain JVM `eval`."
   [kir]
   (let [fn-names (mapv :name (:functions kir))
-        fn-forms (mapv lower-function (:functions kir))
+        exported-names (set (or (:exports kir) fn-names))
+        fn-forms (mapv #(lower-function % (contains? exported-names (:name %)))
+                       (:functions kir))
         forms (concat [(list 'ns default-ns-name)] prelude-forms
                        [(list* 'declare fn-names)] fn-forms)]
     (str/join "\n\n" (map pr-str forms))))

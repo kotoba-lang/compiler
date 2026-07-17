@@ -93,8 +93,8 @@ recursion, top-level form count is capped, expression validation is capped at
 256, and literals must fit signed i64. Host reader failures are normalized into
 the compiler's `:read` error phase.
 
-The safe profile additionally caps functions (1,024), parameters per exported
-function (5), bindings per `let` (4,096), symbol length (128), and total
+The safe profile additionally caps functions (1,024), parameters per function
+(5), bindings per `let` (4,096), symbol length (128), and total
 expression nodes (50,000). A separate symbolic cost pass caps the `let`-elided
 program at 100,000 nodes before native substitution occurs, preventing compact
 source from causing exponential code generation. The five-argument limit is a
@@ -274,8 +274,12 @@ The first typed effect is `[:cap/call id]`, authored only as
 `(cap-call <literal-u8> value)`. Dynamic IDs are rejected rather than widened to
 ambient authority. The frontend derives direct effects and call edges, closes
 them to a fixpoint (including mutual recursion), and assigns effects to every
-function. Because all pure functions are currently exported, module admission
-uses the union across all functions, not only `main` reachability.
+function. A bounded `ns` `(:export [name ...])` clause defines the host
+boundary; `defn-` and compiler-generated helpers remain internal in JS, Wasm,
+ClojureScript, and native artifacts. Imports and every other namespace clause
+still fail closed. Authority admission deliberately uses the union across all
+declared functions—including private ones—so changing visibility cannot alter
+the authority claimed by otherwise identical code.
 
 Policy is deny-by-default: `{:allow #{...}}`. Admission reports missing effects,
 the exact minimal policy, and unused grants. This stage deliberately separates

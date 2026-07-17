@@ -139,6 +139,8 @@
 
 (defn emit [kir target]
   (let [functions (:functions kir)
+        exported-names (set (or (:exports kir) (map :name functions)))
+        exported-functions (filterv #(contains? exported-names (:name %)) functions)
         has-cap? (contains? (set (map first (:effects kir))) :cap/call)
         heap-ops (let [found (volatile! #{})]
                    (letfn [(walk [form]
@@ -176,11 +178,11 @@
         global-sec [1 0x7e 1 0x42 0x80 0x02 0x0b]
         ;; Pure functions are exported with their source names. This makes
         ;; runtime parameters observable and testable without host authority.
-        export-sec (concat (uleb (count functions))
-                           (mapcat (fn [[index function]]
+        export-sec (concat (uleb (count exported-functions))
+                           (mapcat (fn [function]
                                      (concat (name-bytes (name (:name function))) [0]
-                                             (uleb (+ index shift))))
-                                   (map-indexed vector functions)))
+                                             (uleb (get indices (:name function)))))
+                                   exported-functions))
         code-sec (concat (uleb (count functions))
                          (mapcat #(function-body % indices intrinsic-indices) functions))
         target-sec (concat (name-bytes "kotoba.target")

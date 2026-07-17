@@ -45,7 +45,7 @@
              (set (keys kernel-memory-operations))
              (set (keys kernel-privileged-operations))
              list-operations predicate-operations logical-operations map-operations
-             '#{let if cap-call ns defn}))
+             '#{let if cap-call ns defn defn-}))
 (def max-functions 1024)
 (def max-expression-nodes 50000)
 (def max-lowered-nodes 100000)
@@ -130,21 +130,37 @@
 (defn- reject! [message form]
   (throw (ex-info message {:phase :subset :form form})))
 
-(defn- valid-namespace-form?
-  "Admit the canonical Kotoba namespace header without treating its
-  documentation as executable input. Namespace clauses remain fail-closed
-  until the frontend has an explicit, capability-safe module resolver."
+(declare valid-name?)
+
+(defn- namespace-parts
+  "Parse the bounded namespace header. `:export` is the only admitted
+  clause: it grants host visibility but no ambient authority or module
+  loading. Import/require clauses remain fail-closed."
   [form]
   (let [[op namespace-symbol & tail] form]
-    (and (= 'ns op)
-         (symbol? namespace-symbol)
-         (nil? (namespace namespace-symbol))
-         (pos? (count (str namespace-symbol)))
-         (<= (count (str namespace-symbol)) max-symbol-chars)
-         (or (empty? tail)
-             (and (= 1 (count tail))
-                  (string? (first tail))
-                  (<= (count (first tail)) max-namespace-docstring-chars))))))
+    (when-not (and (= 'ns op) (symbol? namespace-symbol)
+                   (nil? (namespace namespace-symbol))
+                   (pos? (count (str namespace-symbol)))
+                   (<= (count (str namespace-symbol)) max-symbol-chars))
+      (reject! "invalid bounded namespace symbol" form))
+    (let [[docstring tail] (if (string? (first tail))
+                             [(first tail) (rest tail)] [nil tail])]
+      (when (and docstring (> (count docstring) max-namespace-docstring-chars))
+        (reject! "namespace docstring exceeds admission limit" docstring))
+      (when (> (count tail) 1)
+        (reject! "namespace admits at most one :export clause" form))
+      (let [clause (first tail)]
+        (when (and clause
+                   (not (and (seq? clause) (= :export (first clause))
+                             (= 2 (count clause)) (vector? (second clause)))))
+          (reject! "only a bounded :export vector is admitted in namespace clauses" clause))
+        (let [exports (when clause (vec (second clause)))]
+          (when (and exports
+                     (or (> (count exports) max-functions)
+                         (not= (count exports) (count (distinct exports)))
+                         (not-every? valid-name? exports)))
+            (reject! "namespace exports must be unique bounded function names" exports))
+          {:namespace namespace-symbol :exports exports})))))
 
 (declare desugar-expr form-free-symbols replace-recur)
 
@@ -831,16 +847,17 @@
 (defn analyze [source]
   (let [forms (read-forms source)
         namespaces (filter #(and (seq? %) (= 'ns (first %))) forms)
-        defs (filter #(and (seq? %) (= 'defn (first %))) forms)
+        defs (filter #(and (seq? %) (contains? '#{defn defn-} (first %))) forms)
         constant-forms (filter #(and (seq? %) (= 'def (first %))) forms)
         other (remove #(or (and (seq? %) (= 'ns (first %)))
-                           (and (seq? %) (= 'defn (first %)))
+                           (and (seq? %) (contains? '#{defn defn-} (first %)))
                            (and (seq? %) (= 'def (first %)))) forms)
         _ (when (> (count defs) max-functions)
             (reject! "function count exceeds admission limit" (count defs)))
-        _ (when (or (> (count namespaces) 1)
-                    (some #(not (valid-namespace-form? %)) namespaces))
-            (reject! "ns must contain one bounded namespace symbol and an optional bounded docstring; namespace clauses are not admitted" namespaces))
+        _ (when (> (count namespaces) 1)
+            (reject! "at most one namespace form is admitted" namespaces))
+        namespace-info (when-let [namespace-form (first namespaces)]
+                         (namespace-parts namespace-form))
         constants (into {}
                         (map (fn [form]
                                (let [{:keys [name value]} (def-parts form)]
@@ -907,22 +924,31 @@
         parsed (cond-> parsed
                  (some #(uses-map-get? (:body %)) parsed) (conj map-get-helper)
                  (some #(uses-map-without? (:body %)) parsed) (conj map-without-helper))
-        signatures (into {} (map (juxt :name :params) parsed))]
+        signatures (into {} (map (juxt :name :params) parsed))
+        source-public (mapv second (filter #(= 'defn (first %)) defs))
+        exports (cond
+                  (some? (:exports namespace-info)) (:exports namespace-info)
+                  (some #(= 'defn- (first %)) defs) source-public
+                  :else (mapv :name parsed))]
     (when (seq (set/intersection (set (keys constants)) (set (keys signatures))))
       (reject! "constant and function names must be disjoint" forms))
-    (when (seq other) (reject! "only ns and defn are allowed at top level" (first other)))
+    (when (seq other) (reject! "only ns, def, defn, and defn- are allowed at top level" (first other)))
     (when (empty? parsed) (reject! "at least one defn is required" forms))
     (when-not (= (count parsed) (count signatures)) (reject! "duplicate function name" defs))
+    (when (and (some? (:exports namespace-info))
+               (not-every? (set source-public) exports))
+      (reject! "namespace exports must name declared public functions" exports))
     (when-not (contains? signatures 'main) (reject! "main entrypoint is required" defs))
     (when-not (empty? (get signatures 'main)) (reject! "main must take zero arguments" 'main))
+    (when-not (some #{'main} exports) (reject! "main entrypoint must be exported" exports))
     (let [budget (volatile! 0)]
       (doseq [{:keys [params body]} parsed]
         (validate-expr body (set params) signatures 0 budget)))
     (check-lowering-budget! parsed)
     (let [function-effects (infer-effects parsed)
           functions (mapv #(assoc % :effects (get function-effects (:name %))) parsed)]
-      {:format :kotoba.hir/v2 :entry 'main :result :i64
-       ;; Every function is exported by current backends, so admission covers
-       ;; the union rather than only effects reachable from main.
+      {:format :kotoba.hir/v2 :entry 'main :exports (vec exports) :result :i64
+       ;; Admission conservatively covers private functions too: changing an
+       ;; export boundary must never change the authority the module declares.
        :effects (reduce set/union #{} (vals function-effects))
        :functions functions})))
