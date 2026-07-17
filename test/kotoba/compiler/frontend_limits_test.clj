@@ -63,3 +63,23 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"optional bounded docstring"
                           (compiler/check-source
                            "(ns pilot \"four\") (defn main [] 0)")))))
+
+(deftest function-docstrings-are-bounded-inert-metadata
+  (doseq [target compiler/targets]
+    (testing target
+      (is (= 42 (get-in (compiler/compile-source
+                         "(ns pilot \"module docs\")
+                          (defn answer \"public API docs\" [x] (+ x 1))
+                          (defn main \"entry docs\" [] (answer 41))"
+                         target)
+                        [:kir :oracle-value])))))
+  (with-redefs [frontend/max-function-docstring-chars 3]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"function docstring exceeds"
+                          (compiler/check-source
+                           "(defn main \"four\" [] 0)"))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"function parameters must be a vector"
+                        (compiler/check-source
+                         "(defn main {} [] 0)")))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"function must contain one result"
+                        (compiler/check-source
+                         "(defn main \"docs\" [] 1 2)"))))

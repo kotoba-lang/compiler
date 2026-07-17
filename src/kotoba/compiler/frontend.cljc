@@ -54,6 +54,7 @@
 (def max-symbol-chars 128)
 (def max-list-items 128)
 (def max-namespace-docstring-chars 4096)
+(def max-function-docstring-chars 4096)
 
 (defn- kotoba-integer?
   "True for a value that is (or stands for) a `.kotoba` integer literal --
@@ -737,6 +738,21 @@
     (let [tmp (gensym "param-destr__")]
       [tmp (fn [body] (list 'let [param tmp] body))])))
 
+(defn- defn-parts
+  "Parse Kotoba's bounded function declaration shape. A docstring is inert
+  metadata and is deliberately discarded before lowering; attributes,
+  pre/post maps, and multiple arities remain outside the admitted profile."
+  [form]
+  (let [[_ name & declaration] form
+        [docstring declaration] (if (string? (first declaration))
+                                  [(first declaration) (rest declaration)]
+                                  [nil declaration])
+        raw-params (first declaration)
+        body (rest declaration)]
+    (when (and docstring (> (count docstring) max-function-docstring-chars))
+      (reject! "function docstring exceeds admission limit" docstring))
+    {:name name :raw-params raw-params :body body}))
+
 (defn analyze [source]
   (let [forms (read-forms source)
         namespaces (filter #(and (seq? %) (= 'ns (first %))) forms)
@@ -767,7 +783,7 @@
                (vec
                      (mapcat
                      (fn [form]
-                       (let [[_ name raw-params & body] form]
+                       (let [{:keys [name raw-params body]} (defn-parts form)]
                          (when-not (valid-name? name) (reject! "invalid function name" name))
                          (when (contains? reserved-function-names name)
                            (reject! "reserved function name" name))
