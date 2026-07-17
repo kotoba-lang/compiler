@@ -39,6 +39,11 @@
    (let [profile (target-profile/profile target)
         backend (target-profile/backend target)
         hir (frontend/analyze source)
+        _ (when (and (= :kotoba.hir/v3 (:format hir))
+                     (not= backend :js-kotoba-v1))
+            (throw (ex-info "typed string values currently require the kotoba-script web target"
+                            {:phase :target :target target :backend backend
+                             :value-profile :kotoba.value/typed-v1})))
         _ (when (and (nil? (:entry hir)) (not= backend :js-kotoba-v1))
             (throw (ex-info "entryless libraries currently require the kotoba-script web target"
                             {:phase :target :target target :backend backend})))
@@ -63,18 +68,26 @@
       (= backend :js-kotoba-v1)
       (let [source-digest (text-sha256 source)
             kir-digest (artifact/sha256 kir)
+            typed-values? (= :kotoba.kir/v4 (:format kir))
+            value-profile (if typed-values? :kotoba.value/typed-v1 :kotoba.value/i64-v1)
+            limits (cond-> {:fuel 256 :replenishable? false}
+                     typed-values? (assoc :string-literal-bytes 4096
+                                          :string-module-literal-bytes 65536
+                                          :string-value-bytes 65536))
             js-source (script/emit kir {:source-digest source-digest
                                         :kir-digest kir-digest
                                         :compiler-version compiler-version})
             output-digest (text-sha256 js-source)]
         {:format :javascript/v1 :target target :target-profile profile
          :hir hir :kir kir :admission admission
-         :limits {:fuel 256 :replenishable? false} :source js-source
+         :value-profile value-profile :limits limits :source js-source
          :manifest {:kotoba.artifact/schema "kotoba-js-artifact/v1"
                     :kotoba.artifact/source-digest source-digest
                     :kotoba.artifact/kir-digest kir-digest
                     :kotoba.artifact/output-digest output-digest
                     :kotoba.artifact/compiler-version compiler-version
+                    :kotoba.artifact/value-profile value-profile
+                    :kotoba.artifact/limits limits
                     :kotoba.artifact/target target
                     :kotoba.artifact/target-profile profile
                     :kotoba.artifact/effects (:effects kir)}})

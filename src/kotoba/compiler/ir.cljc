@@ -6,7 +6,8 @@
   ;; is conditional and the branch doesn't match -- fails ns-form spec
   ;; validation ("Extra input spec: :clojure.core.specs.alpha/ns-form",
   ;; confirmed live).
-  #?(:cljs (:require [kotoba.compiler.cljs-i64 :as i64])))
+  (:require [kotoba.compiler.value :as value]
+            #?@(:cljs [[kotoba.compiler.cljs-i64 :as i64]])))
 
 (def ^:private default-fuel 256)
 (def ^:private default-pair-capacity 4096)
@@ -22,6 +23,24 @@
   (let [remaining (vswap! fuel dec)]
     (when (neg? remaining)
       (trap! :fuel-exhausted {:limit default-fuel}))))
+
+(defn- validate-runtime-value! [runtime-value type position]
+  (case type
+    :i64
+    (when-not #?(:clj (and (integer? runtime-value)
+                            (<= Long/MIN_VALUE runtime-value Long/MAX_VALUE))
+                 :cljs (and (i64/bigint-value? runtime-value)
+                            (i64/in-i64-range? runtime-value)))
+      (trap! :value-type-mismatch {:expected :i64 :position position}))
+
+    :string
+    (try
+      (value/bounded-string! runtime-value value/string-value-byte-limit)
+      (catch #?(:clj Exception :cljs :default) error
+        (trap! :invalid-string-value {:position position :message (ex-message error)})))
+
+    (trap! :unsupported-value-type {:type type :position position}))
+  runtime-value)
 
 ;; #?(:cljs ...): every i64 arithmetic op coerces both operands via
 ;; `i64/->bigint` first (cheap no-op if already bigint) rather than relying
@@ -54,10 +73,17 @@
     (trap! :arity-mismatch {:function (:name function)
                             :expected (count (:params function))
                             :actual (count values)}))
+  (let [param-types (or (:param-types function)
+                        (vec (repeat (count (:params function)) :i64)))]
+    (doseq [[parameter runtime-value type] (map vector (:params function) values param-types)]
+      (validate-runtime-value! runtime-value type {:function (:name function)
+                                                   :parameter parameter})))
   ;; Backends charge once on function entry, not once per expression.
   (charge! fuel)
-  (eval-expr (:body function) (zipmap (:params function) values) functions
-             fuel heap (conj call-stack (:name function)) cap-call))
+  (let [result (eval-expr (:body function) (zipmap (:params function) values) functions
+                          fuel heap (conj call-stack (:name function)) cap-call)]
+    (validate-runtime-value! result (or (:result function) :i64)
+                             {:function (:name function) :result true})))
 
 (defn- allocate-pair! [heap left right]
   (let [{:keys [cells capacity]} heap
@@ -98,6 +124,8 @@
        ;; every downstream op in this file assumes.
        :cljs (or (i64/bigint-value? form) (integer? form)))
     #?(:clj (long form) :cljs (i64/->bigint form))
+    (string? form)
+    (value/bounded-string! form value/string-literal-byte-limit)
     (symbol? form) (if (contains? env form)
                      (get env form)
                      (trap! :unbound-symbol {:symbol form}))
@@ -137,6 +165,20 @@
 
         (= op 'pair-second)
         (read-pair heap (eval-expr (first args) env functions fuel heap call-stack cap-call) 1)
+
+        (= op 'string-byte-length)
+        (let [bytes (value/utf8-byte-count!
+                     (eval-expr (first args) env functions fuel heap call-stack cap-call))]
+          #?(:clj (long bytes) :cljs (i64/->bigint bytes)))
+
+        (= op 'string=?)
+        (let [[left right] (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
+          #?(:clj (if (= left right) 1 0)
+             :cljs (if (= left right) i64/one i64/zero)))
+
+        (= op 'string-concat)
+        (let [[left right] (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
+          (value/bounded-string! (str left right) value/string-value-byte-limit))
 
         (contains? '#{kernel-load-u8 kernel-load-u8-4k kernel-load-u8-16k
                       kernel-store-u8 kernel-store-u8-4k
@@ -200,8 +242,9 @@
           (invoke-function (get functions op) values functions fuel heap call-stack cap-call))))))
 
 (defn execute
-  "Executes one KIR export using the normative i64 semantics. Add/subtract/
-  multiply wrap modulo 2^64; invalid division and resource exhaustion trap."
+  "Executes one KIR export using normative typed-value semantics. i64 math
+  wraps modulo 2^64; bounded strings preserve Unicode text; invalid values,
+  division, and resource exhaustion trap."
   ([kir function-name args] (execute kir function-name args {}))
   ([kir function-name args {:keys [fuel cap-call pair-capacity]
                             :or {fuel default-fuel pair-capacity default-pair-capacity}}]
@@ -212,19 +255,30 @@
    ;; value -- plain `integer?` is correct for both runtimes here.
    (when-not (and (integer? fuel) (pos? fuel))
      (throw (ex-info "fuel must be a positive integer" {:phase :ir :fuel fuel})))
-   (when-not (and (sequential? args)
-                  (every? (fn [arg]
-                            #?(:clj (and (integer? arg) (<= Long/MIN_VALUE arg Long/MAX_VALUE))
-                               :cljs (and (or (i64/bigint-value? arg) (integer? arg))
-                                          (i64/in-i64-range? arg))))
-                          args))
-     (throw (ex-info "arguments must be signed i64 integers" {:phase :ir :args args})))
    (when-not (and (integer? pair-capacity) (<= 0 pair-capacity default-pair-capacity))
      (throw (ex-info "pair capacity is outside runtime limits"
                      {:phase :ir :pair-capacity pair-capacity})))
-   (let [functions (into {} (map (juxt :name identity) (:functions kir)))]
-     (invoke-function (get functions function-name)
-                       (mapv #?(:clj long :cljs i64/->bigint) args) functions
+   (let [functions (into {} (map (juxt :name identity) (:functions kir)))
+         function (get functions function-name)
+         param-types (or (:param-types function)
+                         (vec (repeat (count (:params function)) :i64)))]
+     (when-not (and (sequential? args) (= (count args) (count param-types)))
+       (throw (ex-info "arguments do not match function arity" {:phase :ir :args args})))
+     (doseq [[arg type] (map vector args param-types)]
+       (case type
+         :i64 (when-not #?(:clj (and (integer? arg) (<= Long/MIN_VALUE arg Long/MAX_VALUE))
+                          :cljs (and (or (i64/bigint-value? arg) (integer? arg))
+                                     (i64/in-i64-range? arg)))
+                (throw (ex-info "argument must be a signed i64" {:phase :ir :arg arg})))
+         :string (value/bounded-string! arg value/string-value-byte-limit)
+         (throw (ex-info "argument type is unsupported" {:phase :ir :type type}))))
+     (invoke-function function
+                       (mapv (fn [arg type]
+                               (if (= type :i64)
+                                 (#?(:clj long :cljs i64/->bigint) arg)
+                                 arg))
+                             args param-types)
+                       functions
                       (volatile! fuel) {:cells (volatile! []) :capacity pair-capacity}
                       [] cap-call))))
 
@@ -237,15 +291,18 @@
                              kernel-out-u8 kernel-out-u32}
         kernel-native? (some #(and (seq? %) (contains? kernel-operations (first %)))
                              (tree-seq coll? seq (:functions hir)))
-        base {:format :kotoba.kir/v3
+        typed-values? (= :kotoba.hir/v3 (:format hir))
+        base {:format (if typed-values? :kotoba.kir/v4 :kotoba.kir/v3)
               :entry (:entry hir)
               :exports (:exports hir)
-              :signature (when (:entry hir) {:params [] :result :i64})
+              :signature (when (:entry hir) {:params [] :result (:result hir)})
               :effects (:effects hir)
-              :functions (mapv #(select-keys % [:name :params :result :effects :body])
+              :functions (mapv #(select-keys % (cond-> [:name :params :result :effects :body]
+                                                 typed-values? (conj :param-types)))
                                (:functions hir))}
         ;; Effectful results require host authority and cannot be constant-oracled.
-        value (when (and (:entry hir) (empty? (:effects hir)) (not kernel-native?))
+        value (when (and (:entry hir) (= :i64 (:result hir))
+                         (empty? (:effects hir)) (not kernel-native?))
                 (execute base (:entry hir) []))]
     (assoc base
            :oracle-value value

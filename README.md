@@ -145,6 +145,26 @@ ClojureScript target; executable programs still require an exported,
 zero-argument `main`. Missing, empty, private, duplicate, or unknown exports
 fail closed before lowering.
 
+The Web target also carries the first non-i64 value profile without erasing
+types. Typed parameters use alternating name/type pairs and an optional result
+type follows the parameter vector:
+
+```clojure
+(ns example.text (:export [greet]))
+(defn greet [name :string] :string
+  (string-concat "こんにちは、" name))
+```
+
+This lowers to checked `kotoba.kir/v4`; `:string` and `:i64` remain distinct in
+every function signature. The admitted string surface is deliberately small:
+`string-concat`, `string=?`, and `string-byte-length`. Literals must be
+well-formed UTF-16 and at most 4,096 UTF-8 bytes, all module literals together
+are capped at 65,536 bytes, and runtime values are capped at 65,536 bytes.
+Generated ESM revalidates types, Unicode shape, and byte limits at function and
+host boundaries. Native, Wasm, and ClojureScript targets reject KIR v4 until
+they have an equivalent typed ABI; strings are never replaced with hashes or
+silently treated as integer handles.
+
 Release-oriented target identities explicitly bind execution format, ISA, OS,
 ABI, and runtime profile. Current explicit names are `wasm32-browser`, `wasm32-wasi`,
 `x86_64-linux`, `x86_64-macos`, `x86_64-windows`, `aarch64-linux`,
