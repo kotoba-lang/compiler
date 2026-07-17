@@ -39,6 +39,9 @@
    (let [profile (target-profile/profile target)
         backend (target-profile/backend target)
         hir (frontend/analyze source)
+        _ (when (and (nil? (:entry hir)) (not= backend :js-kotoba-v1))
+            (throw (ex-info "entryless libraries currently require the kotoba-script web target"
+                            {:phase :target :target target :backend backend})))
         admission (admission/check hir policy)
         kir (ir/lower hir)
         value (:oracle-value kir)]

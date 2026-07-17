@@ -929,7 +929,8 @@
         exports (cond
                   (some? (:exports namespace-info)) (:exports namespace-info)
                   (some #(= 'defn- (first %)) defs) source-public
-                  :else (mapv :name parsed))]
+                  :else (mapv :name parsed))
+        entry (when (contains? signatures 'main) 'main)]
     (when (seq (set/intersection (set (keys constants)) (set (keys signatures))))
       (reject! "constant and function names must be disjoint" forms))
     (when (seq other) (reject! "only ns, def, defn, and defn- are allowed at top level" (first other)))
@@ -938,16 +939,22 @@
     (when (and (some? (:exports namespace-info))
                (not-every? (set source-public) exports))
       (reject! "namespace exports must name declared public functions" exports))
-    (when-not (contains? signatures 'main) (reject! "main entrypoint is required" defs))
-    (when-not (empty? (get signatures 'main)) (reject! "main must take zero arguments" 'main))
-    (when-not (some #{'main} exports) (reject! "main entrypoint must be exported" exports))
+    (when (and (nil? entry) (nil? (:exports namespace-info)))
+      (reject! "entryless library requires an explicit non-empty namespace export list" defs))
+    (when (and (nil? entry) (empty? exports))
+      (reject! "entryless library requires at least one exported function" exports))
+    (when (and entry (not (empty? (get signatures entry))))
+      (reject! "main must take zero arguments" 'main))
+    (when (and entry (not (some #{entry} exports)))
+      (reject! "main entrypoint must be exported" exports))
     (let [budget (volatile! 0)]
       (doseq [{:keys [params body]} parsed]
         (validate-expr body (set params) signatures 0 budget)))
     (check-lowering-budget! parsed)
     (let [function-effects (infer-effects parsed)
           functions (mapv #(assoc % :effects (get function-effects (:name %))) parsed)]
-      {:format :kotoba.hir/v2 :entry 'main :exports (vec exports) :result :i64
+      {:format :kotoba.hir/v2 :entry entry :exports (vec exports)
+       :result (when entry :i64)
        ;; Admission conservatively covers private functions too: changing an
        ;; export boundary must never change the authority the module declares.
        :effects (reduce set/union #{} (vals function-effects))

@@ -136,6 +136,15 @@ value, narrowing the gap from "silently wrong" to "loudly fails," the
 same fail-closed posture as fuel/division/capability. See
 `backend/cljs.clj`'s own docstring for the full, honest scope.
 
+The restricted JavaScript target is selected with `--target js`. A Web
+library may deliberately omit `main`, but only when its namespace declares a
+non-empty host boundary, for example `(ns example.math (:export [add1]))`.
+This produces an entryless ESM artifact whose frozen API contains only those
+exports. Entryless source is rejected for every native, Wasm, and
+ClojureScript target; executable programs still require an exported,
+zero-argument `main`. Missing, empty, private, duplicate, or unknown exports
+fail closed before lowering.
+
 Release-oriented target identities explicitly bind execution format, ISA, OS,
 ABI, and runtime profile. Current explicit names are `wasm32-browser`, `wasm32-wasi`,
 `x86_64-linux`, `x86_64-macos`, `x86_64-windows`, `aarch64-linux`,

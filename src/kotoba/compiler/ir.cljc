@@ -240,12 +240,12 @@
         base {:format :kotoba.kir/v3
               :entry (:entry hir)
               :exports (:exports hir)
-              :signature {:params [] :result :i64}
+              :signature (when (:entry hir) {:params [] :result :i64})
               :effects (:effects hir)
               :functions (mapv #(select-keys % [:name :params :result :effects :body])
                                (:functions hir))}
         ;; Effectful results require host authority and cannot be constant-oracled.
-        value (when (and (empty? (:effects hir)) (not kernel-native?))
+        value (when (and (:entry hir) (empty? (:effects hir)) (not kernel-native?))
                 (execute base (:entry hir) []))]
     (assoc base
            :oracle-value value
