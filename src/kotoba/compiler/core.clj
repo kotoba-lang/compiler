@@ -4,13 +4,23 @@
             [kotoba.compiler.admission :as admission]
             [kotoba.compiler.backend.wasm :as wasm]
             [kotoba.compiler.backend.cljs :as cljs]
+            [kotoba.script :as script]
             [kotoba.compiler.backend.x86-64 :as x86-64]
             [kotoba.compiler.backend.aarch64 :as aarch64]
             [kotoba.compiler.packaging.elf64 :as elf64]
             [kotoba.compiler.packaging.pe32plus :as pe32plus]
             [kotoba.compiler.artifact :as artifact]
             [kotoba.compiler.target :as target-profile]
-            [kotoba.compiler.verifier :as verifier]))
+            [kotoba.compiler.verifier :as verifier])
+  (:import [java.nio.charset StandardCharsets]
+           [java.security MessageDigest]))
+
+(def compiler-version "kotoba-compiler/1")
+
+(defn- text-sha256 [text]
+  (let [digest (.digest (MessageDigest/getInstance "SHA-256")
+                        (.getBytes ^String text StandardCharsets/UTF_8))]
+    (apply str (map #(format "%02x" (bit-and (int %) 0xff)) digest))))
 
 (def targets target-profile/compatibility-targets)
 (def supported-targets (set (keys target-profile/profiles)))
@@ -46,6 +56,25 @@
       {:format :cljs/v1 :target target :target-profile profile
        :hir hir :kir kir :admission admission
        :limits {:fuel 256 :replenishable? false} :source (cljs/emit kir)}
+
+      (= backend :js-kotoba-v1)
+      (let [source-digest (text-sha256 source)
+            kir-digest (artifact/sha256 kir)
+            js-source (script/emit kir {:source-digest source-digest
+                                        :kir-digest kir-digest
+                                        :compiler-version compiler-version})
+            output-digest (text-sha256 js-source)]
+        {:format :javascript/v1 :target target :target-profile profile
+         :hir hir :kir kir :admission admission
+         :limits {:fuel 256 :replenishable? false} :source js-source
+         :manifest {:kotoba.artifact/schema "kotoba-js-artifact/v1"
+                    :kotoba.artifact/source-digest source-digest
+                    :kotoba.artifact/kir-digest kir-digest
+                    :kotoba.artifact/output-digest output-digest
+                    :kotoba.artifact/compiler-version compiler-version
+                    :kotoba.artifact/target target
+                    :kotoba.artifact/target-profile profile
+                    :kotoba.artifact/effects (:effects kir)}})
 
       :else
       (let [emitted ((case backend

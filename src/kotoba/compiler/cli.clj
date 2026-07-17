@@ -14,12 +14,16 @@
             [kotoba.compiler.signing :as signing]
             [kotoba.compiler.target :as target-profile]
             [kotoba.compiler.verifier :as verifier]
+            [clojure.data.json :as json]
             [clojure.string :as str])
   (:gen-class))
 
 (defn- parse-target [s]
   (case s "wasm32" :wasm32-kotoba-v1 "x86_64" :x86_64-kotoba-v1
         "aarch64" :aarch64-kotoba-v1
+        "js" :js-kotoba-v1
+        "javascript" :js-kotoba-v1
+        "js-browser" :js-browser-kotoba-v1
         "wasm32-browser" :wasm32-browser-kotoba-v1
         "wasm32-wasi" :wasm32-wasi-kotoba-v1
         "x86_64-linux" :x86_64-linux-kotoba-v1
@@ -248,6 +252,7 @@
                      (str input (case (:execution (target-profile/profile target))
                                   :wasm ".wasm"
                                   :cljs ".cljs"
+                                  :javascript ".mjs"
                                   :kernel ".o"
                                   :process ".elf"
                                   ".kexe")))
@@ -268,6 +273,16 @@
         ;; text "nil" to --output, since :artifact is absent from a
         ;; :cljs/v1 result).
         :cljs/v1 (atomic-output/write-text! output (:source result))
+        :javascript/v1 (do
+                         (atomic-output/write-text! output (:source result))
+                         (atomic-output/write-edn! (str output ".manifest.edn")
+                                                   (:manifest result))
+                         (atomic-output/write-text!
+                          (str output ".manifest.json")
+                          (json/write-str (:manifest result)
+                                          :key-fn (fn [k] (if (keyword? k)
+                                                            (subs (str k) 1)
+                                                            (str k))))))
         :kexe/v1 (if-let [packaged (case artifact-kind
                                     "image" (:binary result)
                                     "object" (:object result)

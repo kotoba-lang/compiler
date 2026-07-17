@@ -1,5 +1,7 @@
 (ns kotoba.compiler.core-test
   (:require [clojure.test :refer [deftest is testing]]
+            [clojure.java.shell :as shell]
+            [clojure.string :as str]
             [kotoba.compiler.artifact :as artifact]
             [kotoba.compiler.core :as compiler]
             [kotoba.compiler.ir :as ir]
@@ -76,6 +78,24 @@
     (is (= [0 97 115 109] (mapv #(bit-and (int %) 0xff) (take 4 bytes))))
     (is (some #{0x7c} (map #(bit-and (int %) 0xff) bytes))
         "Wasm contains runtime i64.add rather than only a folded constant")))
+
+(deftest emits-restricted-javascript-from-the-same-kir
+  (let [js (compiler/compile-source structured-source :js-kotoba-v1)]
+    (is (= :javascript/v1 (:format js)))
+    (is (= :kotoba.kir/v3 (get-in js [:kir :format])))
+    (is (re-find #"export function instantiateKotoba" (:source js)))
+    (is (not (re-find #"globalThis|window|document|eval\s*\(" (:source js))))))
+
+(deftest javascript-execution-matches-the-normative-kir
+  (let [compiled (compiler/compile-source structured-source :js-kotoba-v1)
+        expected (get-in compiled [:kir :oracle-value])
+        encoded (.encodeToString (java.util.Base64/getEncoder)
+                                 (.getBytes ^String (:source compiled) "UTF-8"))
+        program (str "import('data:text/javascript;base64," encoded
+                     "').then(m=>console.log(String(m.instantiateKotoba({}).main())))")
+        result (shell/sh "node" "--input-type=module" "-e" program)]
+    (is (zero? (:exit result)) (:err result))
+    (is (= (str expected) (str/trim (:out result))))))
 
 (deftest emits-and-verifies-native-machine-code
   (doseq [target [:x86_64-kotoba-v1 :aarch64-kotoba-v1]]
