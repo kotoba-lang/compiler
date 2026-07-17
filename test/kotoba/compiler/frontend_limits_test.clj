@@ -50,3 +50,16 @@
                         (compiler/check-source "(ns demo extra) (defn main [] 0)")))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"ns must contain"
                         (compiler/check-source "(ns one) (ns two) (defn main [] 0)"))))
+
+(deftest namespace-docstrings-are-data-not-executable-clauses
+  (is (= 42 (get-in (compiler/compile-source
+                     "(ns pilot.real-repo \"Canonical Kotoba actor.\") (defn main [] 42)"
+                     :wasm32-kotoba-v1)
+                    [:kir :oracle-value])))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"namespace clauses are not admitted"
+                        (compiler/check-source
+                         "(ns pilot (:require [clojure.string :as str])) (defn main [] 0)")))
+  (with-redefs [frontend/max-namespace-docstring-chars 3]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"optional bounded docstring"
+                          (compiler/check-source
+                           "(ns pilot \"four\") (defn main [] 0)")))))

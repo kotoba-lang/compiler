@@ -53,6 +53,7 @@
 (def max-parameters 5)
 (def max-symbol-chars 128)
 (def max-list-items 128)
+(def max-namespace-docstring-chars 4096)
 
 (defn- kotoba-integer?
   "True for a value that is (or stands for) a `.kotoba` integer literal --
@@ -127,6 +128,22 @@
 
 (defn- reject! [message form]
   (throw (ex-info message {:phase :subset :form form})))
+
+(defn- valid-namespace-form?
+  "Admit the canonical Kotoba namespace header without treating its
+  documentation as executable input. Namespace clauses remain fail-closed
+  until the frontend has an explicit, capability-safe module resolver."
+  [form]
+  (let [[op namespace-symbol & tail] form]
+    (and (= 'ns op)
+         (symbol? namespace-symbol)
+         (nil? (namespace namespace-symbol))
+         (pos? (count (str namespace-symbol)))
+         (<= (count (str namespace-symbol)) max-symbol-chars)
+         (or (empty? tail)
+             (and (= 1 (count tail))
+                  (string? (first tail))
+                  (<= (count (first tail)) max-namespace-docstring-chars))))))
 
 (declare desugar-expr form-free-symbols replace-recur)
 
@@ -729,10 +746,8 @@
         _ (when (> (count defs) max-functions)
             (reject! "function count exceeds admission limit" (count defs)))
         _ (when (or (> (count namespaces) 1)
-                    (some #(not (and (= 2 (count %)) (symbol? (second %))
-                                     (<= (count (str (second %))) max-symbol-chars)))
-                          namespaces))
-            (reject! "ns must contain exactly one namespace symbol" namespaces))
+                    (some #(not (valid-namespace-form? %)) namespaces))
+            (reject! "ns must contain one bounded namespace symbol and an optional bounded docstring; namespace clauses are not admitted" namespaces))
         ;; ADR-2607150000: mapcat, not mapv -- a defn using `loop` may
         ;; expand into itself PLUS one or more synthesized loop-helper
         ;; functions (collected via *pending-loop-helpers*, bound fresh
