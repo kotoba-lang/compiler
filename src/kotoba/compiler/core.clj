@@ -82,5 +82,8 @@
           (assoc :binary (elf64/package-kernel artifact)
                  :object (elf64/package-kernel-object artifact))
 
+          (= target :aarch64-aiueos-kernel-v1)
+          (assoc :binary (elf64/package-kernel-aarch64 artifact))
+
           (= target :x86_64-aiueos-user-v1)
           (assoc :binary (elf64/package-user artifact))))))))

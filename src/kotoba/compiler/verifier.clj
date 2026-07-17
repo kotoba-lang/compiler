@@ -227,7 +227,7 @@
   (let [backend (target-profile/backend target)
         expected-profile (target-profile/profile target)
         {expected-lowering :lowering emit :emit} (get target-contracts backend)]
-    (when (and (not= target :x86_64-aiueos-kernel-v1)
+    (when (and (not (contains? #{:x86_64-aiueos-kernel-v1 :aarch64-aiueos-kernel-v1} target))
                (some #(and (seq? %) (contains? '#{kernel-load-u8 kernel-load-u8-4k
                                                   kernel-load-u8-16k kernel-store-u8
                                                   kernel-store-u8-4k kernel-boot-info kernel-read-cr2

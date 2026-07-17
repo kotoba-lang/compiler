@@ -117,6 +117,28 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"x86-64 ET_EXEC"
           (pe32plus/package-embedded-kernel (vec (repeat 128 0)))))))
 
+(deftest aarch64-kernel-target-packages-a-freestanding-elf
+  (testing "a bounded-store Kotoba kernel compiles to an EM_AARCH64 ELF64"
+    (let [source "(defn main [] (kernel-store-u8 150994944 8 0 72))"
+          result (compiler/compile-source source :aarch64-aiueos-kernel-v1)
+          bytes (get-in result [:binary :bytes])]
+      (is (= [0x7f 0x45 0x4c 0x46] (subvec bytes 0 4)) "ELF magic")
+      (is (= 2 (read-le bytes 4 1)) "ELFCLASS64")
+      (is (= 2 (read-le bytes 16 2)) "ET_EXEC")
+      (is (= 0xb7 (read-le bytes 18 2)) "EM_AARCH64")
+      (is (= 0x101000 (read-le bytes 24 8)) "entry = image text base")
+      (is (= 2 (read-le bytes 56 2)) "two PT_LOAD program headers (text + context)")
+      (is (= :aiueos_kernel_entry (get-in result [:binary :entry])))))
+  (testing "kernel intrinsics are rejected on a non-kernel aarch64 target"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"requires the aiueos kernel target"
+          (compiler/compile-source "(defn main [] (kernel-store-u8 1 8 0 0))"
+                                   :aarch64-kotoba-v1))))
+  (testing "the aarch64 kernel image is reproducible"
+    (let [src "(defn main [] (kernel-store-u8 150994952 8 0 1))"
+          a (get-in (compiler/compile-source src :aarch64-aiueos-kernel-v1) [:binary :bytes])
+          b (get-in (compiler/compile-source src :aarch64-aiueos-kernel-v1) [:binary :bytes])]
+      (is (= a b)))))
+
 (deftest x86-loop-recur-reuses-its-native-stack-frame
   (let [source "(defn main [] (loop [i 0 acc 0] (if (= i 20) acc (recur (+ i 1) (+ acc i)))))"
         artifact (:artifact (compiler/compile-source source :x86_64-aiueos-kernel-v1))
