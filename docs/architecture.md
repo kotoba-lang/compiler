@@ -281,6 +281,13 @@ still fail closed. Authority admission deliberately uses the union across all
 declared functions—including private ones—so changing visibility cannot alter
 the authority claimed by otherwise identical code.
 
+An explicit, non-empty export clause also admits a library without `main`, but
+only for `:js-kotoba-v1`. Its KIR has a nil entry and signature and is handed to
+`kotoba-script` as a restricted ESM library. All executable and non-JavaScript
+targets reject an entryless module. This target gate prevents a library-shaped
+source unit from silently acquiring different execution semantics across
+native, Wasm, or ClojureScript backends.
+
 Policy is deny-by-default: `{:allow #{...}}`. Admission reports missing effects,
 the exact minimal policy, and unused grants. This stage deliberately separates
 authority analysis from execution: effectful code passes `kotoba -M check` only

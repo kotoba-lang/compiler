@@ -4,6 +4,7 @@
   and keyword/map literals + get/assoc (new, desugared entirely to the
   existing heap-pair/list primitives -- no backend/codegen change)."
   (:require [clojure.test :refer [deftest is testing]]
+            [clojure.java.shell :as shell]
             [kotoba.compiler.core :as compiler]
             [kotoba.compiler.frontend :as frontend]
             [kotoba.compiler.ir :as ir]))
@@ -195,6 +196,29 @@
          (rejection-message "(ns bad (:export [helper])) (defn helper [] 1) (defn main [] 0)")))
   (is (= "only a bounded :export vector is admitted in namespace clauses"
          (rejection-message "(ns bad (:require [ambient])) (defn main [] 0)"))))
+
+(deftest entryless-library-compiles-and-runs-through-kotoba-script
+  (let [source "(ns pilot.library (:export [add1])) (defn add1 [x] (+ x 1))"
+        checked (compiler/check-source source)
+        compiled (compiler/compile-source source :js-kotoba-v1)
+        js-source (:source compiled)
+        encoded (.encodeToString (java.util.Base64/getEncoder)
+                                 (.getBytes ^String js-source "UTF-8"))
+        probe (str "import('data:text/javascript;base64," encoded
+                   "').then(m=>{const x=m.instantiateKotoba({});"
+                   "if(m.kotobaArtifact.entry!==null||x.add1(41n)!==42n)process.exit(2)})")
+        result (shell/sh "node" "--input-type=module" "-e" probe)]
+    (is (nil? (get-in checked [:hir :entry])))
+    (is (= ['add1] (get-in compiled [:kir :exports])))
+    (is (nil? (get-in compiled [:kir :oracle-value])))
+    (is (zero? (:exit result)) (:err result))
+    (doseq [target (disj compiler/targets :js-kotoba-v1)]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"require the kotoba-script web target"
+                            (compiler/compile-source source target)))))
+  (is (= "entryless library requires an explicit non-empty namespace export list"
+         (rejection-message "(defn add1 [x] (+ x 1))")))
+  (is (= "entryless library requires at least one exported function"
+         (rejection-message "(ns empty.library (:export [])) (defn- hidden [] 0)"))))
 
 (deftest map-get-recursion-shares-the-existing-fuel-budget
   ;; get/assoc introduce no new resource limit -- they are subject to the
