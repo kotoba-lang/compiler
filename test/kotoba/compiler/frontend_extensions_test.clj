@@ -140,6 +140,29 @@
                      "} :missing))")]
     (is (= 0 (oracle source)) "a full-width admissible map miss completes within fuel")))
 
+(deftest closed-top-level-constants-are-lexically-inlined
+  (let [source "(ns pilot.constants \"inert data\")
+                (def factor \"bounded integer\" 21)
+                (def config {:multiplier 2 :nested [:ok 9]})
+                (defn apply-factor [factor] factor)
+                (defn main []
+                  (+ (apply-factor 1)
+                     (* factor (get config :multiplier))))"]
+    (is (= 43 (oracle source)))
+    (doseq [target compiler/targets]
+      (is (= 43 (get-in (compiler/compile-source source target)
+                        [:kir :oracle-value]))))))
+
+(deftest top-level-constants-never-execute-code-or-shadow-locals
+  (is (= "constant value must be closed bounded integer/keyword/vector/map data"
+         (rejection-message "(def danger (+ 1 2)) (defn main [] danger)")))
+  (is (= "duplicate constant name"
+         (rejection-message "(def x 1) (def x 2) (defn main [] x)")))
+  (is (= "constant and function names must be disjoint"
+         (rejection-message "(def x 1) (defn x [] 2) (defn main [] x)")))
+  (is (= 7 (oracle "(def x 99) (defn identity-x [x] x) (defn main [] (identity-x 7))")))
+  (is (= 8 (oracle "(def x 99) (defn main [] (let [x 8] x))"))))
+
 (deftest map-get-recursion-shares-the-existing-fuel-budget
   ;; get/assoc introduce no new resource limit -- they are subject to the
   ;; SAME fixed fuel budget (ir.clj/backend/wasm.clj's 256-instruction-call
