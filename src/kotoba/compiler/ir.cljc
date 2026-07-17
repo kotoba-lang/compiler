@@ -118,6 +118,9 @@
                        else then)
                      env functions fuel heap call-stack cap-call))
 
+        (= op 'do)
+        (last (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args))
+
         (= op 'cap-call)
         (let [[cap-id value] args]
           (when-not cap-call

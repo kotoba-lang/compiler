@@ -221,6 +221,14 @@
               then-code (emit-expr then env) else-code (emit-expr else env)]
           (vec (concat test-code (cbz-x0 (+ 8 (code-size then-code)))
                        then-code (branch (+ 4 (code-size else-code))) else-code)))
+        ;; `do`: emit each subexpression in order; each leaves its result in x0,
+        ;; the next overwrites it, so only the last value survives -- but every
+        ;; subexpression's side effects (kernel MMIO) execute exactly once, in
+        ;; order. This is the ordered-sequencing primitive `let` can't give
+        ;; (let inlines, so a side-effecting binding used 0 or >1 times drops or
+        ;; duplicates its effect).
+        (= op 'do)
+        (vec (mapcat #(emit-expr % env) args))
         (= op 'cap-call)
         (emit-cap-call (first args) (second args) env)
         (contains? '#{pair pair-first pair-second} op)

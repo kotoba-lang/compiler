@@ -146,6 +146,26 @@
       (is (some #(= [0x20 0x00 0x40 0xb9] %) (partition 4 1 code)) "ldr w0,[x1] (u32 load)")
       (is (some #(= [0x20 0x00 0x00 0xb9] %) (partition 4 1 code)) "str w0,[x1] (u32 store)"))))
 
+(deftest do-sequences-side-effects-exactly-once
+  (testing "each `do` subexpression emits its store exactly once, in order"
+    (let [artifact (:artifact (compiler/compile-source
+                               "(defn main [] (do (kernel-store-u8 100 8 0 65) (kernel-store-u8 100 8 0 66) (kernel-store-u8 100 8 0 67)))"
+                               :aarch64-aiueos-kernel-v1))
+          code (:code artifact)
+          strb (count (filter #(= [0x20 0x00 0x00 0x39] %) (partition 4 1 code)))]
+      (is (= 3 strb) "three distinct strb w0,[x1] -- one per do subexpression, none dropped or duplicated")))
+  (testing "a single-expression do collapses to the expression"
+    (is (= (get-in (compiler/compile-source "(defn main [] (kernel-store-u8 100 8 0 65))" :aarch64-aiueos-kernel-v1)
+                   [:artifact :code])
+           (get-in (compiler/compile-source "(defn main [] (do (kernel-store-u8 100 8 0 65)))" :aarch64-aiueos-kernel-v1)
+                   [:artifact :code]))))
+  (testing "an empty do is rejected"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"do requires at least one expression"
+          (compiler/compile-source "(defn main [] (do))" :aarch64-aiueos-kernel-v1))))
+  (testing "do works on a pure target too (returns the last value)"
+    (is (= 3 (get-in (compiler/compile-source "(defn main [] (do 1 2 3))" :aarch64-kotoba-v1)
+                     [:artifact :value])))))
+
 (deftest x86-loop-recur-reuses-its-native-stack-frame
   (let [source "(defn main [] (loop [i 0 acc 0] (if (= i 20) acc (recur (+ i 1) (+ acc i)))))"
         artifact (:artifact (compiler/compile-source source :x86_64-aiueos-kernel-v1))
