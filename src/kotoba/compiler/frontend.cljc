@@ -6,6 +6,7 @@
   ;; for the fuller explanation). `#?@` (splicing) rather than `#?` here
   ;; because each branch below is more than one require-spec.
   (:require [clojure.set :as set]
+            [kotoba.compiler.value :as value]
             #?@(:clj [[clojure.tools.reader :as reader]
                       [clojure.tools.reader.reader-types :as rt]]
                 :cljs [[kotoba.compiler.kotoba-reader :as kr]
@@ -40,11 +41,13 @@
 ;; WASM-linear-memory-managed by the guest itself.
 (def logical-operations '#{and or when})
 (def map-operations '#{get assoc})
+(def string-operations '{string-byte-length 1 string=? 2 string-concat 2})
 (def reserved-function-names
   (set/union forbidden-heads arithmetic comparisons (set (keys heap-operations))
              (set (keys kernel-memory-operations))
              (set (keys kernel-privileged-operations))
              list-operations predicate-operations logical-operations map-operations
+             (set (keys string-operations))
              '#{let if cap-call ns defn defn-}))
 (def max-functions 1024)
 (def max-expression-nodes 50000)
@@ -55,6 +58,7 @@
 (def max-list-items 128)
 (def max-namespace-docstring-chars 4096)
 (def max-function-docstring-chars 4096)
+(def value-types #{:i64 :string})
 
 (defn- kotoba-integer?
   "True for a value that is (or stands for) a `.kotoba` integer literal --
@@ -623,6 +627,12 @@
                 (reject! "integer literal is outside i64" form))
        :cljs (if (i64/in-i64-range? form) form
                  (reject! "integer literal is outside i64" form)))
+    (string? form)
+    (try
+      (value/bounded-string! form value/string-literal-byte-limit)
+      form
+      (catch #?(:clj Exception :cljs :default) error
+        (reject! (ex-message error) form)))
     (symbol? form) (if (contains? locals form) form
                        (reject! "unbound or dynamic symbol is forbidden" form))
     (seq? form)
@@ -666,6 +676,11 @@
               (reject! "heap operation arity mismatch" form))
             (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
 
+        (contains? string-operations op)
+        (do (when-not (= (get string-operations op) (count args))
+              (reject! "string operation arity mismatch" form))
+            (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
         (contains? kernel-memory-operations op)
         (do (when-not (= (get kernel-memory-operations op) (count args))
               (reject! "kernel memory operation arity mismatch" form))
@@ -685,6 +700,105 @@
         :else (reject! "operation has no admitted lowering" form))
       form)
     :else (reject! "value type is outside the safe profile" form)))
+
+(defn- require-expression-type! [actual expected form]
+  (when-not (= actual expected)
+    (reject! (str "expression type mismatch: expected " (name expected)
+                  ", got " (name actual))
+             form)))
+
+(declare infer-expression-type)
+
+(defn- infer-call-type [op args locals signatures]
+  (let [types (mapv #(infer-expression-type % locals signatures) args)]
+    (cond
+      (contains? arithmetic op)
+      (do (doseq [[arg type] (map vector args types)]
+            (require-expression-type! type :i64 arg))
+          :i64)
+
+      (contains? comparisons op)
+      (do (doseq [[arg type] (map vector args types)]
+            (require-expression-type! type :i64 arg))
+          :i64)
+
+      (contains? heap-operations op)
+      (do (doseq [[arg type] (map vector args types)]
+            (require-expression-type! type :i64 arg))
+          :i64)
+
+      (or (contains? kernel-memory-operations op)
+          (contains? kernel-privileged-operations op))
+      (do (doseq [[arg type] (map vector args types)]
+            (require-expression-type! type :i64 arg))
+          :i64)
+
+      (= op 'cap-call)
+      (do (require-expression-type! (second types) :i64 (second args)) :i64)
+
+      (= op 'string-byte-length)
+      (do (require-expression-type! (first types) :string (first args)) :i64)
+
+      (= op 'string=?)
+      (do (doseq [[arg type] (map vector args types)]
+            (require-expression-type! type :string arg))
+          :i64)
+
+      (= op 'string-concat)
+      (do (doseq [[arg type] (map vector args types)]
+            (require-expression-type! type :string arg))
+          :string)
+
+      (contains? signatures op)
+      (let [{expected :param-types result :result} (get signatures op)]
+        (doseq [[arg actual wanted] (map vector args types expected)]
+          (require-expression-type! actual wanted arg))
+        result)
+
+      :else (reject! "operation has no admitted type signature" op))))
+
+(defn- infer-expression-type [form locals signatures]
+  (cond
+    (kotoba-integer? form) :i64
+    (string? form) :string
+    (symbol? form) (or (get locals form)
+                       (reject! "unbound symbol has no value type" form))
+    (seq? form)
+    (let [[op & args] form]
+      (case op
+        let (let [[bindings body] args]
+              (loop [pairs (partition 2 bindings) current locals]
+                (if-let [[name value] (first pairs)]
+                  (recur (next pairs)
+                         (assoc current name (infer-expression-type value current signatures)))
+                  (infer-expression-type body current signatures))))
+        if (let [[test then else] args
+                 test-type (infer-expression-type test locals signatures)
+                 then-type (infer-expression-type then locals signatures)
+                 else-type (infer-expression-type else locals signatures)]
+             (require-expression-type! test-type :i64 test)
+             (when-not (= then-type else-type)
+               (reject! "if branches must have the same value type" form))
+             then-type)
+        do (last (mapv #(infer-expression-type % locals signatures) args))
+        (infer-call-type op args locals signatures)))
+    :else (reject! "value has no admitted type" form)))
+
+(defn- check-value-types! [functions]
+  (let [signatures (into {} (map (fn [{:keys [name params param-types result]}]
+                                   [name {:params params :param-types param-types
+                                          :result result}])
+                                 functions))]
+    (doseq [{:keys [name params param-types result body]} functions]
+      (let [actual (infer-expression-type body (zipmap params param-types) signatures)]
+        (require-expression-type! actual result name)))
+    (let [literal-bytes
+          (reduce + 0
+                  (map value/utf8-byte-count!
+                       (filter string?
+                               (mapcat #(tree-seq coll? seq (:body %)) functions))))]
+      (when (> literal-bytes value/string-value-byte-limit)
+        (reject! "module string literals exceed UTF-8 byte limit" literal-bytes)))))
 
 (defn- direct-facts [form function-names]
   (let [effects (volatile! #{}) calls (volatile! #{})]
@@ -723,6 +837,7 @@
 (defn- lowered-cost [form env]
   (cond
     (kotoba-integer? form) 1
+    (string? form) 1
     (symbol? form) (get env form 1)
     :else
     (let [[op & args] form]
@@ -756,18 +871,42 @@
 
 (defn- defn-parts
   "Parse Kotoba's bounded function declaration shape. A docstring is inert
-  metadata and is deliberately discarded before lowering; attributes,
-  pre/post maps, and multiple arities remain outside the admitted profile."
+  metadata and is deliberately discarded before lowering. An optional result
+  keyword follows the parameter vector: `(defn f [s :string] :string s)`.
+  Attributes, pre/post maps, and multiple arities remain outside the profile."
   [form]
   (let [[_ name & declaration] form
         [docstring declaration] (if (string? (first declaration))
                                   [(first declaration) (rest declaration)]
                                   [nil declaration])
         raw-params (first declaration)
-        body (rest declaration)]
+        tail (rest declaration)
+        [result body] (if (keyword? (first tail))
+                        [(first tail) (rest tail)]
+                        [:i64 tail])]
     (when (and docstring (> (count docstring) max-function-docstring-chars))
       (reject! "function docstring exceeds admission limit" docstring))
-    {:name name :raw-params raw-params :body body}))
+    (when-not (contains? value-types result)
+      (reject! "function result type is outside the safe value profile" result))
+    {:name name :raw-params raw-params :result result :body body}))
+
+(defn- typed-param-parts
+  "Legacy `[x y]` remains two i64 parameters. Once any type keyword appears,
+  the whole vector must be alternating `[name :type ...]`; this keeps the
+  source grammar deterministic and makes every non-i64 host boundary explicit."
+  [raw-params]
+  (if (some keyword? raw-params)
+    (do
+      (when-not (even? (count raw-params))
+        (reject! "typed parameters require alternating name/type pairs" raw-params))
+      (mapv (fn [[pattern type]]
+              (when-not (contains? value-types type)
+                (reject! "parameter type is outside the safe value profile" type))
+              (when (and (= type :string) (not (symbol? pattern)))
+                (reject! "string parameters require plain-symbol bindings" pattern))
+              {:pattern pattern :type type})
+            (partition 2 raw-params)))
+    (mapv (fn [pattern] {:pattern pattern :type :i64}) raw-params)))
 
 (defn- binding-symbols [pattern]
   (->> (tree-seq coll? seq pattern)
@@ -782,6 +921,10 @@
   [value]
   (cond
     (kotoba-integer? value) true
+    (string? value) (try
+                      (value/bounded-string! value value/string-literal-byte-limit)
+                      true
+                      (catch #?(:clj Exception :cljs :default) _ false))
     (keyword? value) true
     (vector? value) (and (<= (count value) max-list-items)
                          (every? constant-literal? value))
@@ -800,7 +943,7 @@
       (reject! "constant must contain exactly one literal value" form))
     (let [value (first declaration)]
       (when-not (constant-literal? value)
-        (reject! "constant value must be closed bounded integer/keyword/vector/map data" value))
+        (reject! "constant value must be closed bounded integer/string/keyword/vector/map data" value))
       {:name name :value value})))
 
 (declare substitute-constants)
@@ -888,29 +1031,32 @@
                (vec
                      (mapcat
                      (fn [form]
-                       (let [{:keys [name raw-params body]} (defn-parts form)]
+                       (let [{:keys [name raw-params result body]} (defn-parts form)]
                          (when-not (valid-name? name) (reject! "invalid function name" name))
                          (when (contains? reserved-function-names name)
                            (reject! "reserved function name" name))
                          (when-not (vector? raw-params)
                            (reject! "function parameters must be a vector" raw-params))
-                         (when (> (count raw-params) max-parameters)
-                           (reject! "function parameters exceed ABI-supported arity" raw-params))
                          (when-not (= 1 (count body))
                            (reject! "function must contain one result expression" body))
-                         (let [name+wraps (mapv param-name+wrap raw-params)
+                         (let [param-parts (typed-param-parts raw-params)
+                               _ (when (> (count param-parts) max-parameters)
+                                   (reject! "function parameters exceed ABI-supported arity" raw-params))
+                               name+wraps (mapv #(param-name+wrap (:pattern %)) param-parts)
                                params (mapv first name+wraps)
+                               param-types (mapv :type param-parts)
                                wrap-body (apply comp (map second name+wraps))]
                            (when-not (and (every? valid-name? params) (= (count params) (count (distinct params))))
                              (reject! "function parameters must be unique bounded symbols with ABI-supported arity" raw-params))
                            (let [loop-helpers (atom [])
-                                 constant-bound (into #{} (mapcat binding-symbols raw-params))
+                                 constant-bound (into #{} (mapcat #(binding-symbols (:pattern %)) param-parts))
                                  source-body (substitute-constants
                                               (wrap-body (first body))
                                               constants constant-bound)
                                  desugared (binding [*pending-loop-helpers* loop-helpers]
                                              (desugar-expr source-body))]
-                             (into [{:name name :params params :result :i64 :effects #{}
+                             (into [{:name name :params params :param-types param-types
+                                     :result result :effects #{}
                                      :body desugared}]
                                    @loop-helpers)))))
                      defs)))
@@ -924,6 +1070,10 @@
         parsed (cond-> parsed
                  (some #(uses-map-get? (:body %)) parsed) (conj map-get-helper)
                  (some #(uses-map-without? (:body %)) parsed) (conj map-without-helper))
+        parsed (mapv #(if (:param-types %)
+                        %
+                        (assoc % :param-types (vec (repeat (count (:params %)) :i64))))
+                     parsed)
         signatures (into {} (map (juxt :name :params) parsed))
         source-public (mapv second (filter #(= 'defn (first %)) defs))
         exports (cond
@@ -950,11 +1100,24 @@
     (let [budget (volatile! 0)]
       (doseq [{:keys [params body]} parsed]
         (validate-expr body (set params) signatures 0 budget)))
+    (check-value-types! parsed)
     (check-lowering-budget! parsed)
-    (let [function-effects (infer-effects parsed)
-          functions (mapv #(assoc % :effects (get function-effects (:name %))) parsed)]
-      {:format :kotoba.hir/v2 :entry entry :exports (vec exports)
-       :result (when entry :i64)
+    (let [typed-values? (boolean
+                         (some (fn [{:keys [param-types result body]}]
+                                 (or (some #{:string} param-types)
+                                     (= :string result)
+                                     (some string? (tree-seq coll? seq body))))
+                               parsed))
+          function-effects (infer-effects parsed)
+          functions (mapv (fn [function]
+                            (cond-> (assoc function :effects
+                                           (get function-effects (:name function)))
+                              (not typed-values?) (dissoc :param-types)))
+                          parsed)
+          main-result (some->> parsed (some #(when (= 'main (:name %)) (:result %))))]
+      {:format (if typed-values? :kotoba.hir/v3 :kotoba.hir/v2)
+       :entry entry :exports (vec exports)
+       :result (when entry main-result)
        ;; Admission conservatively covers private functions too: changing an
        ;; export boundary must never change the authority the module declares.
        :effects (reduce set/union #{} (vals function-effects))

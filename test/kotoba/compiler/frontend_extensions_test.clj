@@ -7,7 +7,8 @@
             [clojure.java.shell :as shell]
             [kotoba.compiler.core :as compiler]
             [kotoba.compiler.frontend :as frontend]
-            [kotoba.compiler.ir :as ir]))
+            [kotoba.compiler.ir :as ir]
+            [kotoba.compiler.target :as target]))
 
 (defn- oracle [source]
   (:oracle-value (:kir (compiler/compile-source source :wasm32-kotoba-v1))))
@@ -156,7 +157,7 @@
                         [:kir :oracle-value]))))))
 
 (deftest top-level-constants-never-execute-code-or-shadow-locals
-  (is (= "constant value must be closed bounded integer/keyword/vector/map data"
+  (is (= "constant value must be closed bounded integer/string/keyword/vector/map data"
          (rejection-message "(def danger (+ 1 2)) (defn main [] danger)")))
   (is (= "duplicate constant name"
          (rejection-message "(def x 1) (def x 2) (defn main [] x)")))
@@ -212,13 +213,66 @@
     (is (= ['add1] (get-in compiled [:kir :exports])))
     (is (nil? (get-in compiled [:kir :oracle-value])))
     (is (zero? (:exit result)) (:err result))
-    (doseq [target (disj compiler/targets :js-kotoba-v1)]
+    (doseq [target (remove #(= :js-kotoba-v1 (target/backend %))
+                           compiler/supported-targets)]
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"require the kotoba-script web target"
                             (compiler/compile-source source target)))))
   (is (= "entryless library requires an explicit non-empty namespace export list"
          (rejection-message "(defn add1 [x] (+ x 1))")))
   (is (= "entryless library requires at least one exported function"
          (rejection-message "(ns empty.library (:export [])) (defn- hidden [] 0)"))))
+
+(deftest typed-bounded-strings-remain-strings-through-checked-kir-and-web
+  (let [source (str "(ns pilot.text (:export [greet byte-length same?])) "
+                    "(defn greet [name :string] :string (string-concat \"こんにちは、\" name)) "
+                    "(defn byte-length [value :string] (string-byte-length value)) "
+                    "(defn same? [left :string right :string] (string=? left right))")
+        checked (compiler/check-source source)
+        compiled (compiler/compile-source source :js-kotoba-v1)
+        js-source (:source compiled)
+        encoded (.encodeToString (java.util.Base64/getEncoder)
+                                 (.getBytes ^String js-source "UTF-8"))
+        probe (str "import('data:text/javascript;base64," encoded
+                   "').then(m=>{const x=m.instantiateKotoba({});"
+                   "if(x.greet('言葉')!=='こんにちは、言葉')process.exit(2);"
+                   "if(x['byte-length']('言葉')!==6n)process.exit(3);"
+                   "if(x['same?']('言葉','言葉')!==1n||x['same?']('言葉','ことば')!==0n)process.exit(4)})")
+        result (shell/sh "node" "--input-type=module" "-e" probe)]
+    (is (= :kotoba.hir/v3 (get-in checked [:hir :format])))
+    (is (= :kotoba.kir/v4 (get-in compiled [:kir :format])))
+    (is (= :kotoba.value/typed-v1 (:value-profile compiled)))
+    (is (= 65536 (get-in compiled [:manifest :kotoba.artifact/limits
+                                   :string-value-bytes])))
+    (is (re-find #"valueProfile:'typed-v1'" js-source))
+    (is (= [:string] (get-in compiled [:kir :functions 0 :param-types])))
+    (is (= :string (get-in compiled [:kir :functions 0 :result])))
+    (is (= "こんにちは、言葉" (ir/execute (:kir compiled) 'greet ["言葉"])))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"string exceeds UTF-8 byte limit"
+                          (ir/execute (:kir compiled) 'greet [(apply str (repeat 65537 "x"))])))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"string exceeds UTF-8 byte limit"
+                          (ir/execute (:kir compiled) 'greet [(apply str (repeat 65530 "x"))])))
+    (is (zero? (:exit result)) (:err result))
+    (doseq [target (remove #(= :js-kotoba-v1 (target/backend %))
+                           compiler/supported-targets)]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"require the kotoba-script web target"
+                            (compiler/compile-source source target)))))
+  (is (= "expression type mismatch: expected string, got i64"
+         (rejection-message "(ns bad (:export [f])) (defn f [] :string 1)")))
+  (is (= "expression type mismatch: expected i64, got string"
+         (rejection-message "(defn main [] (+ \"not-an-integer\" 1))")))
+  (is (= "typed parameters require alternating name/type pairs"
+         (rejection-message "(ns bad (:export [f])) (defn f [x :string y] :string x)")))
+  (is (= "string exceeds UTF-8 byte limit"
+         (rejection-message
+          (str "(ns bad (:export [f])) (defn f [] :string \""
+               (apply str (repeat 4097 "x")) "\")"))))
+  (let [literal (apply str (repeat 4096 "x"))
+        definitions (apply str
+                           (map (fn [index]
+                                  (str "(defn f" index " [] :string \"" literal "\")"))
+                                (range 17)))]
+    (is (= "module string literals exceed UTF-8 byte limit"
+           (rejection-message (str "(ns too.large (:export [f0]))" definitions))))))
 
 (deftest map-get-recursion-shares-the-existing-fuel-budget
   ;; get/assoc introduce no new resource limit -- they are subject to the
