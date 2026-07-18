@@ -106,8 +106,9 @@
 (deftest compile-source-path-loads-only-a-closed-qualified-project
   (let [directory (.toFile (java.nio.file.Files/createTempDirectory
                             "kotoba-cli-project-" (make-array java.nio.file.attribute.FileAttribute 0)))
-        dependency (io/file directory "example/text.kotoba")
-        root (io/file directory "example/app.kotoba")
+        source-directory (io/file directory "src")
+        dependency (io/file source-directory "example/text.kotoba")
+        root (io/file directory "main.kotoba")
         output (io/file directory "app.mjs")
         out (StringWriter.)]
     (.mkdirs (.getParentFile dependency))
@@ -117,7 +118,7 @@
           "(ns example.app (:require [example.text :as text]) (:export [main]))
            (defn main [] (text/answer))")
     (binding [*out* out]
-      (cli/-main "compile" (.getPath root) "--source-path" (.getPath directory)
+      (cli/-main "compile" (.getPath root) "--source-path" (.getPath source-directory)
                  "--target" "js" "--output" (.getPath output)))
     (let [report (edn/read-string (str out))
           manifest (edn/read-string (slurp (str output ".manifest.edn")))]

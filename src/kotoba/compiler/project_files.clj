@@ -32,20 +32,21 @@
 
 (defn load-closed-graph
   "Load only the transitive closure rooted at input from one explicit source
-  directory. Real-path checks reject symlink escape; project/link-source owns
+  directory. The explicitly selected root may live beside that directory;
+  dependency real-path checks reject symlink escape. project/link-source owns
   the aggregate graph and source bounds."
   [input source-path]
   (let [source-root (real-path source-path)
         root-path (real-path input)]
     (when-not (Files/isDirectory source-root (make-array LinkOption 0))
       (reject! "source path must be a readable directory" {}))
-    (when-not (.startsWith root-path source-root)
-      (reject! "project root must be inside the explicit source path" {}))
     (let [sources (volatile! {})
           paths (volatile! {})]
       (letfn [(visit [^Path file expected]
                 (let [real (.toRealPath file (make-array LinkOption 0))]
-                  (when-not (.startsWith real source-root)
+                  ;; The root is explicitly selected, not discovered by
+                  ;; namespace. Only discovered dependencies are confined.
+                  (when (and expected (not (.startsWith real source-root)))
                     (reject! "project module escapes the explicit source path"
                              {:module expected}))
                   (let [source (slurp (.toFile real))
