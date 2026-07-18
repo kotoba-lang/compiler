@@ -124,7 +124,12 @@ The public command boundary normalizes expected failures into one
 `kotoba.cli-error/v1` EDN line with a stable phase-derived exit code. Only an
 allowlist of safe diagnostic fields crosses that boundary; source forms, local
 paths, causes, stack traces, and unexpected host exception messages are
-redacted. Unexpected throwables become a generic exit-70 internal failure.
+redacted. Every envelope additionally contains `kotoba.diagnostic/v1` with a
+stable phase code, error severity, source basename (never its local directory),
+and a bounded one-based source span when the reader can associate the rejected
+form. The JVM tools.reader and JVM-free nbb reader preserve the same locations
+through constant substitution and desugaring. Unexpected throwables become a
+generic exit-70 internal failure without a source span.
 
 ## Current maturity
 

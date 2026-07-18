@@ -18,8 +18,10 @@
   malformed/trailing EDN at all (silently used only the FIRST top-level
   form) -- both are fixed here, not just the one conformance check that
   happened to catch it."
-  (:require [kotoba.compiler.frontend :as frontend]
+  (:require ["node:path" :as node-path]
+            [kotoba.compiler.frontend :as frontend]
             [kotoba.compiler.admission :as admission]
+            [kotoba.compiler.diagnostic :as diagnostic]
             [kotoba.compiler.ir :as ir]
             [kotoba.compiler.backend.wasm :as wasm]
             [kotoba.compiler.kotoba-reader :as kr]
@@ -160,17 +162,20 @@
     :output 74
     70))
 
-(defn- error-report [e]
+(defn- error-report [e source-name]
   (let [data (ex-data e)
         phase (or (:phase data) :internal)]
     {:format :kotoba.cli-error/v1
      :ok false
      :error phase
+     :diagnostic (diagnostic/from-error e source-name)
      :message (if (= phase :internal) "internal compiler error" (.-message e))}))
 
 (try
   (run! (vec *command-line-args*))
   (catch :default e
-    (let [report (error-report e)]
+    (let [source (second *command-line-args*)
+          source-name (when (source-path/source-kind source) (.basename node-path source))
+          report (error-report e source-name)]
       (.error js/console (pr-str report))
       (.exit js/process (exit-code (:error report))))))
