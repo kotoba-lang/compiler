@@ -2075,6 +2075,7 @@
                           parsed)
           main-result (some->> parsed (some #(when (= 'main (:name %)) (:result %))))]
       {:format (if typed-values? :kotoba.hir/v3 :kotoba.hir/v2)
+       :namespace (:namespace namespace-info)
        :entry entry :exports (vec exports)
        :result (when entry main-result)
        ;; Admission conservatively covers private functions too: changing an

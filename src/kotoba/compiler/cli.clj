@@ -7,6 +7,7 @@
             [kotoba.compiler.coverage-evidence :as coverage-evidence]
             [kotoba.compiler.diagnostic :as diagnostic]
             [kotoba.compiler.ios-aot :as ios-aot]
+            [kotoba.compiler.interface :as interface]
             [kotoba.compiler.native-executor :as native-executor]
             [kotoba.compiler.packaging.pe32plus :as pe32plus]
             [kotoba.compiler.receipt :as receipt]
@@ -84,6 +85,13 @@
           output (or (option args "--output") "kotoba-verification-key.edn")]
       (atomic-output/write-edn! output public)
       (println (pr-str {:ok true :output output :signer (:signer public)})))
+    "inspect"
+    (let [input (kotoba-source! (second args))
+          inspected (interface/inspect-source (bounded-edn/read-text-file input))]
+      (if-let [output (option args "--output")]
+        (do (atomic-output/write-edn! output inspected)
+            (println (pr-str {:ok true :output output :sha256 (:sha256 inspected)})))
+        (println (pr-str inspected))))
     "trust-key"
     (let [key (bounded-edn/read-file (second args))
           signer (signing/trusted-signer-id! key)
