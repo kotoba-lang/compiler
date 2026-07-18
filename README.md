@@ -259,6 +259,13 @@ integer handles, host-object identity, or backend-specific coercion. `.cljk` is
 a Kotoba source extension selecting the compiler; it is not a separate runtime
 ABI and must follow the ABI of the selected target.
 
+The Wasm parity path reserves the versioned `kotoba.typed` custom section for
+canonical binary descriptor and literal tables. Hosts parse it with strict
+UTF-8, uniqueness, EOF, depth, node, member, and table limits before
+instantiation. KIR v4 compilation to Wasm still fails closed until the externref
+runtime operations and exported-boundary validators are implemented; metadata
+presence alone is never treated as typed-value qualification.
+
 The first bounded sequential collection is `:vector-i64`, constructed
 explicitly with `(vector-i64 ...)` and capped at 128 items. `vector-count`,
 `vector-get`, `vector-assoc`, and `vector-conj` preserve signed-i64 elements;

@@ -1,7 +1,9 @@
 (ns kotoba.compiler.backend.wasm
   ;; See `kotoba.compiler.ir`'s ns form for why the whole `:require` clause
   ;; (not just an item inside it) is behind the reader-conditional.
-  #?(:cljs (:require [kotoba.compiler.cljs-i64 :as i64])))
+  #?(:clj (:require [kotoba.compiler.backend.wasm-typed :as typed])
+     :cljs (:require [kotoba.compiler.backend.wasm-typed :as typed]
+                     [kotoba.compiler.cljs-i64 :as i64])))
 
 ;; `uleb` only ever encodes small, non-negative, interpreter-internal counts
 ;; and indices in this file (section/payload lengths, function/type/import
@@ -186,8 +188,12 @@
         code-sec (concat (uleb (count functions))
                          (mapcat #(function-body % indices intrinsic-indices) functions))
         target-sec (concat (name-bytes "kotoba.target")
-                           (utf8 (name target)))]
+                           (utf8 (name target)))
+        typed-sec (when (= :kotoba.kir/v4 (:format kir))
+                    (concat (name-bytes typed/custom-section-name)
+                            (typed/metadata-bytes kir)))]
     (let [bytes (concat [0 0x61 0x73 0x6d 1 0 0 0] (section 0 target-sec)
+                        (when typed-sec (section 0 typed-sec))
                         (section 1 types) (when (seq imports) (section 2 import-sec))
                         (section 3 function-sec) (section 6 global-sec)
                         (section 7 export-sec) (section 10 code-sec))]
