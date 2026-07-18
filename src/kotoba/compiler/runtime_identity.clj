@@ -7,8 +7,11 @@
   "b3b3361712a26e69edbaa42fec47d1290a8ebb06a0baf83f54533b9a32173fdc")
 
 (def windows-loader-source-sha256
-  "Pinned identity of the reviewed Windows native loader source."
-  "cfeb7e0e32635db5f0522e84b18e6e477cef70e3c9a858d1f20242d9c8ff5702")
+  "Pinned identity of the reviewed Windows native loader source.
+  Updated for the WFP-based network denial added under ADR-2607182420
+  (install_network_denial(), network_outbound_probe_denied(),
+  network_listen_probe_denied() in tools/kexe_loader_windows.c)."
+  "ebad29ac8bac522159186713f89a5392bd089d8d2d6b7574ee0ac0437fdedcb1")
 
 (defn loader-source-for-profile [profile]
   (case (:os profile)
