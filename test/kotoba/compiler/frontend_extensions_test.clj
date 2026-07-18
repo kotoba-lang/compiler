@@ -330,6 +330,62 @@
                            "(defn main [] [:option :string] (option-none-of [:option :string]))"
                            target-name)))))
 
+(deftest heterogeneous-vectors-are-exact-statically-indexed-and-persistent
+  (let [type [:vector [:i64 :string :bool]]
+        source "(ns vector.heterogeneous (:export [make name rename count-items same?]))
+                (defn make [] [:vector [:i64 :string :bool]]
+                  (hetero-vector [:vector [:i64 :string :bool]] 7 \"安全\" true))
+                (defn name [value [:vector [:i64 :string :bool]]] :string
+                  (hetero-vector-at [:vector [:i64 :string :bool]] value 1))
+                (defn rename [value [:vector [:i64 :string :bool]]]
+                  [:vector [:i64 :string :bool]]
+                  (hetero-vector-assoc [:vector [:i64 :string :bool]] value 1 \"確認\"))
+                (defn count-items [value [:vector [:i64 :string :bool]]]
+                  (hetero-vector-count [:vector [:i64 :string :bool]] value))
+                (defn same? [left [:vector [:i64 :string :bool]]
+                             right [:vector [:i64 :string :bool]]]
+                  (hetero-vector-equal [:vector [:i64 :string :bool]] left right))"
+        compiled (compiler/compile-source source :js-kotoba-v1)
+        kir (:kir compiled)
+        encoded (.encodeToString (java.util.Base64/getEncoder)
+                                 (.getBytes ^String (:source compiled) "UTF-8"))
+        probe (str "import('data:text/javascript;base64," encoded
+                   "').then(m=>{const x=m.instantiateKotoba({});"
+                   "const t=Object.freeze(['vector',Object.freeze(['i64','string','bool'])]);"
+                   "const before=x.make(),after=x.rename(before);"
+                   "if(x.name(before)!=='安全'||x['count-items'](before)!==3n||after[2]!=='確認'||before[2]!=='安全')process.exit(2);"
+                   "if(x['same?'](before,[t,7n,'安全',true])!==1n||x['same?'](before,after)!==0n||!Object.isFrozen(after))process.exit(3);"
+                   "try{x.name([Object.freeze(['vector',Object.freeze(['string','string','bool'])]),7n,'安全',true]);process.exit(4)}"
+                   "catch(e){if(e.message!=='invalid-heterogeneous-vector')process.exit(5)}})")
+        node-result (shell/sh "node" "--input-type=module" "-e" probe)]
+    (is (= [type 7 "安全" true] (ir/execute kir 'make [])))
+    (is (= "安全" (ir/execute kir 'name [[type 7 "安全" true]])))
+    (is (= [type 7 "確認" true]
+           (ir/execute kir 'rename [[type 7 "安全" true]])))
+    (is (= 3 (ir/execute kir 'count-items [[type 7 "安全" true]])))
+    (is (= 1 (ir/execute kir 'same? [[type 7 "安全" true]
+                                      [type 7 "安全" true]])))
+    (is (= 32 (get-in compiled [:manifest :kotoba.artifact/limits
+                                :heterogeneous-vector-items])))
+    (is (zero? (:exit node-result)) (:err node-result))
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (ir/execute kir 'name [[[ :vector [:string :string :bool]]
+                                         7 "安全" true]]))))
+  (doseq [source
+          ["(defn bad [] [:vector [:i64 :string]] (hetero-vector [:vector [:i64 :string]] 1))"
+           "(defn bad [] [:vector [:i64 :string]] (hetero-vector [:vector [:i64 :string]] \"x\" \"y\"))"
+           "(defn bad [v [:vector [:i64 :string]] i :i64] :string (hetero-vector-at [:vector [:i64 :string]] v i))"
+           "(defn bad [v [:vector [:i64 :string]]] :string (hetero-vector-at [:vector [:i64 :string]] v 2))"
+           "(defn bad [v [:vector [:i64 :string]]] [:vector [:i64 :string]] (hetero-vector-assoc [:vector [:i64 :string]] v 0 \"wrong\"))"]]
+    (is (some? (rejection-message source))))
+  (doseq [target-name (remove #(= :js-kotoba-v1 (target/backend %))
+                              compiler/supported-targets)]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"require the kotoba-script web target"
+                          (compiler/compile-source
+                           "(defn main [] [:vector [:i64 :string]] (hetero-vector [:vector [:i64 :string]] 1 \"x\"))"
+                           target-name)))))
+
 (deftest bounded-map-host-abi-runs-through-compiler-and-kotoba-script
   (let [source "(ns pilot.map (:export [lookup update]))
                 (defn lookup [value :map] (get value :a 0))

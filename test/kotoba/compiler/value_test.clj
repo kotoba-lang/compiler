@@ -89,6 +89,25 @@
       (is (thrown? clojure.lang.ExceptionInfo
                    (value/bounded-typed-value! string-option invalid))))))
 
+(deftest heterogeneous-vector-values-seal-position-types-and-exact-length
+  (let [type [:vector [:i64 :string :bool]]
+        nested-type [:vector [[:option :string] [:result :i64 :bool]]]]
+    (is (= [type 7 "安全" true]
+           (value/bounded-typed-value! type [type 7 "安全" true])))
+    (is (= [nested-type [[:option :string] false] [true 9]]
+           (value/bounded-typed-value!
+            nested-type [nested-type [[:option :string] false] [true 9]])))
+    (doseq [invalid [[type 7 "安全"]
+                     [type 7 "安全" true :extra]
+                     [type "7" "安全" true]
+                     [[ :vector [:string :string :bool]] 7 "安全" true]
+                     nil]]
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (value/bounded-typed-value! type invalid)))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"heterogeneous vector types"
+                        (value/validate-value-type!
+                         [:vector (vec (repeat 33 :i64))]))))
+
 (deftest vector-i64-is-bounded-and-homogeneous
   (is (= [1 2 3] (value/bounded-vector-i64! [1 2 3])))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a vector-i64"

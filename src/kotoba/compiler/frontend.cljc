@@ -102,6 +102,9 @@
 (def variant-operations '#{variant-new variant-match})
 (def generic-option-operations
   '#{option-some-of option-none-of option-some?-of option-value-of option-match})
+(def heterogeneous-vector-operations
+  '#{hetero-vector-new hetero-vector-count hetero-vector-at
+     hetero-vector-assoc hetero-vector-equal})
 (def typed-vector-operations
   '{vector-count 1 vector-get 3 vector-at 2 vector-drop 2 vector-assoc 3 vector-conj 2})
 (def sequencing-operations '#{do})
@@ -115,10 +118,11 @@
              (set (keys parametric-result-operations))
              variant-operations
              generic-option-operations
+             heterogeneous-vector-operations
              (set (keys typed-vector-operations))
              (set (keys string-operations))
              '#{let if cap-call ns defn defn- some some? nil? vector-i64 vector-new
-                match-result match-variant match-option}))
+                hetero-vector match-result match-variant match-option}))
 (def max-functions 1024)
 (def max-expression-nodes 50000)
 (def max-lowered-nodes 100000)
@@ -131,6 +135,7 @@
 (def max-type-depth 8)
 (def max-type-nodes 64)
 (def max-variant-cases 32)
+(def max-heterogeneous-vector-items 32)
 ;; ADR-2607182410: bounds an optional `ns` `:capabilities` declaration set.
 ;; 256, not max-functions -- matches cap-call's own [0,255] id space (at
 ;; most 256 distinct capabilities can ever exist), not the unrelated
@@ -149,8 +154,12 @@
 (defn- generic-option-type? [type]
   (and (vector? type) (= 2 (count type)) (= :option (first type))))
 
+(defn- heterogeneous-vector-type? [type]
+  (and (vector? type) (= 2 (count type)) (= :vector (first type))))
+
 (defn- structured-type? [type]
-  (or (parametric-result-type? type) (variant-type? type) (generic-option-type? type)))
+  (or (parametric-result-type? type) (variant-type? type) (generic-option-type? type)
+      (heterogeneous-vector-type? type)))
 
 (defn- validate-value-type!
   ([type] (validate-value-type! type 0 (volatile! 0)))
@@ -169,6 +178,17 @@
      (generic-option-type? type)
      (do (validate-value-type! (second type) (inc depth) nodes)
          type)
+     (heterogeneous-vector-type? type)
+     (let [item-types (second type)]
+       (when-not (and (vector? item-types)
+                      (<= (count item-types) max-heterogeneous-vector-items))
+         (reject! "heterogeneous vector types must be a bounded vector" type))
+       (vswap! nodes inc)
+       (when (> @nodes max-type-nodes)
+         (reject! "value type exceeds node limit" type))
+       (doseq [item-type item-types]
+         (validate-value-type! item-type (inc depth) nodes))
+       type)
      (variant-type? type)
      (let [[_ type-id cases] type]
        (when-not (and (keyword? type-id) (namespace type-id))
@@ -199,6 +219,17 @@
   (confirmed live), so this checks both forms explicitly."
   [form]
   #?(:clj (integer? form) :cljs (or (i64/bigint-value? form) (integer? form))))
+
+(defn- heterogeneous-vector-index!
+  [index item-types form]
+  (when-not (kotoba-integer? index)
+    (reject! "heterogeneous vector index must be an integer literal" form))
+  (let [host-index #?(:clj index
+                      :cljs (if (i64/bigint-value? index) (js/Number index) index))]
+    (when-not (and (integer? host-index) (<= 0 host-index)
+                   (< host-index (count item-types)))
+      (reject! "heterogeneous vector index must be in range" form))
+    #?(:clj (long host-index) :cljs host-index)))
 
 (defn- check-reader-depth! [source]
   (loop [index 0 depth 0 in-string? false escaped? false in-comment? false]
@@ -788,6 +819,28 @@
               (list 'option-match type (desugar-expr value)
                     (desugar-expr (second none-branch)) (second some-branch)
                     (desugar-expr (nth some-branch 2)))))
+        hetero-vector
+        (do (when (empty? args)
+              (reject! "hetero-vector requires a type descriptor" form))
+            (list* 'hetero-vector-new (first args) (map desugar-expr (rest args))))
+        hetero-vector-count
+        (do (when-not (= 2 (count args))
+              (reject! "hetero-vector-count requires type and value" form))
+            (list 'hetero-vector-count (first args) (desugar-expr (second args))))
+        hetero-vector-at
+        (do (when-not (= 3 (count args))
+              (reject! "hetero-vector-at requires type, value, and literal index" form))
+            (list 'hetero-vector-at (first args) (desugar-expr (second args)) (nth args 2)))
+        hetero-vector-assoc
+        (do (when-not (= 4 (count args))
+              (reject! "hetero-vector-assoc requires type, value, literal index, and item" form))
+            (list 'hetero-vector-assoc (first args) (desugar-expr (second args))
+                  (nth args 2) (desugar-expr (nth args 3))))
+        hetero-vector-equal
+        (do (when-not (= 3 (count args))
+              (reject! "hetero-vector-equal requires type and two values" form))
+            (list 'hetero-vector-equal (first args) (desugar-expr (second args))
+                  (desugar-expr (nth args 2))))
         result-ok-of (do (when-not (= 2 (count args)) (reject! "result-ok-of requires type and payload" form))
                          (list 'result-ok-of (first args) (desugar-expr (second args))))
         result-err-of (do (when-not (= 2 (count args)) (reject! "result-err-of requires type and payload" form))
@@ -933,6 +986,49 @@
               (reject! "typed safe-value operation arity mismatch" form))
             (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
 
+        (= op 'hetero-vector-new)
+        (let [[type & items] args
+              item-types (when (heterogeneous-vector-type? type) (second type))]
+          (validate-value-type! type)
+          (when-not (and (heterogeneous-vector-type? type)
+                         (= (count item-types) (count items)))
+            (reject! "heterogeneous vector constructor must exactly match its descriptor" form))
+          (doseq [item items]
+            (validate-expr item locals functions (inc depth) budget)))
+
+        (= op 'hetero-vector-count)
+        (let [[type value] args]
+          (when-not (= 2 (count args))
+            (reject! "heterogeneous vector count shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (heterogeneous-vector-type? type)
+            (reject! "heterogeneous vector count requires a vector descriptor" form))
+          (validate-expr value locals functions (inc depth) budget))
+
+        (contains? '#{hetero-vector-at hetero-vector-assoc} op)
+        (let [[type value index item] args
+              expected (if (= op 'hetero-vector-at) 3 4)
+              item-types (when (heterogeneous-vector-type? type) (second type))]
+          (when-not (= expected (count args))
+            (reject! "heterogeneous vector indexed operation shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (heterogeneous-vector-type? type)
+            (reject! "heterogeneous vector operation requires a vector descriptor" form))
+          (heterogeneous-vector-index! index item-types form)
+          (validate-expr value locals functions (inc depth) budget)
+          (when (= op 'hetero-vector-assoc)
+            (validate-expr item locals functions (inc depth) budget)))
+
+        (= op 'hetero-vector-equal)
+        (let [[type left right] args]
+          (when-not (= 3 (count args))
+            (reject! "heterogeneous vector equality shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (heterogeneous-vector-type? type)
+            (reject! "heterogeneous vector equality requires a vector descriptor" form))
+          (validate-expr left locals functions (inc depth) budget)
+          (validate-expr right locals functions (inc depth) budget))
+
         (= op 'option-none-of)
         (do (when-not (= 1 (count args)) (reject! "option-none-of shape is invalid" form))
             (validate-value-type! (first args))
@@ -1044,9 +1140,10 @@
 
 (defn- require-expression-type! [actual expected form]
   (when-not (= actual expected)
-    (reject! (str "expression type mismatch: expected " (name expected)
-                  ", got " (name actual))
-             form)))
+    (let [type-text #(if (keyword? %) (name %) (pr-str %))]
+      (reject! (str "expression type mismatch: expected " (type-text expected)
+                    ", got " (type-text actual))
+               form))))
 
 (declare infer-expression-type)
 
@@ -1307,6 +1404,41 @@
             (when-not (= none-type some-type)
               (reject! "option match branches must have the same value type" form))
             none-type))
+        hetero-vector-new
+        (let [[type & items] args
+              item-types (second type)]
+          (validate-value-type! type)
+          (doseq [[item item-type] (map vector items item-types)]
+            (require-expression-type! (infer-expression-type item locals signatures)
+                                      item-type item))
+          type)
+        hetero-vector-count
+        (let [[type value] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          :i64)
+        hetero-vector-at
+        (let [[type value index] args
+              item-types (second type)
+              host-index (heterogeneous-vector-index! index item-types form)]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          (nth item-types host-index))
+        hetero-vector-assoc
+        (let [[type value index item] args
+              item-types (second type)
+              host-index (heterogeneous-vector-index! index item-types form)]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          (require-expression-type! (infer-expression-type item locals signatures)
+                                    (nth item-types host-index) item)
+          type)
+        hetero-vector-equal
+        (let [[type left right] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type left locals signatures) type left)
+          (require-expression-type! (infer-expression-type right locals signatures) type right)
+          :i64)
         (infer-call-type op args locals signatures)))
     :else (reject! "value has no admitted type" form)))
 
@@ -1688,6 +1820,7 @@
                                                          (contains? parametric-result-operations (first %))
                                                          (contains? variant-operations (first %))
                                                          (contains? generic-option-operations (first %))
+                                                         (contains? heterogeneous-vector-operations (first %))
                                                          (= 'vector-new (first %))
                                                          (contains? typed-vector-operations (first %)))))
                                            (tree-seq coll? seq body))))
