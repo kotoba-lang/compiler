@@ -303,10 +303,11 @@ each exact source SHA-256, and the canonical module graph digest. See ADR 0005.
 The public JVM CLI exposes the same linker as
 `compile <root> --source-path <directory>`. It resolves only the root's
 transitive closure, maps namespace segments to directories and hyphens to
-underscores, and selects `.kotoba`, then `.cljk`, then `.cljc`. Every resolved
+underscores, and selects `.kotoba`, then `.cljk`, then `.cljc`. Every dependency
 real path must remain below the explicit directory and its declared namespace
 must match the requested namespace; symlink escape and path substitution fail
-closed. This filesystem discovery does not run in the compiled program and
+closed. The explicitly selected root may live beside the source directory
+because it is not discovered ambiently. This filesystem discovery does not run in the compiled program and
 does not widen runtime authority.
 
 An explicit, non-empty export clause also admits a library without `main`, but
