@@ -1,6 +1,6 @@
 (ns kotoba.compiler.frontend-destructuring-loop-test
   "Tests for ADR-2607150000's remaining language extensions: destructuring
-  (let + defn params, one level only), vector-as-data (reuses desugar-list's
+  (let + defn params, including nested patterns/defaults), vector-as-data (reuses desugar-list's
   pair-chain encoding), and loop/recur (compiled to a synthesized recursive
   helper with purely-syntactic free-variable capture). Also regression-covers
   two bugs found and fixed while implementing these: (1) `let`'s bindings
@@ -76,13 +76,27 @@
   (is (= 3 (oracle "(defn one [] 1)
                      (defn main [] (let [[a b] [(one) (+ (one) 1)]] (+ a b)))"))))
 
-(deftest nested-destructuring-patterns-are-rejected-one-level-only
-  (is (some? (rejection-message "(defn main [] (let [[[a] b] [[1] 2]] a))"))
-      "a vector pattern nested inside a vector pattern is not supported")
+(deftest nested-vector-and-map-patterns-compose
+  (is (= 3 (oracle "(defn main [] (let [[[a b] c] [[1 2] 9]] (+ a b)))")))
+  (is (= 7 (oracle "(defn main [] (let [{:user [id score]} {:user [7 9]}] id))")))
+  (is (= 11 (oracle "(defn main [] (let [[{:keys [a]} [b]] [{:a 5} [6]]] (+ a b)))"))))
+
+(deftest malformed-destructuring-patterns-still-fail-closed
   (is (some? (rejection-message "(defn main [] (let [[a & b & c] [1 2 3]] a))"))
-      "more than one rest-binding symbol after `&` is rejected")
-  (is (some? (rejection-message "(defn main [] (let [{:keys [a] :or {a 1}} {}] a))"))
-      "map destructuring supports only {:keys [...]}, no :or/:as/:strs"))
+      "more than one rest-binding symbol after `&` is rejected"))
+
+(deftest string-and-symbol-key-destructuring-is-portable
+  (is (= 7 (oracle "(defn main []
+                       (let [{:strs [name] :syms [age]}
+                             {\"name\" 3 (quote age) 4}]
+                         (+ name age)))"))))
+
+(deftest map-destructuring-supports-defaults-as-and-explicit-keys
+  (is (= 5 (oracle "(defn main [] (let [{:keys [a] :or {a 5}} {}] a))")))
+  (is (= 9 (oracle "(defn main [] (let [{:keys [a] :or {a 5}} {:a 9}] a))"))
+      "an existing value wins over :or")
+  (is (= 7 (oracle "(defn main [] (let [{:a x} {:a 7}] x))")))
+  (is (= 8 (oracle "(defn main [] (let [{:keys [a] :as whole} {:a 8}] (get whole :a)))"))))
 
 (deftest map-destructuring-does-not-recursively-destructure-nested-values
   ;; One level only: {:keys [a]} on {:a {:b 1}} binds `a` to the whole inner
@@ -98,6 +112,10 @@
 
 (deftest defn-params-support-map-destructuring
   (is (= 7 (oracle "(ns t) (defn addkv [{:keys [a b]}] (+ a b)) (defn main [] (addkv {:a 3 :b 4}))"))))
+
+(deftest defn-params-support-nested-destructuring-and-defaults
+  (is (= 12 (oracle "(defn f [[{:keys [a] :or {a 4}} b]] (+ a b))
+                       (defn main [] (f [{} 8]))"))))
 
 (deftest defn-params-mix-plain-symbols-and-destructuring-patterns
   (is (= 16 (oracle "(ns t) (defn f [x [a b]] (+ x (+ a b))) (defn main [] (f 10 [3 3]))"))))

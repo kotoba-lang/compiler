@@ -84,107 +84,6 @@
                 (bit-shift-left (bit-and (quot byte-offset 4) 0x3fff) 5)
                 reg)))
 
-;; Bounded kernel memory access (aiueos kernel target). Mirrors the x86-64
-;; backend's kernel-load-u8/store-u8: evaluate base/length/index(/value) once,
-;; then enforce length<=maximum, base!=0, and index<length -- every violation
-;; reaches `brk #0` before memory is touched. AArch64 uses MMIO load/store for
-;; device access; there is no port-I/O intrinsic.
-(defn- b-cond [cond-code byte-offset]
-  (insn (bit-or 0x54000000 (bit-shift-left (bit-and (quot byte-offset 4) 0x7ffff) 5) cond-code)))
-(defn- cbz-reg [rt byte-offset]
-  (insn (bit-or 0xb4000000 (bit-shift-left (bit-and (quot byte-offset 4) 0x7ffff) 5) rt)))
-(def ^:private cond-hi 8)     ; unsigned length > maximum
-(def ^:private cond-hs 2)     ; unsigned index >= length
-
-(defn- bounds-check [maximum]
-  ;; Precondition: x1=base, x2=length, x3=index. The caller appends a two-insn
-  ;; access (add x1,x1,x3 ; strb/ldrb w0,[x1]), then `b skip`, then the `brk`
-  ;; trap. Byte layout from this block's first branch:
-  ;;   +0 cmp x2,x4  +4 b.hi trap  +8 cbz x1,trap  +12 cmp x3,x2  +16 b.hs trap
-  ;;   +20 add       +24 access    +28 b skip      +32 brk(trap)  +36 skip
-  (concat (load-constant-reg 4 maximum)
-          (insn 0xeb04005f)          ; cmp x2, x4  (length vs maximum)
-          (b-cond cond-hi 28)        ; b.hi trap
-          (cbz-reg 1 24)             ; cbz x1, trap
-          (insn 0xeb02007f)          ; cmp x3, x2  (index vs length)
-          (b-cond cond-hs 16)))      ; b.hs trap
-
-;; NB: the access uses base-register addressing `strb/ldrb w0, [x1]` after
-;; computing `x1 = base + index` (add x1,x1,x3). Register-offset addressing
-;; (`[x1, x3]`) leaves the ESR instruction-syndrome invalid (ISV=0) for the MMIO
-;; that a device store/load triggers, so KVM cannot emulate it (it injects a
-;; data abort instead of exiting) -- base-register addressing keeps ISV=1.
-(defn- emit-kernel-store-u8 [[base length index value] maximum env]
-  (vec (concat
-        (emit-expr base env) (save-x0)
-        (emit-expr length env) (save-x0)
-        (emit-expr index env) (save-x0)
-        (emit-expr value env)                ; x0 = value (also the result)
-        (ldr-sp 3 0) (add-sp 16)             ; x3 = index
-        (ldr-sp 2 0) (add-sp 16)             ; x2 = length
-        (ldr-sp 1 0) (add-sp 16)             ; x1 = base
-        (bounds-check maximum)
-        (insn 0x8b030021)                    ; add x1, x1, x3   (x1 = base+index)
-        (insn 0x39000020)                    ; strb w0, [x1]
-        (branch 8)                           ; b skip
-        (insn 0xd4200000))))                 ; trap: brk ; skip:
-
-(defn- emit-kernel-load-u8 [[base length index] maximum env]
-  (vec (concat
-        (emit-expr base env) (save-x0)
-        (emit-expr length env) (save-x0)
-        (emit-expr index env)                ; x0 = index
-        (mov-reg 3 0)                        ; x3 = index
-        (ldr-sp 2 0) (add-sp 16)             ; x2 = length
-        (ldr-sp 1 0) (add-sp 16)             ; x1 = base
-        (bounds-check maximum)
-        (insn 0x8b030021)                    ; add x1, x1, x3   (x1 = base+index)
-        (insn 0x39400020)                    ; ldrb w0, [x1]  -> x0 = byte
-        (branch 8)                           ; b skip
-        (insn 0xd4200000))))                 ; trap: brk ; skip:
-
-;; 32-bit MMIO (virtio registers are u32). Same bounds discipline, but the
-;; 4-byte access must fit: index+4 <= length. Byte layout from the first branch:
-;;   +0 cmp x2,x4  +4 b.hi trap  +8 cbz x1,trap  +12 add x5,x3,#4  +16 cmp x5,x2
-;;   +20 b.hi trap +24 add x1,x1,x3 +28 access  +32 b skip  +36 brk(trap)  +40 skip
-(defn- bounds-check-u32 [maximum]
-  (concat (load-constant-reg 4 maximum)
-          (insn 0xeb04005f)          ; cmp x2, x4  (length vs maximum)
-          (b-cond cond-hi 32)        ; b.hi trap
-          (cbz-reg 1 28)             ; cbz x1, trap
-          (insn 0x91001065)          ; add x5, x3, #4   (index + 4)
-          (insn 0xeb0200bf)          ; cmp x5, x2       (index+4 vs length)
-          (b-cond cond-hi 16)))      ; b.hi trap  (index+4 > length)
-
-(defn- emit-kernel-store-u32 [[base length index value] maximum env]
-  (vec (concat
-        (emit-expr base env) (save-x0)
-        (emit-expr length env) (save-x0)
-        (emit-expr index env) (save-x0)
-        (emit-expr value env)                ; x0 = value (also the result)
-        (ldr-sp 3 0) (add-sp 16)             ; x3 = index
-        (ldr-sp 2 0) (add-sp 16)             ; x2 = length
-        (ldr-sp 1 0) (add-sp 16)             ; x1 = base
-        (bounds-check-u32 maximum)
-        (insn 0x8b030021)                    ; add x1, x1, x3
-        (insn 0xb9000020)                    ; str w0, [x1]
-        (branch 8)                           ; b skip
-        (insn 0xd4200000))))                 ; trap: brk ; skip:
-
-(defn- emit-kernel-load-u32 [[base length index] maximum env]
-  (vec (concat
-        (emit-expr base env) (save-x0)
-        (emit-expr length env) (save-x0)
-        (emit-expr index env)                ; x0 = index
-        (mov-reg 3 0)                        ; x3 = index
-        (ldr-sp 2 0) (add-sp 16)             ; x2 = length
-        (ldr-sp 1 0) (add-sp 16)             ; x1 = base
-        (bounds-check-u32 maximum)
-        (insn 0x8b030021)                    ; add x1, x1, x3
-        (insn 0xb9400020)                    ; ldr w0, [x1]  -> x0 = word
-        (branch 8)                           ; b skip
-        (insn 0xd4200000))))                 ; trap: brk ; skip:
-
 (defn- emit-cap-call [cap-id value env]
   (let [word-offset (+ 16 (* 8 (quot cap-id 64)))
         bit-index (mod cap-id 64)]
@@ -221,14 +120,6 @@
               then-code (emit-expr then env) else-code (emit-expr else env)]
           (vec (concat test-code (cbz-x0 (+ 8 (code-size then-code)))
                        then-code (branch (+ 4 (code-size else-code))) else-code)))
-        ;; `do`: emit each subexpression in order; each leaves its result in x0,
-        ;; the next overwrites it, so only the last value survives -- but every
-        ;; subexpression's side effects (kernel MMIO) execute exactly once, in
-        ;; order. This is the ordered-sequencing primitive `let` can't give
-        ;; (let inlines, so a side-effecting binding used 0 or >1 times drops or
-        ;; duplicates its effect).
-        (= op 'do)
-        (vec (mapcat #(emit-expr % env) args))
         (= op 'cap-call)
         (emit-cap-call (first args) (second args) env)
         (contains? '#{pair pair-first pair-second} op)
@@ -245,13 +136,6 @@
         (let [[left right] args cset ({'= 0x9a9f17e0 '< 0x9a9fa7e0 '> 0x9a9fd7e0
                                       '<= 0x9a9fc7e0 '>= 0x9a9fb7e0} op)]
           (emit-binary left right (concat (insn 0xeb01001f) (insn cset)) env))
-        (= op 'kernel-store-u8) (emit-kernel-store-u8 args 512 env)
-        (= op 'kernel-store-u8-4k) (emit-kernel-store-u8 args 4096 env)
-        (= op 'kernel-load-u8) (emit-kernel-load-u8 args 512 env)
-        (= op 'kernel-load-u8-4k) (emit-kernel-load-u8 args 4096 env)
-        (= op 'kernel-load-u8-16k) (emit-kernel-load-u8 args 16384 env)
-        (= op 'kernel-store-u32) (emit-kernel-store-u32 args 512 env)
-        (= op 'kernel-load-u32) (emit-kernel-load-u32 args 512 env)
         :else (emit-call op args env)))))
 
 (defn- emit-function [{:keys [name params body]}]
@@ -289,8 +173,7 @@
       out)))
 
 (defn emit-program [kir]
-  (let [exported-names (set (or (:exports kir) (map :name (:functions kir))))
-        token-bodies (mapv (fn [f] [f (emit-function f)]) (:functions kir))
+  (let [token-bodies (mapv (fn [f] [f (emit-function f)]) (:functions kir))
         offsets (loop [items token-bodies offset 0 out {}]
                   (if-let [[f body] (first items)]
                     (recur (next items) (+ offset (code-size body)) (assoc out (:name f) offset)) out))]
@@ -298,8 +181,6 @@
       (if-let [[function tokens] (first items)]
         (let [offset (get offsets (:name function)) body (finalize tokens offset offsets)]
           (recur (next items) (into code body)
-                 (cond-> exports
-                   (contains? exported-names (:name function))
-                   (assoc (:name function)
-                          {:offset offset :length (count body) :arity (count (:params function))}))))
+                 (assoc exports (:name function)
+                        {:offset offset :length (count body) :arity (count (:params function))})))
         {:code code :exports exports}))))

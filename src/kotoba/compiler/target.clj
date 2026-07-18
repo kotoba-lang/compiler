@@ -20,10 +20,6 @@
                            :artifact :elf64 :entry :aiueos_process_entry
                            :entry-contract :kotoba-sysv-context-r9-aiueos-runtime-v2
                            :ambient-syscalls false :host-imports false :dynamic-linker false}
-   :aarch64-aiueos-kernel-v1 {:format :kotoba.target-profile/v1 :execution :kernel :isa :aarch64 :os :aiueos :abi :aiueos-kernel-v1 :runtime :none
-                              :artifact :elf64 :link-artifact :elf64-relocatable
-                              :entry :aiueos_kernel_entry :ambient-syscalls false
-                              :host-imports false :dynamic-linker false}
    :aarch64-kotoba-v1 {:format :kotoba.target-profile/v1 :execution :native :isa :aarch64 :os :unspecified :abi :aapcs64 :runtime :kotoba-supervisor-v1}
    :aarch64-linux-kotoba-v1 {:format :kotoba.target-profile/v1 :execution :native :isa :aarch64 :os :linux :abi :aapcs64 :runtime :kotoba-linux-supervisor-v1}
    :aarch64-macos-kotoba-v1 {:format :kotoba.target-profile/v1 :execution :native :isa :aarch64 :os :macos :abi :aapcs64 :runtime :kotoba-macos-supervisor-v1}

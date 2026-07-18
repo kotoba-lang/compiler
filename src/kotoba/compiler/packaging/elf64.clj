@@ -62,15 +62,11 @@
                     {:size size :actual (count bytes)})))
   (into (vec bytes) (repeat (- size (count bytes)) 0)))
 
-(def ^:private em-x86-64 0x3e)
-(def ^:private em-aarch64 0xb7)
-
-(defn- elf-header*
-  [machine entry program-header-count section-offset section-count]
+(defn- elf-header [entry program-header-count section-offset section-count]
   (vec (concat
         [0x7f 0x45 0x4c 0x46 2 1 1 0] (repeat 8 0)
         (le 2 2)                         ; ET_EXEC
-        (le machine 2)                   ; EM_X86_64 / EM_AARCH64
+        (le 0x3e 2)                      ; EM_X86_64
         (le 1 4)
         (le entry 8)
         (le 64 8)                        ; program headers follow ELF header
@@ -78,9 +74,6 @@
         (le 0 4)
         (le 64 2) (le 56 2) (le program-header-count 2)
         (le 64 2) (le section-count 2) (le 3 2)))) ; .shstrtab index
-
-(defn- elf-header [entry program-header-count section-offset section-count]
-  (elf-header* em-x86-64 entry program-header-count section-offset section-count))
 
 (defn- program-header [flags offset address file-size memory-size]
   (vec (concat (le 1 4) (le flags 4)     ; PT_LOAD
@@ -172,76 +165,6 @@
           bytes (vec (concat before-sections (mapcat identity sections)))]
       {:format :elf64/v1
        :target kernel-target
-       :entry :aiueos_kernel_entry
-       :source-entry source-entry
-       :entry-address entry-address
-       :sections [:text :data :shstrtab]
-       :imports []
-       :interpreter nil
-       :bytes bytes})))
-
-(def ^:private aarch64-kernel-target :aarch64-aiueos-kernel-v1)
-
-(defn- entry-shim-aarch64 [main-address context-address]
-  ;; AArch64 kernel entry: set the hidden context register x7 = context, call
-  ;; the zero-arity Kotoba entry, then park. (The x86-64 shim also stashes the
-  ;; SysV rdi boot-info pointer; AArch64's boot-info convention is separate and
-  ;; a program that needs it would take it another way -- this bare shim only
-  ;; establishes the fuel/capability context.)
-  (let [shim-address (+ image-base text-offset)
-        bl-pc (+ shim-address 8)
-        ctx-lo (bit-and context-address 0xffff)
-        ctx-hi (bit-and (unsigned-bit-shift-right context-address 16) 0xffff)]
-    (vec (concat
-          (le (bit-or 0xd2800007 (bit-shift-left ctx-lo 5)) 4)  ; movz x7, #ctx-lo
-          (le (bit-or 0xf2a00007 (bit-shift-left ctx-hi 5)) 4)  ; movk x7, #ctx-hi, lsl #16
-          (le (bit-or 0x94000000
-                      (bit-and (quot (- main-address bl-pc) 4) 0x03ffffff)) 4) ; bl main
-          (le 0x14000000 4)))))                                 ; b . (park)
-
-(defn package-kernel-aarch64
-  "Package a sealed aiueos AArch64 kernel artifact as a freestanding ELF64
-  ET_EXEC (EM_AARCH64), mirroring `package-kernel`: an entry shim establishes the
-  hidden x7 context (with fuel), then calls the zero-arity Kotoba entry."
-  [artifact]
-  (when-not (artifact/valid-seal? artifact)
-    (throw (ex-info "ELF64 kernel packaging requires a sealed artifact" {})))
-  (when-not (= aarch64-kernel-target (:target artifact))
-    (throw (ex-info "AArch64 ELF64 kernel packaging requires the aarch64 aiueos kernel target"
-                    {:target (:target artifact)})))
-  (when-not (and (= :none (get-in artifact [:target-profile :runtime]))
-                 (false? (get-in artifact [:target-profile :ambient-syscalls])))
-    (throw (ex-info "ELF64 kernel packaging requires a freestanding profile"
-                    {:target-profile (:target-profile artifact)})))
-  (let [source-entry (get-in artifact [:program :entry])
-        export (get-in artifact [:exports source-entry])]
-    (when-not export
-      (throw (ex-info "Kotoba kernel entry is not exported" {:entry source-entry})))
-    (let [entry-address (+ image-base text-offset)
-          context-address (+ image-base kernel-data-offset)
-          ;; the aarch64 shim is 16 bytes (4 instructions).
-          shim (entry-shim-aarch64 (+ entry-address 16 (:offset export)) context-address)
-          text (into shim (:code artifact))
-          context (into (vec (repeat 8 0))
-                        (concat (le 256 8) (repeat (- kernel-image-context-size 16) 0)))
-          names (mapv int (.getBytes " .text .data .shstrtab " "UTF-8"))
-          names-offset (+ kernel-data-offset kernel-image-context-size)
-          section-offset (+ names-offset (count names)
-                            (mod (- 8 (mod (+ names-offset (count names)) 8)) 8))
-          sections [(vec (repeat 64 0))
-                    (section-header 1 1 0x6 entry-address text-offset (count text) 16)
-                    (section-header 7 1 0x3 context-address kernel-data-offset kernel-image-context-size 8)
-                    (section-header 13 3 0 0 names-offset (count names) 1)]
-          header (elf-header* em-aarch64 entry-address 2 section-offset (count sections))
-          phdrs (concat (program-header 0x5 text-offset entry-address (count text) (count text))
-                        (program-header 0x6 kernel-data-offset context-address
-                                        kernel-image-context-size kernel-image-context-size))
-          before-text (padded (concat header phdrs) text-offset)
-          before-data (padded (concat before-text text) kernel-data-offset)
-          before-sections (padded (concat before-data context names) section-offset)
-          bytes (vec (concat before-sections (mapcat identity sections)))]
-      {:format :elf64/v1
-       :target aarch64-kernel-target
        :entry :aiueos_kernel_entry
        :source-entry source-entry
        :entry-address entry-address

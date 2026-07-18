@@ -175,16 +175,6 @@
                        [0x0f 0x84] (le32 (+ (code-size then-code) 5))
                        then-code [0xe9] (le32 (code-size else-code)) else-code)))
 
-        ;; `do`: emit each subexpression in order; each leaves its result in rax,
-        ;; the next overwrites it, so only the last value survives while every
-        ;; subexpression's side effects run exactly once, in order. All but the
-        ;; last are in non-tail position.
-        (= op 'do)
-        (let [n (count args)]
-          (vec (mapcat (fn [i arg]
-                         (emit-expr arg env (if (= i (dec n)) ctx (assoc ctx :tail? false))))
-                       (range n) args)))
-
         (= op 'cap-call)
         (emit-cap-call (first args) (second args) env ctx)
 
@@ -282,8 +272,7 @@
       out)))
 
 (defn emit-program [kir]
-  (let [exported-names (set (or (:exports kir) (map :name (:functions kir))))
-        token-bodies (mapv (fn [f] [f (emit-function f)]) (:functions kir))
+  (let [token-bodies (mapv (fn [f] [f (emit-function f)]) (:functions kir))
         offsets (loop [items token-bodies offset 0 out {}]
                   (if-let [[f emitted] (first items)]
                     (recur (next items) (+ offset (code-size (:tokens emitted)))
@@ -295,8 +284,6 @@
               tokens (:tokens emitted)
               body (finalize tokens offset (+ offset (:expression-start emitted)) offsets)]
           (recur (next items) (into code body)
-                 (cond-> exports
-                   (contains? exported-names (:name function))
-                   (assoc (:name function)
-                          {:offset offset :length (count body) :arity (count (:params function))}))))
+                 (assoc exports (:name function)
+                        {:offset offset :length (count body) :arity (count (:params function))})))
         {:code code :exports exports}))))

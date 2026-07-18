@@ -4,11 +4,8 @@
   and keyword/map literals + get/assoc (new, desugared entirely to the
   existing heap-pair/list primitives -- no backend/codegen change)."
   (:require [clojure.test :refer [deftest is testing]]
-            [clojure.java.shell :as shell]
             [kotoba.compiler.core :as compiler]
-            [kotoba.compiler.frontend :as frontend]
-            [kotoba.compiler.ir :as ir]
-            [kotoba.compiler.target :as target]))
+            [kotoba.compiler.frontend :as frontend]))
 
 (defn- oracle [source]
   (:oracle-value (:kir (compiler/compile-source source :wasm32-kotoba-v1))))
@@ -16,6 +13,191 @@
 (defn- rejection-message [source]
   (try (compiler/check-source source) nil
        (catch clojure.lang.ExceptionInfo e (ex-message e))))
+
+(deftest first-class-closures-cross-value-boundaries
+  (testing "a closure is an ordinary pair value with statically dispatched invocation"
+    (is (= 5 (oracle "(defn main [] (let [f (fn [x] (+ x 1))] (invoke f 4)))")))
+    (is (= 7 (oracle "(defn main [] (let [n 3 f (fn [x] (+ x n))] (invoke f 4)))")))
+    (is (= 8 (oracle "(defn make [n] (fn [x] (+ x n)))
+                      (defn main [] (invoke (make 5) 3))")))
+    (is (= 3 (oracle "(defn main [] (let [f (fn [x] (+ x 1)) v [f]]
+                                      (invoke (nth v 0) 2)))")))
+    (is (= 9 (oracle "(defn call [f x] (invoke f x))
+                      (defn main [] (call (fn [x] (+ x 4)) 5))")))
+    (is (= 17 (oracle "(defn main []
+                        (let [a (fn [x] (+ x 1)) b (fn [x] (+ x 10))]
+                          (+ (invoke a 2) (invoke b 4))))")))))
+
+(deftest closure-invoke-is-bounded-and-explicit
+  (is (some? (rejection-message
+              "(defn main [] (invoke (fn [a b c d e] a) 1 2 3 4 5))")))
+  (is (some? (rejection-message
+              "(defn main [] (invoke (fn [x] x) 1 2 3 4 5))"))))
+
+(deftest first-class-closures-work-as-higher-order-callback-values
+  (is (= 4 (oracle "(defn main []
+                      (let [n 1 f (fn [x] (+ x n))]
+                        (first (map f [3]))))")))
+  (is (= 4 (oracle "(defn keep? [limit]
+                      (fn [x] (> x limit)))
+                    (defn main []
+                      (first (filter (keep? 2) [1 4 2])))")))
+  (is (= 16 (oracle "(defn main []
+                       (let [scale 2 f (fn [acc x] (+ acc (* scale x)))]
+                         (reduce f 4 [1 2 3])))")))
+  (is (= 7 (oracle "(defn main []
+                      (let [add (fn [a b] (+ a b))]
+                        (first (map add [1 2] [6 8]))))"))))
+
+(deftest closure-callback-state-remains-abi-bounded
+  (is (some? (rejection-message
+              "(defn main []
+                 (let [f (fn [a b c d] a)]
+                   (map f [1] [2] [3] [4] [5])))"))))
+
+(deftest multi-arity-closures-can-be-stored-returned-and-reduced
+  (is (= 9 (oracle "(defn make [base]
+                      (fn ([] base) ([acc x] (+ acc x))))
+                    (defn main []
+                      (let [f (make 9)] (invoke f)))")))
+  (is (= 6 (oracle "(defn make []
+                      (fn ([] 40) ([acc x] (+ acc x))))
+                    (defn main [] (reduce (make) [1 2 3]))")))
+  (is (= 40 (oracle "(defn main []
+                       (let [f (fn ([] 40) ([acc x] (+ acc x)))]
+                         (reduce f [])))")))
+  (is (= 6 (oracle "(defn main []
+                       (let [bias 4 f (fn ([] bias) ([acc x] (+ acc x bias)))]
+                         (reduce f [1 1])))"))))
+
+(deftest bounded-apply-dispatches-first-class-closures
+  (is (= 40 (oracle "(defn main [] (apply (fn [] 40) []))")))
+  (is (= 7 (oracle "(defn main [] (apply (fn [x] (+ x 2)) [5]))")))
+  (is (= 9 (oracle "(defn main [] (apply (fn [a b] (+ a b)) 4 [5]))")))
+  (is (= 10 (oracle "(defn main []
+                       (apply (fn [a b c d] (+ (+ a b) (+ c d))) 1 2 [3 4]))")))
+  (is (= 0 (oracle "(defn main [] (apply (fn [a] a) [1 2 3 4 5]))"))
+      "runtime argument lists beyond four fail closed"))
+
+(deftest top-level-functions-have-explicit-first-class-references
+  (is (= 9 (oracle "(defn add [a b] (+ a b))
+                     (defn main [] (apply (fn-ref add) [4 5]))")))
+  (is (= 3 (oracle "(defn plus ([] 7) ([x] (+ x 1)) ([a b] (+ a b)))
+                     (defn main []
+                       (let [f (fn-ref plus)] (invoke f 1 2)))")))
+  (is (= 6 (oracle "(defn twice [x] (* x 2))
+                     (defn main [] (first (map (fn-ref twice) [3])))")))
+  (is (some? (rejection-message
+              "(defn five [a b c d e] a)
+               (defn main [] (fn-ref five))")))
+  (is (some? (rejection-message "(defn main [] (fn-ref missing))"))))
+
+(deftest variadic-closure-clauses-specialize-through-arity-four
+  (is (= 4 (oracle "(defn main []
+                      (let [f (fn [x & more] (+ x (nth more 1 0)))]
+                        (invoke f 1 2 3)))")))
+  (is (= 4 (oracle "(defn main []
+                      (let [f (fn [& xs] (count xs))]
+                        (invoke f 1 2 3 4)))")))
+  (is (= 9 (oracle "(defn main []
+                      (let [f (fn ([x] (+ x 7)) ([x & more] (+ x (count more))))]
+                        (invoke f 2)))"))
+      "a fixed clause overrides its overlapping variadic specialization")
+  (is (some? (rejection-message
+              "(defn main [] (fn [a b c d e & more] a))"))))
+
+(deftest apply-requires-a-bounded-explicit-argument-tail
+  (is (some? (rejection-message "(defn main [] (apply (fn [] 0)))")))
+  (is (some? (rejection-message
+              "(defn main [] (apply (fn [a b c d] a) 1 2 3 4 5 [6]))"))))
+
+(deftest lazy-sequences-delay-head-and-tail-and-support-infinite-generators
+  (is (= 7 (oracle "(defn main []
+                      (lazy-first (lazy-cons 7 (quot 1 0))))"))
+      "forcing the head must not evaluate the tail")
+  (is (= 9 (oracle "(defn main []
+                      (lazy-first (lazy-rest
+                                   (lazy-cons (quot 1 0)
+                                              (lazy-cons 9 0)))))"))
+      "forcing the tail must not evaluate the previous head")
+  (is (= 4 (oracle "(defn naturals [n]
+                      (lazy-cons n (naturals (+ n 1))))
+                    (defn main [] (nth (take 5 (naturals 0)) 4))")))
+  (is (= 5 (oracle "(defn naturals [n]
+                      (lazy-cons n (naturals (+ n 1))))
+                    (defn main [] (lazy-first (drop 5 (naturals 0))))")))
+  (is (= 1 (oracle "(defn main [] (lazy-empty? 0))")))
+  (is (= 0 (oracle "(defn main [] (lazy-empty? (lazy-cons 1 0)))"))))
+
+(deftest lazy-take-and-drop-are-empty-and-count-safe
+  (is (= 0 (oracle "(defn main [] (take 0 (lazy-cons (quot 1 0) 0)))")))
+  (is (= 0 (oracle "(defn main [] (drop 5 0))")))
+  (is (= 0 (oracle "(defn main [] (take -1 (lazy-cons (quot 1 0) 0)))"))))
+
+(deftest non-memoized-lazy-thunks-reject-effects
+  (is (thrown-with-msg?
+       clojure.lang.ExceptionInfo
+       #"lazy sequence thunks must be effect-free"
+       (compiler/compile-source
+        "(defn main [] (lazy-cons (cap-call 1 2) 0))"
+        :wasm32-kotoba-v1
+        {:allow #{[:cap/call 1]}}))))
+
+(deftest lazy-map-preserves-laziness-across-callback-kinds
+  (is (= 8 (oracle "(defn naturals [n] (lazy-cons n (naturals (+ n 1))))
+                     (defn twice [x] (* x 2))
+                     (defn main [] (nth (take 5 (lazy-map twice (naturals 0))) 4))")))
+  (is (= 7 (oracle "(defn main []
+                      (lazy-first
+                       (lazy-map (fn [x] (+ x 2))
+                                 (lazy-cons 5 (quot 1 0)))))"))
+      "observing the mapped head does not force the source tail")
+  (is (= 9 (oracle "(defn make [n] (fn [x] (+ x n)))
+                     (defn main []
+                       (lazy-first (lazy-map (make 4) (lazy-cons 5 0))))"))))
+
+(deftest lazy-map-supports-one-to-four-sequences-and-shortest-termination
+  (is (= 14 (oracle "(defn naturals [n] (lazy-cons n (naturals (+ n 1))))
+                      (defn add [a b] (+ a b))
+                      (defn main []
+                        (nth (take 3 (lazy-map add (naturals 1) (naturals 9))) 2))")))
+  (is (= 1 (oracle "(defn main []
+                      (lazy-empty?
+                       (lazy-rest
+                        (lazy-map (fn [a b] (+ a b))
+                                  (lazy-cons 1 0)
+                                  (lazy-cons 2 (lazy-cons 3 0))))))"))
+      "multi-source lazy-map stops when the shortest source ends")
+  (is (= 10 (oracle "(defn main []
+                       (lazy-first
+                        (lazy-map (fn [a b c d] (+ (+ a b) (+ c d)))
+                                  (lazy-cons 1 0) (lazy-cons 2 0)
+                                  (lazy-cons 3 0) (lazy-cons 4 0))))")))
+  (is (some? (rejection-message
+              "(defn main []
+                 (lazy-map (fn [a b c d] a)
+                           0 0 0 0 0))"))))
+
+(deftest lazy-filter-defers-search-and-represents-deferred-empty
+  (is (= 6 (oracle "(defn naturals [n] (lazy-cons n (naturals (+ n 1))))
+                     (defn main []
+                       (nth (take 3 (lazy-filter (fn [x] (> x 3))
+                                                (naturals 0))) 2))")))
+  (is (= 1 (oracle "(defn main []
+                      (lazy-empty?
+                       (lazy-filter (fn [x] 0)
+                                    (lazy-cons 1 (lazy-cons 2 0)))))"))
+      "an all-rejected finite source resolves to true empty")
+  (is (= 2 (oracle "(defn main []
+                      (lazy-first
+                       (lazy-filter (fn [x] (> x 1))
+                                    (lazy-cons 2 (quot 1 0)))))"))
+      "finding the first match does not force the source tail")
+  (is (= 5 (oracle "(defn predicate [limit] (fn [x] (> x limit)))
+                     (defn main []
+                       (lazy-first
+                        (lazy-filter (predicate 4)
+                                     (lazy-cons 3 (lazy-cons 5 0)))))"))))
 
 ;; ───────────────────────── and/or/when ─────────────────────────
 
@@ -38,13 +220,15 @@
 (deftest when-is-if-with-implicit-else-zero
   (is (= 42 (oracle "(defn main [] (when 1 42))")))
   (is (= 0 (oracle "(defn main [] (when 0 42))")))
-  ;; ADR-2607180900 L2: multi-body when admitted via do desugar
-  (is (= 3 (oracle "(defn main [] (when 1 2 3))")))
-  (is (= 0 (oracle "(defn main [] (when 0 2 3))"))))
+  ;; ADR-2607180900 L2: multi-body when is admitted via `do` desugar.
+  (is (= 3 (oracle "(defn main [] (when 1 2 3))"))
+      "multi-body when returns the last body expression")
+  (is (= 0 (oracle "(defn main [] (when 0 2 3))"))
+      "multi-body when still else-zero when test is falsy"))
 
 (deftest do-sequences-and-returns-last
   (is (= 5 (oracle "(defn main [] (do 1 2 5))")))
-  ;; empty do rejected by main frontend (requires at least one expression)
+  (is (= 0 (oracle "(defn main [] (do))")))
   (is (= 9 (oracle "(defn main [] (do 9))"))))
 
 (deftest and-or-when-are-reserved-function-names
@@ -148,137 +332,6 @@
                      "} :missing))")]
     (is (= 0 (oracle source)) "a full-width admissible map miss completes within fuel")))
 
-(deftest closed-top-level-constants-are-lexically-inlined
-  (let [source "(ns pilot.constants \"inert data\")
-                (def factor \"bounded integer\" 21)
-                (def config {:multiplier 2 :nested [:ok 9]})
-                (defn apply-factor [factor] factor)
-                (defn main []
-                  (+ (apply-factor 1)
-                     (* factor (get config :multiplier))))"]
-    (is (= 43 (oracle source)))
-    (doseq [target compiler/targets]
-      (is (= 43 (get-in (compiler/compile-source source target)
-                        [:kir :oracle-value]))))))
-
-(deftest top-level-constants-never-execute-code-or-shadow-locals
-  (is (= "constant value must be closed bounded integer/string/keyword/vector/map data"
-         (rejection-message "(def danger (+ 1 2)) (defn main [] danger)")))
-  (is (= "duplicate constant name"
-         (rejection-message "(def x 1) (def x 2) (defn main [] x)")))
-  (is (= "constant and function names must be disjoint"
-         (rejection-message "(def x 1) (defn x [] 2) (defn main [] x)")))
-  (is (= 7 (oracle "(def x 99) (defn identity-x [x] x) (defn main [] (identity-x 7))")))
-  (is (= 8 (oracle "(def x 99) (defn main [] (let [x 8] x))"))))
-
-(deftest explicit-module-exports-hide-private-functions-across-backends
-  (let [source "(ns pilot.module (:export [main]))
-                (defn- hidden [x] (+ x 1))
-                (defn main [] (hidden 41))"
-        wasm (compiler/compile-source source :wasm32-kotoba-v1)
-        js (compiler/compile-source source :js-kotoba-v1)
-        cljs (compiler/compile-source source :cljs-kotoba-v1)
-        native (compiler/compile-source source :x86_64-kotoba-v1)
-        wasm-text (String. ^bytes (:bytes wasm) "ISO-8859-1")]
-    (is (= ['main] (get-in wasm [:hir :exports])))
-    (is (= ['main] (get-in wasm [:kir :exports])))
-    (is (= 42 (get-in wasm [:kir :oracle-value])))
-    (is (re-find #"main" wasm-text))
-    (is (not (re-find #"hidden" wasm-text)))
-    (is (= #{'main} (set (keys (get-in native [:artifact :exports])))))
-    (is (re-find #"\(defn- hidden" (:source cljs)))
-    (is (not (re-find #"'hidden':k\$hidden" (:source js))))
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not exported"
-                          (ir/execute (:kir wasm) 'hidden [1])))))
-
-(deftest module-export-declarations-fail-closed
-  (is (= "namespace exports must name declared public functions"
-         (rejection-message "(ns bad (:export [missing])) (defn main [] 0)")))
-  (is (= "namespace exports must name declared public functions"
-         (rejection-message "(ns bad (:export [main hidden])) (defn- hidden [] 1) (defn main [] 0)")))
-  (is (= "namespace exports must be unique bounded function names"
-         (rejection-message "(ns bad (:export [main main])) (defn main [] 0)")))
-  (is (= "main entrypoint must be exported"
-         (rejection-message "(ns bad (:export [helper])) (defn helper [] 1) (defn main [] 0)")))
-  (is (= "only a bounded :export vector is admitted in namespace clauses"
-         (rejection-message "(ns bad (:require [ambient])) (defn main [] 0)"))))
-
-(deftest entryless-library-compiles-and-runs-through-kotoba-script
-  (let [source "(ns pilot.library (:export [add1])) (defn add1 [x] (+ x 1))"
-        checked (compiler/check-source source)
-        compiled (compiler/compile-source source :js-kotoba-v1)
-        js-source (:source compiled)
-        encoded (.encodeToString (java.util.Base64/getEncoder)
-                                 (.getBytes ^String js-source "UTF-8"))
-        probe (str "import('data:text/javascript;base64," encoded
-                   "').then(m=>{const x=m.instantiateKotoba({});"
-                   "if(m.kotobaArtifact.entry!==null||x.add1(41n)!==42n)process.exit(2)})")
-        result (shell/sh "node" "--input-type=module" "-e" probe)]
-    (is (nil? (get-in checked [:hir :entry])))
-    (is (= ['add1] (get-in compiled [:kir :exports])))
-    (is (nil? (get-in compiled [:kir :oracle-value])))
-    (is (zero? (:exit result)) (:err result))
-    (doseq [target (remove #(= :js-kotoba-v1 (target/backend %))
-                           compiler/supported-targets)]
-      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"require the kotoba-script web target"
-                            (compiler/compile-source source target)))))
-  (is (= "entryless library requires an explicit non-empty namespace export list"
-         (rejection-message "(defn add1 [x] (+ x 1))")))
-  (is (= "entryless library requires at least one exported function"
-         (rejection-message "(ns empty.library (:export [])) (defn- hidden [] 0)"))))
-
-(deftest typed-bounded-strings-remain-strings-through-checked-kir-and-web
-  (let [source (str "(ns pilot.text (:export [greet byte-length same?])) "
-                    "(defn greet [name :string] :string (string-concat \"こんにちは、\" name)) "
-                    "(defn byte-length [value :string] (string-byte-length value)) "
-                    "(defn same? [left :string right :string] (string=? left right))")
-        checked (compiler/check-source source)
-        compiled (compiler/compile-source source :js-kotoba-v1)
-        js-source (:source compiled)
-        encoded (.encodeToString (java.util.Base64/getEncoder)
-                                 (.getBytes ^String js-source "UTF-8"))
-        probe (str "import('data:text/javascript;base64," encoded
-                   "').then(m=>{const x=m.instantiateKotoba({});"
-                   "if(x.greet('言葉')!=='こんにちは、言葉')process.exit(2);"
-                   "if(x['byte-length']('言葉')!==6n)process.exit(3);"
-                   "if(x['same?']('言葉','言葉')!==1n||x['same?']('言葉','ことば')!==0n)process.exit(4)})")
-        result (shell/sh "node" "--input-type=module" "-e" probe)]
-    (is (= :kotoba.hir/v3 (get-in checked [:hir :format])))
-    (is (= :kotoba.kir/v4 (get-in compiled [:kir :format])))
-    (is (= :kotoba.value/typed-v1 (:value-profile compiled)))
-    (is (= 65536 (get-in compiled [:manifest :kotoba.artifact/limits
-                                   :string-value-bytes])))
-    (is (re-find #"valueProfile:'typed-v1'" js-source))
-    (is (= [:string] (get-in compiled [:kir :functions 0 :param-types])))
-    (is (= :string (get-in compiled [:kir :functions 0 :result])))
-    (is (= "こんにちは、言葉" (ir/execute (:kir compiled) 'greet ["言葉"])))
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"string exceeds UTF-8 byte limit"
-                          (ir/execute (:kir compiled) 'greet [(apply str (repeat 65537 "x"))])))
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"string exceeds UTF-8 byte limit"
-                          (ir/execute (:kir compiled) 'greet [(apply str (repeat 65530 "x"))])))
-    (is (zero? (:exit result)) (:err result))
-    (doseq [target (remove #(= :js-kotoba-v1 (target/backend %))
-                           compiler/supported-targets)]
-      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"require the kotoba-script web target"
-                            (compiler/compile-source source target)))))
-  (is (= "expression type mismatch: expected string, got i64"
-         (rejection-message "(ns bad (:export [f])) (defn f [] :string 1)")))
-  (is (= "expression type mismatch: expected i64, got string"
-         (rejection-message "(defn main [] (+ \"not-an-integer\" 1))")))
-  (is (= "typed parameters require alternating name/type pairs"
-         (rejection-message "(ns bad (:export [f])) (defn f [x :string y] :string x)")))
-  (is (= "string exceeds UTF-8 byte limit"
-         (rejection-message
-          (str "(ns bad (:export [f])) (defn f [] :string \""
-               (apply str (repeat 4097 "x")) "\")"))))
-  (let [literal (apply str (repeat 4096 "x"))
-        definitions (apply str
-                           (map (fn [index]
-                                  (str "(defn f" index " [] :string \"" literal "\")"))
-                                (range 17)))]
-    (is (= "module string literals exceed UTF-8 byte limit"
-           (rejection-message (str "(ns too.large (:export [f0]))" definitions))))))
-
 (deftest map-get-recursion-shares-the-existing-fuel-budget
   ;; get/assoc introduce no new resource limit -- they are subject to the
   ;; SAME fixed fuel budget (ir.clj/backend/wasm.clj's 256-instruction-call
@@ -314,3 +367,364 @@
         results (map #(compiler/compile-source source %) compiler/targets)]
     (is (= 1 (count (set (map #(:oracle-value (:kir %)) results)))))
     (is (= 2 (:oracle-value (:kir (first results)))))))
+
+;; ───────────────────────── set + contains? + conj + disj ─────────────────────────
+
+(deftest set-literal-membership-round-trips
+  (is (= 1 (oracle "(defn main [] (contains? #{:a :b} :a))")))
+  (is (= 0 (oracle "(defn main [] (contains? #{:a :b} :missing))")))
+  (is (= 0 (oracle "(defn main [] (contains? #{} :a))"))))
+
+(deftest set-conj-and-disj-have-value-semantics
+  (is (= 1 (oracle "(defn main [] (contains? (conj #{:a} :b) :b))")))
+  (is (= 0 (oracle "(defn main [] (contains? (disj #{:a :b} :a) :a))")))
+  (is (= 1 (oracle "(defn main [] (contains? (disj #{:a :b}) :b))"))
+      "zero-value disj is the identity"))
+
+(deftest set-conj-eliminates-runtime-equal-duplicates
+  (let [count-items "(defn count-items [s] (if (= s 0) 0 (+ 1 (count-items (pair-second s)))))"]
+    (is (= 1 (oracle (str count-items
+                          "(defn main [] (count-items (conj #{(+ 1 1)} 2 2)))")))
+        "literal expressions and conj values that evaluate equally occupy one slot")))
+
+(deftest set-values-pass-through-function-parameters
+  (is (= 1 (oracle "(defn member [s x] (contains? s x))
+                     (defn main [] (member #{4 5} 5))"))))
+
+(deftest set-item-count-is-admission-bounded
+  (with-redefs [frontend/max-set-items 1]
+    (is (some? (rejection-message "(defn main [] (contains? #{1 2} 1))")))))
+
+(deftest set-operations-are-reserved-function-names
+  (doseq [name '[contains? conj disj]]
+    (is (some? (rejection-message (str "(defn " name " [] 1) (defn main [] 0)"))))))
+
+(deftest set-helpers-are-injected-only-when-used
+  (let [{:keys [functions]} (:hir (compiler/check-source "(defn main [] (+ 1 2))"))
+        names (set (map :name functions))]
+    (is (not (contains? names '__kotoba_set_contains)))
+    (is (not (contains? names '__kotoba_set_without)))))
+
+(deftest set-operations-produce-consistent-values-across-backends
+  (let [source "(defn main [] (contains? (disj (conj #{:a} :b) :a) :b))"
+        results (map #(compiler/compile-source source %) compiler/targets)]
+    (is (= #{1} (set (map #(:oracle-value (:kir %)) results))))))
+
+;; ───────────────────────── bounded higher-order collections ─────────────────────────
+
+(deftest map-applies-a-named-unary-function
+  (is (= 3 (oracle "(defn inc1 [x] (+ x 1))
+                     (defn main [] (pair-first (pair-second (map inc1 [1 2 3]))))"))))
+
+(deftest map-supports-multiple-collections-and-stops-at-the-shortest
+  (is (= 22 (oracle "(defn add [a b] (+ a b))
+                      (defn main [] (pair-first (pair-second (map add [1 2 3] [10 20]))))")))
+  (is (= 1 (oracle "(defn add [a b] (+ a b))
+                     (defn main [] (empty? (map add [1 2] [])))")))
+  (is (= 15 (oracle "(defn sum5 [a b c d e] (+ a b c d e))
+                      (defn main [] (pair-first (map sum5 [1] [2] [3] [4] [5])))"))))
+
+(deftest filter-preserves-values-whose-named-predicate-is-truthy
+  (is (= 2 (oracle "(defn positive [x] (pos? x))
+                     (defn main [] (pair-first (filter positive [0 2 0 3])))"))))
+
+(deftest reduce-folds-with-explicit-init-and-named-binary-function
+  (is (= 16 (oracle "(defn add [acc x] (+ acc x))
+                      (defn main [] (reduce add 10 [1 2 3]))"))))
+
+(deftest higher-order-collection-callbacks-are-statically-resolved
+  (is (some? (rejection-message "(defn main [] (map 1 [1 2]))")))
+  (is (some? (rejection-message "(defn binary [a b] (+ a b))
+                                  (defn main [] (map binary [1 2]))"))
+      "callback arity is checked through the ordinary function-call validator"))
+
+(deftest higher-order-helper-names-are-reproducible
+  (let [source "(defn inc1 [x] (+ x 1)) (defn main [] (map inc1 [1 2]))"
+        c1 (compiler/compile-source source :wasm32-kotoba-v1)
+        c2 (compiler/compile-source source :wasm32-kotoba-v1)]
+    (is (= (:kir c1) (:kir c2)))
+    (is (java.util.Arrays/equals ^bytes (:bytes c1) ^bytes (:bytes c2)))))
+
+(deftest higher-order-collections-agree-across-backends
+  (let [source "(defn add [a b] (+ a b)) (defn main [] (reduce add 0 [1 2 3 4]))"
+        results (map #(compiler/compile-source source %) compiler/targets)]
+    (is (= #{10} (set (map #(:oracle-value (:kir %)) results))))))
+
+(deftest higher-order-collections-accept-inline-fn-closures
+  (is (= 7 (oracle "(defn main []
+                     (let [offset 5]
+                       (pair-first (map (fn [x] (+ x offset)) [2 3]))))")))
+  (is (= 3 (oracle "(defn main []
+                     (let [floor 2]
+                       (pair-first (filter (fn [x] (> x floor)) [1 3 4]))))")))
+  (is (= 15 (oracle "(defn main []
+                      (let [bonus 1]
+                        (reduce (fn [acc x] (+ acc (+ x bonus))) 10 [1 2])))"))))
+
+(deftest inline-fn-callback-validates-arity-and-capture-budget
+  (is (some? (rejection-message "(defn main [] (map (fn [a b] (+ a b)) [1]))")))
+  (is (some? (rejection-message
+              "(defn main []
+                 (let [a 1 b 2 c 3 d 4]
+                   (reduce (fn [acc x] (+ acc (+ x (+ a (+ b (+ c d)))))) 0 [1])))"))
+      "reduce needs two state params, leaving at most three closure captures under the ABI limit"))
+
+(deftest inline-fn-effects-remain-visible-to-admission
+  (let [hir (frontend/analyze
+             "(defn main [] (map (fn [x] (cap-call 7 x)) [1]))")]
+    (is (contains? (:effects hir) [:cap/call 7]))))
+
+(deftest inline-fn-closure-output-is-reproducible
+  (let [source "(defn main [] (let [n 3] (map (fn [x] (+ x n)) [1 2])))"
+        c1 (compiler/compile-source source :wasm32-kotoba-v1)
+        c2 (compiler/compile-source source :wasm32-kotoba-v1)]
+    (is (= (:kir c1) (:kir c2)))
+    (is (java.util.Arrays/equals ^bytes (:bytes c1) ^bytes (:bytes c2)))))
+
+(deftest no-init-reduce-supports-clojure-empty-and-nonempty-semantics
+  (is (= 6 (oracle "(defn main []
+                     (reduce (fn ([] 0) ([acc x] (+ acc x))) [1 2 3]))")))
+  (is (= 42 (oracle "(defn main []
+                      (reduce (fn ([] 42) ([acc x] (+ acc x))) []))")))
+  (is (= 6 (oracle "(defn main []
+                     (let [bonus 3]
+                       (reduce (fn ([] bonus) ([acc x] (+ acc (+ x bonus)))) [1 2])))")))
+  (is (= 3 (oracle "(defn main []
+                     (let [bonus 3]
+                       (reduce (fn ([] bonus) ([acc x] (+ acc x))) [])))"))))
+
+(deftest no-init-reduce-rejects-ambiguous-single-arity-callbacks
+  (is (some? (rejection-message
+              "(defn add [a b] (+ a b)) (defn main [] (reduce add [1 2]))")))
+  (is (some? (rejection-message
+              "(defn main [] (reduce (fn [a b] (+ a b)) [1 2]))")))
+  (is (some? (rejection-message
+              "(defn main [] (reduce (fn ([] 0) ([a b] (+ a b)) ([x] x)) [1 2]))"))))
+
+;; ───────────────────────── persistent collection operations ─────────────────────────
+
+(deftest count-and-nth-operate-on-pair-chain-collections
+  (is (= 3 (oracle "(defn main [] (count [10 20 30]))")))
+  (is (= 0 (oracle "(defn main [] (count []))")))
+  (is (= 20 (oracle "(defn main [] (nth [10 20 30] 1))")))
+  (is (= 99 (oracle "(defn main [] (nth [10] 4 99))")))
+  (is (= 99 (oracle "(defn main [] (nth [10] -1 99))"))))
+
+(deftest peek-and-pop-are-persistent-and-empty-safe
+  (is (= 10 (oracle "(defn main [] (peek [10 20]))")))
+  (is (= 20 (oracle "(defn main [] (peek (pop [10 20])))")))
+  (is (= 0 (oracle "(defn main [] (peek []))")))
+  (is (= 0 (oracle "(defn main [] (pop []))"))))
+
+(deftest map-keys-vals-and-dissoc-return-new-collections
+  (is (= 2 (oracle "(defn main [] (count (keys {:a 1 :b 2})))")))
+  (is (= 3 (oracle "(defn main [] (reduce (fn ([] 0) ([a b] (+ a b))) (vals {:a 1 :b 2})))")))
+  (is (= 0 (oracle "(defn main [] (get (dissoc {:a 1 :b 2} :a) :a))")))
+  (is (= 2 (oracle "(defn main [] (get (dissoc {:a 1 :b 2} :a) :b))")))
+  (is (= 0 (oracle "(defn main [] (count (dissoc {:a 1 :b 2} :a :b)))"))))
+
+(deftest collection-operations-pass-through-function-boundaries
+  (is (= 7 (oracle "(defn select [xs] (nth xs 2 0))
+                     (defn main [] (select [5 6 7]))"))))
+
+(deftest collection-operation-results-agree-across-backends
+  (let [source "(defn main [] (+ (count [1 2 3]) (nth (vals {:a 4 :b 5}) 1 0)))"
+        results (map #(compiler/compile-source source %) compiler/targets)]
+    (is (= 1 (count (set (map #(:oracle-value (:kir %)) results)))))))
+
+;; ───────────────────────── records as tagged persistent maps ─────────────────────────
+
+(deftest defrecord-generates-positional-and-map-constructors
+  (is (= 7 (oracle "(defrecord Point [x y])
+                     (defn main [] (get (->Point 7 8) :x))")))
+  (is (= 8 (oracle "(defrecord Point [x y])
+                     (defn main [] (get (map->Point {:x 7 :y 8}) :y))"))))
+
+(deftest records-carry-a-deterministic-type-tag
+  (is (= 1 (oracle "(defrecord Point [x y])
+                     (defn main []
+                       (if (= (get (->Point 1 2) :kotoba.record/type) :Point) 1 0))"))))
+
+(deftest record-updates-remain-persistent-map-values
+  (is (= 10 (oracle "(defrecord Point [x y])
+                     (defn main []
+                       (let [before (->Point 1 2)
+                             after (assoc before :x 9)]
+                         (+ (get before :x) (get after :x))))"))))
+
+(deftest malformed-or-colliding-record-definitions-fail-closed
+  (is (some? (rejection-message "(defrecord Point [x x]) (defn main [] 0)")))
+  (is (some? (rejection-message "(defrecord Point [a b c d e f]) (defn main [] 0)")))
+  (is (some? (rejection-message
+              "(defrecord Point [x]) (defn ->Point [x] x) (defn main [] 0)"))))
+
+(deftest record-constructors-agree-across-backends
+  (let [source "(defrecord Point [x y]) (defn main [] (get (->Point 4 5) :y))"
+        results (map #(compiler/compile-source source %) compiler/targets)]
+    (is (= #{5} (set (map #(:oracle-value (:kir %)) results))))))
+
+;; ───────────────────────── named multi-arity functions ─────────────────────────
+
+(deftest named-functions-dispatch-statically-by-arity
+  (is (= 10 (oracle "(defn f ([] 10) ([x] x) ([x y] (+ x y)))
+                      (defn main [] (f))")))
+  (is (= 7 (oracle "(defn f ([] 10) ([x] x) ([x y] (+ x y)))
+                     (defn main [] (f 7))")))
+  (is (= 9 (oracle "(defn f ([] 10) ([x] x) ([x y] (+ x y)))
+                     (defn main [] (f 4 5))"))))
+
+(deftest named-multi-arity-functions-support-recursion
+  (is (= 6 (oracle "(defn sum
+                      ([xs] (sum 0 xs))
+                      ([acc xs] (if (= xs 0) acc (sum (+ acc (pair-first xs)) (pair-second xs)))))
+                     (defn main [] (sum [1 2 3]))"))))
+
+(deftest named-multi-arity-functions-work-as-higher-order-callbacks
+  (is (= 3 (oracle "(defn plus ([] 0) ([x] (+ x 1)) ([a b] (+ a b)))
+                     (defn main [] (pair-first (map plus [2])))")))
+  (is (= 6 (oracle "(defn plus ([] 0) ([x] (+ x 1)) ([a b] (+ a b)))
+                     (defn main [] (reduce plus [1 2 3]))"))))
+
+(deftest malformed-multi-arity-functions-fail-closed
+  (is (some? (rejection-message "(defn f ([x] x) ([y] y)) (defn main [] 0)")))
+  (is (some? (rejection-message "(defn f ([a b c d e f] a)) (defn main [] 0)")))
+  (is (some? (rejection-message "(defn f ([x] x)) (defn main [] (f))"))))
+
+(deftest zero-arity-main-may-use-multi-arity-source-shape
+  (is (= 5 (oracle "(defn main ([] 5) ([x] x))"))))
+
+(deftest multi-arity-expansion-is-reproducible-across-backends
+  (let [source "(defn f ([] 1) ([x] (+ x 1))) (defn main [] (+ (f) (f 3)))"
+        results (map #(compiler/compile-source source %) compiler/targets)]
+    (is (= #{5} (set (map #(:oracle-value (:kir %)) results))))
+    (let [c1 (compiler/compile-source source :wasm32-kotoba-v1)
+          c2 (compiler/compile-source source :wasm32-kotoba-v1)]
+      (is (= (:kir c1) (:kir c2)))
+      (is (java.util.Arrays/equals ^bytes (:bytes c1) ^bytes (:bytes c2))))))
+
+;; ───────────────────────── protocols + record dispatch ─────────────────────────
+
+(deftest protocols-dispatch-on-record-type-tags
+  (is (= 10 (oracle "(defprotocol Area (area [this]))
+                      (defrecord Rect [w h] Area
+                        (area [this] (* (get this :w) (get this :h))))
+                      (defrecord Square [side] Area
+                        (area [this] (* (get this :side) (get this :side))))
+                      (defn main [] (+ (area (->Rect 2 3)) (area (->Square 2))))"))))
+
+(deftest protocol-methods-support-additional-arguments
+  (is (= 15 (oracle "(defprotocol Scale (scale [this factor]))
+                      (defrecord Amount [value] Scale
+                        (scale [this factor] (* (get this :value) factor)))
+                      (defn main [] (scale (->Amount 5) 3))"))))
+
+(deftest protocol-dispatch-on-unknown-tag-fails-closed-to-zero
+  (is (= 0 (oracle "(defprotocol Area (area [this]))
+                     (defrecord Rect [w h] Area
+                       (area [this] (* (get this :w) (get this :h))))
+                     (defn main [] (area {:w 2 :h 3}))"))))
+
+(deftest malformed-protocol-implementations-fail-closed
+  (is (some? (rejection-message
+              "(defprotocol P (f [this]))
+               (defrecord R [x] Missing (f [this] 1)) (defn main [] 0)")))
+  (is (some? (rejection-message
+              "(defprotocol P (f [this x]))
+               (defrecord R [x] P (f [this] 1)) (defn main [] 0)")))
+  (is (some? (rejection-message
+              "(defprotocol P (f [this]))
+               (defrecord R [x] P (g [this] 1)) (defn main [] 0)"))))
+
+(deftest protocol-dispatch-agrees-across-backends
+  (let [source "(defprotocol Value (value [this]))
+                (defrecord Box [x] Value (value [this] (get this :x)))
+                (defn main [] (value (->Box 9)))"
+        results (map #(compiler/compile-source source %) compiler/targets)]
+    (is (= #{9} (set (map #(:oracle-value (:kir %)) results))))))
+
+(deftest extend-type-adds-protocol-implementation-outside-record
+  (is (= 7 (oracle "(defprotocol Value (value [this]))
+                     (defrecord Box [x])
+                     (extend-type Box Value (value [this] (get this :x)))
+                     (defn main [] (value (->Box 7)))"))))
+
+(deftest extend-protocol-adds-multiple-type-sections
+  (is (= 11 (oracle "(defprotocol Value (value [this]))
+                      (defrecord A [x]) (defrecord B [x])
+                      (extend-protocol Value
+                        A (value [this] (get this :x))
+                        B (value [this] (+ 1 (get this :x))))
+                      (defn main [] (+ (value (->A 5)) (value (->B 5))))"))))
+
+(deftest duplicate-protocol-extension-is-rejected
+  (is (some? (rejection-message
+              "(defprotocol Value (value [this]))
+               (defrecord Box [x] Value (value [this] (get this :x)))
+               (extend-type Box Value (value [this] 0))
+               (defn main [] 0)"))))
+
+(deftest extend-protocol-default-section-is-static-fallback
+  (is (= 99 (oracle "(defprotocol Value (value [this]))
+                      (defrecord Box [x])
+                      (extend-protocol Value
+                        Box (value [this] (get this :x))
+                        default (value [this] 99))
+                      (defn main [] (value {:not-a-record 1}))")))
+  (is (= 7 (oracle "(defprotocol Value (value [this]))
+                     (defrecord Box [x])
+                     (extend-protocol Value
+                       Box (value [this] (get this :x))
+                       default (value [this] 99))
+                     (defn main [] (value (->Box 7)))"))))
+
+(deftest definterface-is-safe-static-method-contract
+  (is (= 8 (oracle "(definterface Readable (read-value [this]))
+                     (defrecord Box [x] Readable
+                       (read-value [this] (get this :x)))
+                     (defn main [] (read-value (->Box 8)))"))))
+
+(deftest variadic-functions-specialize-rest-arity-to-pair-chain
+  (is (= 0 (oracle "(defn rest-count [& xs] (count xs))
+                     (defn main [] (rest-count))")))
+  (is (= 3 (oracle "(defn rest-count [& xs] (count xs))
+                     (defn main [] (rest-count 1 2 3))")))
+  (is (= 9 (oracle "(defn choose [x & more] (+ x (nth more 1 0)))
+                     (defn main [] (choose 4 2 5))"))))
+
+(deftest fixed-arity-clause-wins-over-variadic-specialization
+  (is (= 20 (oracle "(defn f ([x] 10) ([x & more] 20))
+                      (defn main [] (f 1 2))")))
+  (is (= 10 (oracle "(defn f ([x] 10) ([x & more] 20))
+                      (defn main [] (f 1))"))))
+
+(deftest variadic-functions-work-as-known-arity-callbacks
+  (is (= 5 (oracle "(defn add-all [x & more] (+ x (nth more 0 0)))
+                     (defn main [] (pair-first (map add-all [2] [3])))"))))
+
+(deftest variadic-call-beyond-abi-limit-fails-closed
+  (is (some? (rejection-message
+              "(defn f [& xs] (count xs))
+               (defn main [] (f 1 2 3 4 5 6))"))))
+
+(deftest match-desugars-portably
+  (is (= 3 (oracle "(defn main [] (match [1 2] [a b] (+ a b) :else 0))")))
+  (is (= 9 (oracle "(defn main [] (match {:x 9} {:x n} n :else 0))")))
+  (is (= 6 (oracle "(defn main [] (match [[1 2] 3] [[a b] c] (+ a b c) :else 0))")))
+  (is (= 7 (oracle "(defn main [] (match [1] [a b] 0 :else 7))"))))
+
+(deftest registered-pure-desugar-is-bounded-and-hygienic
+  (is (= 10 (oracle "(defdesugar clamp [x lo hi]
+                       (if (< x lo) lo (if (> x hi) hi x)))
+                     (defn main [] (clamp 12 0 10))")))
+  (is (= 4 (oracle "(defdesugar twice [x] (+ x x))
+                     (defn one [] 1)
+                     (defn main [] (twice (+ (one) 1)))")))
+  (is (some? (rejection-message
+              "(defdesugar unsafe [x] (cap-call x)) (defn main [] (unsafe 1))")))
+  (is (some? (rejection-message
+              "(defdesugar capture [x] (+ x ambient)) (defn main [] (capture 1))"))))
+
+(deftest portable-string-values-have-a-fail-closed-byte-bound
+  (is (= 3 (oracle "(defn main [] (string-length \"猫\"))")))
+  (is (some? (rejection-message
+              (str "(defn main [] \"" (apply str (repeat 128 "a")) "\")")))))

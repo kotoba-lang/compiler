@@ -93,8 +93,8 @@ recursion, top-level form count is capped, expression validation is capped at
 256, and literals must fit signed i64. Host reader failures are normalized into
 the compiler's `:read` error phase.
 
-The safe profile additionally caps functions (1,024), parameters per function
-(5), bindings per `let` (4,096), symbol length (128), and total
+The safe profile additionally caps functions (1,024), parameters per exported
+function (5), bindings per `let` (4,096), symbol length (128), and total
 expression nodes (50,000). A separate symbolic cost pass caps the `let`-elided
 program at 100,000 nodes before native substitution occurs, preventing compact
 source from causing exponential code generation. The five-argument limit is a
@@ -274,27 +274,8 @@ The first typed effect is `[:cap/call id]`, authored only as
 `(cap-call <literal-u8> value)`. Dynamic IDs are rejected rather than widened to
 ambient authority. The frontend derives direct effects and call edges, closes
 them to a fixpoint (including mutual recursion), and assigns effects to every
-function. A bounded `ns` `(:export [name ...])` clause defines the host
-boundary; `defn-` and compiler-generated helpers remain internal in JS, Wasm,
-ClojureScript, and native artifacts. Imports and every other namespace clause
-still fail closed. Authority admission deliberately uses the union across all
-declared functions—including private ones—so changing visibility cannot alter
-the authority claimed by otherwise identical code.
-
-An explicit, non-empty export clause also admits a library without `main`, but
-only for `:js-kotoba-v1`. Its KIR has a nil entry and signature and is handed to
-`kotoba-script` as a restricted ESM library. All executable and non-JavaScript
-targets reject an entryless module. This target gate prevents a library-shaped
-source unit from silently acquiring different execution semantics across
-native, Wasm, or ClojureScript backends.
-
-Typed string source advances HIR to `kotoba.hir/v3` and KIR to
-`kotoba.kir/v4`. Function `:param-types` and `:result` are checked before
-lowering and checked again by kotoba-script; the artifact seals the
-`kotoba.value/typed-v1` profile and its 4 KiB literal / 64 KiB module and value
-limits. Only the restricted JavaScript target currently admits that profile.
-Other targets fail at target selection, before backend emission, rather than
-type-erasing strings into i64 hashes or pointers with unspecified ownership.
+function. Because all pure functions are currently exported, module admission
+uses the union across all functions, not only `main` reachability.
 
 Policy is deny-by-default: `{:allow #{...}}`. Admission reports missing effects,
 the exact minimal policy, and unused grants. This stage deliberately separates

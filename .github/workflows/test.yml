@@ -79,10 +79,6 @@ jobs:
         run: npm run test-ios-aot
         env:
           DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
-      - if: matrix.os == 'macos-14'
-        run: npm run test-ios-simulator
-        env:
-          DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
       - run: clojure -M:test
         env:
           KOTOBA_FUZZ_SEED: "5426643073673934426"

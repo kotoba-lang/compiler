@@ -88,14 +88,6 @@
                   (emit-expr then env ctx) [0x05]
                   (emit-expr else env ctx) [0x0b]))
 
-        ;; `do`: emit each subexpression in order; drop all but the last value
-        ;; from the stack (0x1a = drop). Side effects run once, in order.
-        (= op 'do)
-        (let [n (count args)]
-          (mapcat (fn [i arg]
-                    (concat (emit-expr arg env ctx) (when (< i (dec n)) [0x1a])))
-                  (range n) args))
-
         (= op 'cap-call)
         (let [[cap-id value] args]
           (concat [0x42] (sleb cap-id) (emit-expr value env ctx)
@@ -110,6 +102,11 @@
             (concat [0x42 0] (emit-expr (first args) env ctx) [0x7d])
             (concat (emit-expr (first args) env ctx)
                     (mapcat #(concat (emit-expr % env ctx) [opcode]) (rest args)))))
+
+        (contains? '#{bit-and bit-xor} op)
+        (let [opcode ({'bit-and 0x83 'bit-xor 0x85} op)]
+          (concat (emit-expr (first args) env ctx)
+                  (mapcat #(concat (emit-expr % env ctx) [opcode]) (rest args))))
 
         (contains? '#{= < > <= >=} op)
         (concat (emit-many args env ctx)
@@ -139,8 +136,6 @@
 
 (defn emit [kir target]
   (let [functions (:functions kir)
-        exported-names (set (or (:exports kir) (map :name functions)))
-        exported-functions (filterv #(contains? exported-names (:name %)) functions)
         has-cap? (contains? (set (map first (:effects kir))) :cap/call)
         heap-ops (let [found (volatile! #{})]
                    (letfn [(walk [form]
@@ -178,11 +173,11 @@
         global-sec [1 0x7e 1 0x42 0x80 0x02 0x0b]
         ;; Pure functions are exported with their source names. This makes
         ;; runtime parameters observable and testable without host authority.
-        export-sec (concat (uleb (count exported-functions))
-                           (mapcat (fn [function]
+        export-sec (concat (uleb (count functions))
+                           (mapcat (fn [[index function]]
                                      (concat (name-bytes (name (:name function))) [0]
-                                             (uleb (get indices (:name function)))))
-                                   exported-functions))
+                                             (uleb (+ index shift))))
+                                   (map-indexed vector functions)))
         code-sec (concat (uleb (count functions))
                          (mapcat #(function-body % indices intrinsic-indices) functions))
         target-sec (concat (name-bytes "kotoba.target")

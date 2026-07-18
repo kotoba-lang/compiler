@@ -21,7 +21,6 @@
             [kotoba.compiler.release-test]
             [kotoba.compiler.security-fuzz-test]
             [kotoba.compiler.signing-test]
-            [kotoba.compiler.value-test]
             [kotoba.compiler.verifier-profile-test]))
 
 (defn -main [& _]
@@ -45,7 +44,6 @@
                                           'kotoba.compiler.receipt-test
                                           'kotoba.compiler.release-test
                                           'kotoba.compiler.security-fuzz-test
-                                          'kotoba.compiler.value-test
                                           'kotoba.compiler.verifier-profile-test
                                           'kotoba.compiler.property-test)]
     (when (pos? (+ fail error)) (System/exit 1))))

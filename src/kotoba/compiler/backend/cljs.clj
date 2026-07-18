@@ -86,9 +86,6 @@
         if (let [[test then else] args]
              (list 'if (list 'zero? (lower-expr test)) (lower-expr else) (lower-expr then)))
 
-        ;; `do`: Clojure's own `do` sequences the lowered subexpressions.
-        do (list* 'do (map lower-expr args))
-
         pair (let [[l r] args] (list 'vector (lower-expr l) (lower-expr r)))
         pair-first (list 'nth (lower-expr (first args)) 0)
         pair-second (list 'nth (lower-expr (first args)) 1)
@@ -111,9 +108,8 @@
 
           :else (apply list op (map lower-expr args)))))))
 
-(defn- lower-function [{:keys [name params body]} exported?]
-  (list (if exported? 'defn 'defn-) name (vec params)
-        (list 'do '(kotoba$charge!) (lower-expr body))))
+(defn- lower-function [{:keys [name params body]}]
+  (list 'defn name (vec params) (list 'do '(kotoba$charge!) (lower-expr body))))
 
 (def ^:private prelude-forms
   '[(defonce kotoba$fuel (atom 256))
@@ -181,9 +177,7 @@
   to resolve symbol: __kotoba_loop_1`, identically to plain JVM `eval`."
   [kir]
   (let [fn-names (mapv :name (:functions kir))
-        exported-names (set (or (:exports kir) fn-names))
-        fn-forms (mapv #(lower-function % (contains? exported-names (:name %)))
-                       (:functions kir))
+        fn-forms (mapv lower-function (:functions kir))
         forms (concat [(list 'ns default-ns-name)] prelude-forms
                        [(list* 'declare fn-names)] fn-forms)]
     (str/join "\n\n" (map pr-str forms))))

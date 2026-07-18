@@ -103,11 +103,6 @@
           (when-not (= 3 (count args)) (reject! "runtime KIR if arity rejected" {}))
           (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
 
-        (= op 'do)
-        (do
-          (when (empty? args) (reject! "runtime KIR do arity rejected" {}))
-          (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
-
         (= op 'cap-call)
         (let [[cap-id value :as call-args] args]
           (when-not (and (= 2 (count call-args)) (integer? cap-id) (<= 0 cap-id 255))
@@ -134,13 +129,11 @@
           (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
 
         (contains? '#{kernel-load-u8 kernel-load-u8-4k kernel-load-u8-16k
-                      kernel-store-u8 kernel-store-u8-4k
-                      kernel-load-u32 kernel-store-u32} op)
+                      kernel-store-u8 kernel-store-u8-4k} op)
         (do
           (when-not (= ({'kernel-load-u8 3 'kernel-load-u8-4k 3
                          'kernel-load-u8-16k 3 'kernel-store-u8 4
-                         'kernel-store-u8-4k 4
-                         'kernel-load-u32 3 'kernel-store-u32 4} op) (count args))
+                         'kernel-store-u8-4k 4} op) (count args))
             (reject! "runtime KIR kernel memory operation arity rejected" {:operation op}))
           (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
 
@@ -177,14 +170,13 @@
 
 (defn- verify-program! [program]
   (when-not (and (map? program)
-                 (= #{:format :entry :exports :signature :effects :functions} (set (keys program)))
+                 (= #{:format :entry :signature :effects :functions} (set (keys program)))
                  (= :kotoba.kir/v3 (:format program))
                  (= 'main (:entry program))
                  (= {:params [] :result :i64} (:signature program))
                  (set? (:effects program))
                  (every? valid-effect? (:effects program))
                  (vector? (:functions program))
-                 (vector? (:exports program))
                  (<= 1 (count (:functions program)) max-functions))
     (reject! "runtime KIR module shape rejected" {}))
   (let [functions (:functions program)
@@ -207,10 +199,7 @@
                      [(:name function) (:params function)]))
               functions)]
     (when-not (and (= (count functions) (count signatures)) (contains? signatures 'main)
-                   (empty? (get signatures 'main))
-                   (= (count (:exports program)) (count (distinct (:exports program))))
-                   (every? #(contains? signatures %) (:exports program))
-                   (some #{'main} (:exports program)))
+                   (empty? (get signatures 'main)))
       (reject! "runtime KIR entry or function identity rejected" {}))
     (let [nodes (volatile! 0)
           direct
@@ -238,11 +227,10 @@
   (let [backend (target-profile/backend target)
         expected-profile (target-profile/profile target)
         {expected-lowering :lowering emit :emit} (get target-contracts backend)]
-    (when (and (not (contains? #{:x86_64-aiueos-kernel-v1 :aarch64-aiueos-kernel-v1} target))
+    (when (and (not= target :x86_64-aiueos-kernel-v1)
                (some #(and (seq? %) (contains? '#{kernel-load-u8 kernel-load-u8-4k
                                                   kernel-load-u8-16k kernel-store-u8
-                                                  kernel-store-u8-4k kernel-load-u32 kernel-store-u32
-                                                  kernel-boot-info kernel-read-cr2
+                                                  kernel-store-u8-4k kernel-boot-info kernel-read-cr2
                                                   kernel-read-cr3 kernel-write-cr3 kernel-invlpg
                                                   kernel-cli kernel-sti kernel-hlt kernel-pause
                                                   kernel-out-u8 kernel-out-u32} (first %)))
@@ -306,7 +294,6 @@
   (verify-runtime! kexe)
   (let [kernel-operations '#{kernel-load-u8 kernel-load-u8-4k kernel-load-u8-16k
                              kernel-store-u8 kernel-store-u8-4k kernel-read-cr2
-                             kernel-load-u32 kernel-store-u32
                              kernel-boot-info kernel-read-cr3 kernel-write-cr3 kernel-invlpg
                              kernel-cli kernel-sti kernel-hlt kernel-pause
                              kernel-out-u8 kernel-out-u32}

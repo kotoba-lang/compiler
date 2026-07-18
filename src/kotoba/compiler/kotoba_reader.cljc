@@ -34,25 +34,7 @@
 (defn- delimiter-char? [ch]
   (contains? #{\( \) \[ \] \{ \} \" \; nil} ch))
 
-;; `depth`/`max-depth` and `max-token-chars` mirror
-;; `kotoba.compiler.bounded-edn/preflight!`'s two DURING-parse guards
-;; (bracket depth and raw non-string token length) exactly -- both nil (the
-;; default, via `read-forms`'s 1-arity) means unlimited, matching `.kotoba`
-;; SOURCE parsing's current behavior on both runtimes (the JVM path's
-;; `clojure.tools.reader` has no such limits either -- only bounded-edn's
-;; various EDN side-channel files, via `read-file`, get them). `--policy`
-;; is the one nbb-side caller (`kotoba.compiler.nbb.cli`) that passes real
-;; limits, since it's the untrusted-ish EDN input bounded-edn was built to
-;; harden on the JVM path. Both are checked DURING parsing, not in a
-;; post-parse pass (unlike node-count/string-length, which
-;; `kotoba.compiler.nbb.cli/validate-edn-shape!` checks after): unbounded
-;; bracket nesting risks a real JS stack overflow, and `max-token-chars`
-;; specifically must cover NUMBER tokens too (a huge digit run becomes a
-;; `js/BigInt`, which has no `keyword?`/`symbol?` name to check length of
-;; after the fact -- confirmed live: an earlier version of this file only
-;; checked token length post-parse against `keyword?`/`symbol?` names,
-;; silently letting an oversized NUMERIC literal through uncaught)."
-(defrecord ReaderState [source length position depth max-depth max-token-chars])
+(defrecord ReaderState [source length position])
 
 (defn- peek-ch [st]
   (let [{:keys [source length position]} st]
@@ -106,8 +88,6 @@
 (defn- read-token [st]
   (let [[st token] (read-while st token-char?)]
     (when (zero? (count token)) (reject! "expected a form" {:position (:position st)}))
-    (when (and (:max-token-chars st) (> (count token) (:max-token-chars st)))
-      (reject! "EDN token exceeds limit" {:limit (:max-token-chars st)}))
     [st token]))
 
 (defn- read-symbol-or-number [st]
@@ -145,23 +125,16 @@
           :else (recur (advance st) (conj acc ch)))))))
 
 (defn- read-delimited
-  "Reads forms up to CLOSE (already-consumed OPEN), returning `[state forms]`.
-  Bumps `:depth` for the duration of this container and restores the
-  parent's depth on close, checking `:max-depth` (if set) on entry --
-  see `ReaderState`'s docstring for why this needs to happen here, not
-  only in a post-parse pass."
+  "Reads forms up to CLOSE (already-consumed OPEN), returning `[state forms]`."
   [st close]
-  (let [depth (inc (:depth st))]
-    (when (and (:max-depth st) (> depth (:max-depth st)))
-      (reject! "EDN nesting exceeds limit" {:limit (:max-depth st)}))
-    (loop [st (assoc st :depth depth) acc []]
-      (let [st (skip-ws+comments st)
-            ch (peek-ch st)]
-        (cond
-          (nil? ch) (reject! "unterminated collection" {:expected close})
-          (= ch close) [(assoc (advance st) :depth (dec depth)) acc]
-          :else (let [[st' form skip?] (read-form st)]
-                  (recur st' (if skip? acc (conj acc form)))))))))
+  (loop [st st acc []]
+    (let [st (skip-ws+comments st)
+          ch (peek-ch st)]
+      (cond
+        (nil? ch) (reject! "unterminated collection" {:expected close})
+        (= ch close) [(advance st) acc]
+        :else (let [[st' form skip?] (read-form st)]
+                (recur st' (if skip? acc (conj acc form))))))))
 
 (defn- reader-conditional-branch
   "Given the parsed clauses vector `[:kotoba a :clj b :default c ...]`,
@@ -224,20 +197,11 @@
 (defn read-forms
   "Reads every top-level form in SOURCE, returning a vector -- mirrors
   `kotoba.compiler.frontend`'s own JVM `read-forms` loop (which drives
-  `clojure.tools.reader` one form at a time until EOF).
-
-  OPTS (default `{}`, via the 1-arity -- unlimited, matching `.kotoba`
-  SOURCE parsing's current behavior on both runtimes) may set `:max-depth`
-  and/or `:max-token-chars` to bound bracket nesting / raw token length --
-  see `ReaderState`'s docstring for why these are checked here rather than
-  in a post-parse pass."
-  ([source] (read-forms source {}))
-  ([source opts]
-   (loop [st (->ReaderState source (count source) 0 0
-                            (:max-depth opts) (:max-token-chars opts))
-          acc []]
-     (let [st (skip-ws+comments st)]
-       (if (nil? (peek-ch st))
-         acc
-         (let [[st' form skip?] (read-form st)]
-           (recur st' (if skip? acc (conj acc form)))))))))
+  `clojure.tools.reader` one form at a time until EOF)."
+  [source]
+  (loop [st (->ReaderState source (count source) 0) acc []]
+    (let [st (skip-ws+comments st)]
+      (if (nil? (peek-ch st))
+        acc
+        (let [[st' form skip?] (read-form st)]
+          (recur st' (if skip? acc (conj acc form))))))))

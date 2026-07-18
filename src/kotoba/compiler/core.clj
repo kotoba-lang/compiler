@@ -39,14 +39,6 @@
    (let [profile (target-profile/profile target)
         backend (target-profile/backend target)
         hir (frontend/analyze source)
-        _ (when (and (= :kotoba.hir/v3 (:format hir))
-                     (not= backend :js-kotoba-v1))
-            (throw (ex-info "typed string values currently require the kotoba-script web target"
-                            {:phase :target :target target :backend backend
-                             :value-profile :kotoba.value/typed-v1})))
-        _ (when (and (nil? (:entry hir)) (not= backend :js-kotoba-v1))
-            (throw (ex-info "entryless libraries currently require the kotoba-script web target"
-                            {:phase :target :target target :backend backend})))
         admission (admission/check hir policy)
         kir (ir/lower hir)
         value (:oracle-value kir)]
@@ -68,26 +60,18 @@
       (= backend :js-kotoba-v1)
       (let [source-digest (text-sha256 source)
             kir-digest (artifact/sha256 kir)
-            typed-values? (= :kotoba.kir/v4 (:format kir))
-            value-profile (if typed-values? :kotoba.value/typed-v1 :kotoba.value/i64-v1)
-            limits (cond-> {:fuel 256 :replenishable? false}
-                     typed-values? (assoc :string-literal-bytes 4096
-                                          :string-module-literal-bytes 65536
-                                          :string-value-bytes 65536))
             js-source (script/emit kir {:source-digest source-digest
                                         :kir-digest kir-digest
                                         :compiler-version compiler-version})
             output-digest (text-sha256 js-source)]
         {:format :javascript/v1 :target target :target-profile profile
          :hir hir :kir kir :admission admission
-         :value-profile value-profile :limits limits :source js-source
+         :limits {:fuel 256 :replenishable? false} :source js-source
          :manifest {:kotoba.artifact/schema "kotoba-js-artifact/v1"
                     :kotoba.artifact/source-digest source-digest
                     :kotoba.artifact/kir-digest kir-digest
                     :kotoba.artifact/output-digest output-digest
                     :kotoba.artifact/compiler-version compiler-version
-                    :kotoba.artifact/value-profile value-profile
-                    :kotoba.artifact/limits limits
                     :kotoba.artifact/target target
                     :kotoba.artifact/target-profile profile
                     :kotoba.artifact/effects (:effects kir)}})
@@ -97,7 +81,7 @@
                        :x86_64-kotoba-v1 x86-64/emit-program
                        :aarch64-kotoba-v1 aarch64/emit-program) kir)
             code (:code emitted)
-            program (select-keys kir [:format :entry :exports :signature :effects :functions])
+            program (select-keys kir [:format :entry :signature :effects :functions])
             artifact (artifact/seal
                       {:format :kotoba.kexe/v1 :target target :target-profile profile :value value
                        :kir-sha256 (artifact/sha256 program)
@@ -126,9 +110,6 @@
           (= target :x86_64-aiueos-kernel-v1)
           (assoc :binary (elf64/package-kernel artifact)
                  :object (elf64/package-kernel-object artifact))
-
-          (= target :aarch64-aiueos-kernel-v1)
-          (assoc :binary (elf64/package-kernel-aarch64 artifact))
 
           (= target :x86_64-aiueos-user-v1)
           (assoc :binary (elf64/package-user artifact))))))))

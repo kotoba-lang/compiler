@@ -46,40 +46,7 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"invalid function name"
                           (compiler/check-source
                            (str "(defn " long-name " [] 0) (defn main [] 0)")))))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"only a bounded :export vector"
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"ns must contain"
                         (compiler/check-source "(ns demo extra) (defn main [] 0)")))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"at most one namespace"
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"ns must contain"
                         (compiler/check-source "(ns one) (ns two) (defn main [] 0)"))))
-
-(deftest namespace-docstrings-are-data-not-executable-clauses
-  (is (= 42 (get-in (compiler/compile-source
-                     "(ns pilot.real-repo \"Canonical Kotoba actor.\") (defn main [] 42)"
-                     :wasm32-kotoba-v1)
-                    [:kir :oracle-value])))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"only a bounded :export vector"
-                        (compiler/check-source
-                         "(ns pilot (:require [clojure.string :as str])) (defn main [] 0)")))
-  (with-redefs [frontend/max-namespace-docstring-chars 3]
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"docstring exceeds admission limit"
-                          (compiler/check-source
-                           "(ns pilot \"four\") (defn main [] 0)")))))
-
-(deftest function-docstrings-are-bounded-inert-metadata
-  (doseq [target compiler/targets]
-    (testing target
-      (is (= 42 (get-in (compiler/compile-source
-                         "(ns pilot \"module docs\")
-                          (defn answer \"public API docs\" [x] (+ x 1))
-                          (defn main \"entry docs\" [] (answer 41))"
-                         target)
-                        [:kir :oracle-value])))))
-  (with-redefs [frontend/max-function-docstring-chars 3]
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"function docstring exceeds"
-                          (compiler/check-source
-                           "(defn main \"four\" [] 0)"))))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"function parameters must be a vector"
-                        (compiler/check-source
-                         "(defn main {} [] 0)")))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"function must contain one result"
-                        (compiler/check-source
-                         "(defn main \"docs\" [] 1 2)"))))

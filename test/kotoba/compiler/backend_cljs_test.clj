@@ -93,6 +93,53 @@
     (is (= 10 (:oracle-value (:kir compiled))))
     (is (= 10 (call ns 'main)))))
 
+(deftest first-class-closure-values-execute-in-cljs-backend
+  (let [source "(defn make [n] (fn [x] (+ x n)))
+                (defn pass [f] [f])
+                (defn main [] (invoke (nth (pass (make 5)) 0) 3))"
+        compiled (compile-cljs source)
+        ns (eval-in-fresh-ns (:source compiled))]
+    (is (= 8 (:oracle-value (:kir compiled))))
+    (is (= 8 (call ns 'main)))))
+
+(deftest multi-arity-closure-reduce-and-apply-execute-in-cljs-backend
+  (let [source "(defn make [bias]
+                  (fn ([] bias) ([acc x] (+ acc x bias))))
+                (defn main []
+                  (+ (reduce (make 4) [1 1])
+                     (apply (fn [a b] (+ a b)) [2 3])))"
+        compiled (compile-cljs source)
+        ns (eval-in-fresh-ns (:source compiled))]
+    (is (= 11 (:oracle-value (:kir compiled))))
+    (is (= 11 (call ns 'main)))))
+
+(deftest infinite-lazy-generator-is-observed-boundedly-in-cljs-backend
+  (let [source "(defn naturals [n]
+                  (lazy-cons n (naturals (+ n 1))))
+                (defn main [] (nth (take 6 (naturals 10)) 5))"
+        compiled (compile-cljs source)
+        ns (eval-in-fresh-ns (:source compiled))]
+    (is (= 15 (:oracle-value (:kir compiled))))
+    (is (= 15 (call ns 'main)))))
+
+(deftest lazy-map-over-infinite-generator-executes-in-cljs-backend
+  (let [source "(defn naturals [n] (lazy-cons n (naturals (+ n 1))))
+                (defn main []
+                  (nth (take 4 (lazy-map (fn [x] (* x 3)) (naturals 1))) 3))"
+        compiled (compile-cljs source)
+        ns (eval-in-fresh-ns (:source compiled))]
+    (is (= 12 (:oracle-value (:kir compiled))))
+    (is (= 12 (call ns 'main)))))
+
+(deftest lazy-filter-deferred-empty-and-infinite-search-execute-in-cljs-backend
+  (let [source "(defn naturals [n] (lazy-cons n (naturals (+ n 1))))
+                (defn main []
+                  (nth (take 2 (lazy-filter (fn [x] (> x 5)) (naturals 0))) 1))"
+        compiled (compile-cljs source)
+        ns (eval-in-fresh-ns (:source compiled))]
+    (is (= 7 (:oracle-value (:kir compiled))))
+    (is (= 7 (call ns 'main)))))
+
 ;; ───────────────────────── division-by-zero / fuel ─────────────────────────
 
 (deftest quot-by-zero-throws-instead-of-silently-returning-infinity

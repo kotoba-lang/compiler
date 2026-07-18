@@ -136,35 +136,6 @@ value, narrowing the gap from "silently wrong" to "loudly fails," the
 same fail-closed posture as fuel/division/capability. See
 `backend/cljs.clj`'s own docstring for the full, honest scope.
 
-The restricted JavaScript target is selected with `--target js`. A Web
-library may deliberately omit `main`, but only when its namespace declares a
-non-empty host boundary, for example `(ns example.math (:export [add1]))`.
-This produces an entryless ESM artifact whose frozen API contains only those
-exports. Entryless source is rejected for every native, Wasm, and
-ClojureScript target; executable programs still require an exported,
-zero-argument `main`. Missing, empty, private, duplicate, or unknown exports
-fail closed before lowering.
-
-The Web target also carries the first non-i64 value profile without erasing
-types. Typed parameters use alternating name/type pairs and an optional result
-type follows the parameter vector:
-
-```clojure
-(ns example.text (:export [greet]))
-(defn greet [name :string] :string
-  (string-concat "こんにちは、" name))
-```
-
-This lowers to checked `kotoba.kir/v4`; `:string` and `:i64` remain distinct in
-every function signature. The admitted string surface is deliberately small:
-`string-concat`, `string=?`, and `string-byte-length`. Literals must be
-well-formed UTF-16 and at most 4,096 UTF-8 bytes, all module literals together
-are capped at 65,536 bytes, and runtime values are capped at 65,536 bytes.
-Generated ESM revalidates types, Unicode shape, and byte limits at function and
-host boundaries. Native, Wasm, and ClojureScript targets reject KIR v4 until
-they have an equivalent typed ABI; strings are never replaced with hashes or
-silently treated as integer handles.
-
 Release-oriented target identities explicitly bind execution format, ISA, OS,
 ABI, and runtime profile. Current explicit names are `wasm32-browser`, `wasm32-wasi`,
 `x86_64-linux`, `x86_64-macos`, `x86_64-windows`, `aarch64-linux`,
@@ -210,14 +181,6 @@ Mach-O `__TEXT,__text`, and binds artifact, code, entry, and assembly digests in
 the manifest. Pinned Xcode 16.2 CI builds the text object and a no-JIT static
 host archive twice byte-identically. Device code signing, app embedding, trap
 isolation, and physical iPhone/iPad execution remain release gates.
-A separate CI job additionally links that same static host archive into a
-plain executable against the `iphonesimulator` SDK and runs it for real inside
-the iOS Simulator (`npm run test-ios-simulator`, arm64-native on the Apple
-Silicon CI runner, no Rosetta) -- unlike the device path above, this actually
-executes the compiled code and checks the result, not just static Mach-O
-shape. This needs no physical hardware or paid signing (Simulator binaries
-run unsigned), but does not by itself count toward this repo's coverage
-percentage -- see ADR-0001's Phase 3 for why.
 
 `wasm32-wasi` is the first server/component profile. Its Wasm custom section
 seals `wasm32-wasi-kotoba-v1`; the dependency-free host rejects missing or
@@ -442,9 +405,8 @@ mutation.
 `kotoba -M check` performs capability admission before backend selection.
 `cap-call` accepts only a literal ID in `[0,255]`; effects propagate through the
 full function-call graph, including cycles and lexical bindings. Admission is
-deny-by-default and conservatively covers every declared function, including
-private functions; it returns a least-privilege policy and reports unused
-grants. Wasm lowers admitted calls to the sole
+deny-by-default and covers every exported function, returns a least-privilege
+policy, and reports unused grants. Wasm lowers admitted calls to the sole
 `kotoba:cap/call(i64,i64)->i64` import; the host rechecks policy on every call.
 Native targets carry a sealed context-v1 layout. Generated code checks its
 256-bit allow bitmap before calling the single fixed callback slot; the callback
