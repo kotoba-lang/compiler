@@ -11,6 +11,13 @@ Every artifact records its target, KIR digest, declared effects, limits, and
 code bytes. A structurally independent target verifier decodes all emitted
 instructions before admission.
 
+The shared value policy is `:kotoba.floating-point/forbidden-v1`. Source and
+KIR admit no floating literal, type, operation, parameter, result, or boundary
+value, and the Web artifact seals the same policy explicitly. This prevents a
+backend host's NaN, infinity, signed-zero, rounding, or coercion behavior from
+silently becoming language semantics. Any future float support requires a new
+policy/ABI version and cross-backend conformance evidence.
+
 Native verification does not trust a sealed KIR merely because its hash is
 valid. Before re-emission, an independent KIR profile checker validates exact
 module/function shapes, i64 AST operations and arities, lexical bindings, call
