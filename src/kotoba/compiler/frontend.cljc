@@ -96,6 +96,8 @@
 (def typed-safe-value-operations
   '{bool-not 1 option-some 1 option-none 0 option-some? 1 option-value 2
     result-ok 1 result-err 1 result-ok? 1 result-value 2 result-error 2})
+(def parametric-result-operations
+  '{result-ok-of 2 result-err-of 2 result-ok?-of 2 result-value-of 3 result-error-of 3})
 (def typed-vector-operations
   '{vector-count 1 vector-get 3 vector-at 2 vector-drop 2 vector-assoc 3 vector-conj 2})
 (def sequencing-operations '#{do})
@@ -106,6 +108,7 @@
              (set (keys kernel-privileged-operations))
              list-operations predicate-operations logical-operations map-operations typed-map-operations
              (set (keys typed-safe-value-operations))
+             (set (keys parametric-result-operations))
              (set (keys typed-vector-operations))
              (set (keys string-operations))
              '#{let if cap-call ns defn defn- some some? nil? vector-i64 vector-new}))
@@ -118,12 +121,35 @@
 (def max-list-items 128)
 (def max-namespace-docstring-chars 4096)
 (def max-function-docstring-chars 4096)
+(def max-type-depth 8)
+(def max-type-nodes 64)
 ;; ADR-2607182410: bounds an optional `ns` `:capabilities` declaration set.
 ;; 256, not max-functions -- matches cap-call's own [0,255] id space (at
 ;; most 256 distinct capabilities can ever exist), not the unrelated
 ;; function-count limit.
 (def max-namespace-capabilities 256)
 (def value-types #{:i64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64})
+
+(declare reject!)
+
+(defn- parametric-result-type? [type]
+  (and (vector? type) (= 3 (count type)) (= :result (first type))))
+
+(defn- validate-value-type!
+  ([type] (validate-value-type! type 0 (volatile! 0)))
+  ([type depth nodes]
+   (vswap! nodes inc)
+   (when (> @nodes max-type-nodes)
+     (reject! "value type exceeds node limit" type))
+   (when (> depth max-type-depth)
+     (reject! "value type exceeds depth limit" type))
+   (cond
+     (contains? value-types type) type
+     (parametric-result-type? type)
+     (do (validate-value-type! (second type) (inc depth) nodes)
+         (validate-value-type! (nth type 2) (inc depth) nodes)
+         type)
+     :else (reject! "value type is outside the safe profile" type))))
 
 (defn- kotoba-integer?
   "True for a value that is (or stands for) a `.kotoba` integer literal --
@@ -675,6 +701,18 @@
         vector-i64 (do (when (> (count args) value/vector-item-limit)
                          (reject! "vector-i64 exceeds item limit" form))
                        (apply list 'vector-new (map desugar-expr args)))
+        result-ok-of (do (when-not (= 2 (count args)) (reject! "result-ok-of requires type and payload" form))
+                         (list 'result-ok-of (first args) (desugar-expr (second args))))
+        result-err-of (do (when-not (= 2 (count args)) (reject! "result-err-of requires type and payload" form))
+                          (list 'result-err-of (first args) (desugar-expr (second args))))
+        result-ok?-of (do (when-not (= 2 (count args)) (reject! "result-ok?-of requires type and result" form))
+                          (list 'result-ok?-of (first args) (desugar-expr (second args))))
+        result-value-of (do (when-not (= 3 (count args)) (reject! "result-value-of requires type, result, and fallback" form))
+                            (list 'result-value-of (first args)
+                                  (desugar-expr (second args)) (desugar-expr (nth args 2))))
+        result-error-of (do (when-not (= 3 (count args)) (reject! "result-error-of requires type, result, and fallback" form))
+                            (list 'result-error-of (first args)
+                                  (desugar-expr (second args)) (desugar-expr (nth args 2))))
         ;; ADR-2607182410: `(cap-call :some/name value)` -> `(cap-call <int>
         ;; (desugar-expr value))`, resolving the keyword against
         ;; capability-registry BEFORE validate-expr/direct-facts ever see the
@@ -808,6 +846,15 @@
               (reject! "typed safe-value operation arity mismatch" form))
             (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
 
+        (contains? parametric-result-operations op)
+        (do (when-not (= (get parametric-result-operations op) (count args))
+              (reject! "parametric result operation arity mismatch" form))
+            (when-not (parametric-result-type? (first args))
+              (reject! "parametric result operation requires [:result ok-type err-type]" form))
+            (validate-value-type! (first args))
+            (doseq [arg (rest args)]
+              (validate-expr arg locals functions (inc depth) budget)))
+
         (= op 'vector-new)
         (do (when (> (count args) value/vector-item-limit)
               (reject! "vector-new exceeds item limit" form))
@@ -857,7 +904,8 @@
       (= op '=)
       (do (when-not (= (first types) (second types))
             (reject! "equality operands must have the same value type" args))
-          (when-not (contains? #{:i64 :keyword :bool :option-i64 :result-i64 :vector-i64} (first types))
+          (when-not (or (contains? #{:i64 :keyword :bool :option-i64 :result-i64 :vector-i64} (first types))
+                        (parametric-result-type? (first types)))
             (reject! "equality type is outside the safe value profile" args))
           :i64)
 
@@ -1010,6 +1058,37 @@
                (reject! "if branches must have the same value type" form))
              then-type)
         do (last (mapv #(infer-expression-type % locals signatures) args))
+        result-ok-of
+        (let [[type payload] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type payload locals signatures)
+                                    (second type) payload)
+          type)
+        result-err-of
+        (let [[type payload] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type payload locals signatures)
+                                    (nth type 2) payload)
+          type)
+        result-ok?-of
+        (let [[type result] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type result locals signatures) type result)
+          :bool)
+        result-value-of
+        (let [[type result fallback] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type result locals signatures) type result)
+          (require-expression-type! (infer-expression-type fallback locals signatures)
+                                    (second type) fallback)
+          (second type))
+        result-error-of
+        (let [[type result fallback] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type result locals signatures) type result)
+          (require-expression-type! (infer-expression-type fallback locals signatures)
+                                    (nth type 2) fallback)
+          (nth type 2))
         (infer-call-type op args locals signatures)))
     :else (reject! "value has no admitted type" form)))
 
@@ -1074,6 +1153,8 @@
     (kotoba-integer? form) 1
     (string? form) 1
     (keyword? form) 1
+    (boolean? form) 1
+    (vector? form) (bounded-sum (cons 1 (map #(lowered-cost % env) form)))
     (symbol? form) (get env form 1)
     :else
     (let [[op & args] form]
@@ -1137,13 +1218,13 @@
                                   [nil declaration])
         raw-params (first declaration)
         tail (rest declaration)
-        [result body] (if (keyword? (first tail))
+        [result body] (if (or (keyword? (first tail))
+                              (parametric-result-type? (first tail)))
                         [(first tail) (rest tail)]
                         [:i64 tail])]
     (when (and docstring (> (count docstring) max-function-docstring-chars))
       (reject! "function docstring exceeds admission limit" docstring))
-    (when-not (contains? value-types result)
-      (reject! "function result type is outside the safe value profile" result))
+    (validate-value-type! result)
     {:name name :raw-params raw-params :result result :body body}))
 
 (defn- typed-param-parts
@@ -1151,14 +1232,16 @@
   the whole vector must be alternating `[name :type ...]`; this keeps the
   source grammar deterministic and makes every non-i64 host boundary explicit."
   [raw-params]
-  (if (some keyword? raw-params)
+  (if (or (some keyword? raw-params)
+          (and (even? (count raw-params))
+               (some parametric-result-type? (map second (partition 2 raw-params)))))
     (do
       (when-not (even? (count raw-params))
         (reject! "typed parameters require alternating name/type pairs" raw-params))
       (mapv (fn [[pattern type]]
-              (when-not (contains? value-types type)
-                (reject! "parameter type is outside the safe value profile" type))
-              (when (and (contains? #{:string :keyword :map :bool :option-i64 :result-i64 :vector-i64} type)
+              (validate-value-type! type)
+              (when (and (or (contains? #{:string :keyword :map :bool :option-i64 :result-i64 :vector-i64} type)
+                             (parametric-result-type? type))
                          (not (or (symbol? pattern)
                                   (and (= type :map) (map? pattern))
                                   (and (= type :vector-i64) (vector? pattern)))))
@@ -1376,12 +1459,15 @@
     (check-lowering-budget! parsed)
     (let [typed-values? (boolean
                          (some (fn [{:keys [param-types result body]}]
-                                 (or (some #{:string :keyword :map :bool :option-i64 :result-i64 :vector-i64} param-types)
-                                     (contains? #{:string :keyword :map :bool :option-i64 :result-i64 :vector-i64} result)
+                                 (or (some #(or (contains? #{:string :keyword :map :bool :option-i64 :result-i64 :vector-i64} %)
+                                                (parametric-result-type? %)) param-types)
+                                     (or (contains? #{:string :keyword :map :bool :option-i64 :result-i64 :vector-i64} result)
+                                         (parametric-result-type? result))
                                      (some #(or (string? %) (keyword? %) (boolean? %)
                                                 (and (seq? %)
                                                      (or (contains? typed-map-operations (first %))
                                                          (contains? typed-safe-value-operations (first %))
+                                                         (contains? parametric-result-operations (first %))
                                                          (= 'vector-new (first %))
                                                          (contains? typed-vector-operations (first %)))))
                                            (tree-seq coll? seq body))))

@@ -308,6 +308,10 @@ A fixed two-slot result-i64 tagged union similarly carries one signed-i64
 payload for both ok and err, with lazy opposite-variant fallbacks. It is the
 bounded monomorphic foundation for later generic ADTs, not a recursive value
 container.
+The parametric extension represents a result type canonically as
+`[:result ok-type err-type]`. Type trees and runtime payload validation share
+fixed depth-8/node-64 limits; every generic constructor and projection embeds
+the descriptor in KIR, and the reference/Web runtimes validate it identically.
 The first sequential collection profile is an explicitly constructed,
 128-item `vector<i64>` with signed-i64 element checks, frozen Web host values,
 lazy out-of-range lookup fallback, and persistent assoc/conj updates.

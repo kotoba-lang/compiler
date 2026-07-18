@@ -42,6 +42,18 @@
     (is (thrown? clojure.lang.ExceptionInfo
                  (value/bounded-result-i64! invalid)))))
 
+(deftest parametric-result-types-share-fixed-depth-and-node-budgets
+  (let [type [:result :string [:result :i64 :bool]]]
+    (is (= [true "安全"] (value/bounded-typed-value! type [true "安全"])))
+    (is (= [false [true 7]] (value/bounded-typed-value! type [false [true 7]])))
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (value/bounded-typed-value! type [true 7])))
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (value/bounded-typed-value! type [false [true "7"]]))))
+  (let [too-deep (nth (iterate (fn [t] [:result :i64 t]) :bool) 9)]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"depth limit"
+                          (value/validate-value-type! too-deep)))))
+
 (deftest vector-i64-is-bounded-and-homogeneous
   (is (= [1 2 3] (value/bounded-vector-i64! [1 2 3])))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a vector-i64"

@@ -189,6 +189,35 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"require the kotoba-script web target"
                           (compiler/compile-source "(defn main [] :result-i64 (result-ok 1))" target)))))
 
+(deftest parametric-result-types-preserve-nested-payloads-and-budgets
+  (let [type [:result :string [:result :i64 :bool]]
+        source "(ns result.generic (:export [make inspect]))
+                (defn make [] [:result :string [:result :i64 :bool]]
+                  (result-err-of [:result :string [:result :i64 :bool]]
+                    (result-ok-of [:result :i64 :bool] 7)))
+                (defn inspect [r [:result :string [:result :i64 :bool]]] :bool
+                  (result-ok?-of [:result :i64 :bool]
+                    (result-error-of [:result :string [:result :i64 :bool]] r
+                      (result-err-of [:result :i64 :bool] false))))"
+        compiled (compiler/compile-source source :js-kotoba-v1)
+        kir (:kir compiled)]
+    (is (= [false [true 7]] (ir/execute kir 'make [])))
+    (is (true? (ir/execute kir 'inspect [[false [true 7]]])))
+    (is (= type (get-in kir [:functions 0 :result])))
+    (is (= 8 (get-in compiled [:manifest :kotoba.artifact/limits :parametric-adt-depth])))
+    (is (= 64 (get-in compiled [:manifest :kotoba.artifact/limits :parametric-adt-nodes])))
+    (is (str/includes? (:source compiled) "parametricAdtLimits:Object.freeze({depth:8,nodes:64})"))
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (ir/execute kir 'inspect [[false [true "bad"]]]))))
+  (let [too-deep (nth (iterate (fn [t] [:result :i64 t]) :bool) 9)
+        source (str "(defn bad [x " (pr-str too-deep) "] :bool true)")]
+    (is (some? (rejection-message source))))
+  (doseq [target (remove #(= :js-kotoba-v1 (target/backend %)) compiler/supported-targets)]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"require the kotoba-script web target"
+                          (compiler/compile-source
+                           "(defn main [] [:result :i64 :bool] (result-ok-of [:result :i64 :bool] 1))"
+                           target)))))
+
 (deftest bounded-map-host-abi-runs-through-compiler-and-kotoba-script
   (let [source "(ns pilot.map (:export [lookup update]))
                 (defn lookup [value :map] (get value :a 0))

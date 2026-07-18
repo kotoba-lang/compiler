@@ -76,7 +76,11 @@
         (trap! :invalid-vector-i64-value
                {:position position :message (ex-message error)})))
 
-    (trap! :unsupported-value-type {:type type :position position}))
+    (try
+      (value/bounded-typed-value! type runtime-value)
+      (catch #?(:clj Exception :cljs :default) error
+        (trap! :invalid-parametric-value
+               {:type type :position position :message (ex-message error)}))))
   runtime-value)
 
 ;; #?(:cljs ...): every i64 arithmetic op coerces both operands via
@@ -288,6 +292,30 @@
             (second result)
             (eval-expr fallback-form env functions fuel heap call-stack cap-call)))
 
+        (contains? '#{result-ok-of result-err-of} op)
+        (let [[type payload-form] args
+              tag (= op 'result-ok-of)]
+          (value/bounded-typed-value!
+           type [tag (eval-expr payload-form env functions fuel heap call-stack cap-call)]))
+
+        (= op 'result-ok?-of)
+        (let [[type result-form] args
+              result (value/bounded-typed-value!
+                      type (eval-expr result-form env functions fuel heap call-stack cap-call))]
+          (true? (first result)))
+
+        (contains? '#{result-value-of result-error-of} op)
+        (let [[type result-form fallback-form] args
+              result (value/bounded-typed-value!
+                      type (eval-expr result-form env functions fuel heap call-stack cap-call))
+              selected? (if (= op 'result-value-of) (first result) (not (first result)))
+              payload-type (if (= op 'result-value-of) (second type) (nth type 2))]
+          (if selected?
+            (second result)
+            (value/bounded-typed-value!
+             payload-type
+             (eval-expr fallback-form env functions fuel heap call-stack cap-call))))
+
         (= op 'vector-new)
         (value/bounded-vector-i64!
          (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args))
@@ -444,7 +472,7 @@
          :option-i64 (value/bounded-option-i64! arg)
          :result-i64 (value/bounded-result-i64! arg)
          :vector-i64 (value/bounded-vector-i64! arg)
-         (throw (ex-info "argument type is unsupported" {:phase :ir :type type}))))
+         (value/bounded-typed-value! type arg)))
      (let [invoke #(invoke-function function
                                     (mapv (fn [arg type]
                                             (if (= type :i64)
