@@ -15,6 +15,7 @@
             [kotoba.compiler.frontend-named-capability-test]
             [kotoba.compiler.backend-cljs-test]
             [kotoba.compiler.ios-aot-test]
+            [kotoba.compiler.interface-test]
             [kotoba.compiler.native-executor-test]
             [kotoba.compiler.admission-test]
             [kotoba.compiler.guest-grammar-conformance-test]
@@ -46,6 +47,7 @@
                                           'kotoba.compiler.frontend-named-capability-test
                                           'kotoba.compiler.backend-cljs-test
                                           'kotoba.compiler.ios-aot-test
+                                          'kotoba.compiler.interface-test
                                           'kotoba.compiler.admission-test
                                           'kotoba.compiler.guest-grammar-conformance-test
                                           'kotoba.compiler.signing-test
