@@ -17,6 +17,7 @@
            [java.security MessageDigest]))
 
 (def compiler-version "kotoba-compiler/1")
+(def floating-point-policy :kotoba.floating-point/forbidden-v1)
 
 (defn- text-sha256 [text]
   (let [digest (.digest (MessageDigest/getInstance "SHA-256")
@@ -56,6 +57,7 @@
       (= backend :wasm32-kotoba-v1)
       {:format :wasm/v1 :target target :target-profile profile
        :hir hir :kir kir :admission admission
+       :floating-point-policy floating-point-policy
        :limits {:fuel 256 :replenishable? false} :bytes (wasm/emit kir target)}
 
       ;; ADR-2607151500: cljs backend emits SOURCE TEXT, not bytes -- no
@@ -65,6 +67,7 @@
       (= backend :cljs-kotoba-v1)
       {:format :cljs/v1 :target target :target-profile profile
        :hir hir :kir kir :admission admission
+       :floating-point-policy floating-point-policy
        :limits {:fuel 256 :replenishable? false} :source (cljs/emit kir)}
 
       (= backend :js-kotoba-v1)
@@ -95,12 +98,14 @@
             output-digest (text-sha256 js-source)]
         {:format :javascript/v1 :target target :target-profile profile
          :hir hir :kir kir :admission admission
+         :floating-point-policy floating-point-policy
          :value-profile value-profile :limits limits :source js-source
          :manifest {:kotoba.artifact/schema "kotoba-js-artifact/v1"
                     :kotoba.artifact/source-digest source-digest
                     :kotoba.artifact/kir-digest kir-digest
                     :kotoba.artifact/output-digest output-digest
                     :kotoba.artifact/compiler-version compiler-version
+                    :kotoba.artifact/floating-point-policy floating-point-policy
                     :kotoba.artifact/value-profile value-profile
                     :kotoba.artifact/limits limits
                     :kotoba.artifact/target target
@@ -134,7 +139,8 @@
                        :program program :exports (:exports emitted)})]
         (verifier/verify-artifact! artifact)
         (cond-> {:format :kexe/v1 :target target :hir hir :kir kir
-                 :admission admission :artifact artifact}
+                 :admission admission :artifact artifact
+                 :floating-point-policy floating-point-policy}
           (= target :x86_64-aiueos-uefi-v1)
           (assoc :binary (pe32plus/package-efi artifact))
 

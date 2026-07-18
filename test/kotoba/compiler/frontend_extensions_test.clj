@@ -19,6 +19,20 @@
   (try (compiler/check-source source) nil
        (catch clojure.lang.ExceptionInfo e (ex-message e))))
 
+(deftest floating-point-policy-is-forbidden-versioned-and-artifact-sealed
+  (let [source "(defn main [] 1)"
+        results (mapv #(compiler/compile-source source %) compiler/supported-targets)
+        web (compiler/compile-source source :js-kotoba-v1)]
+    (is (= :kotoba.floating-point/forbidden-v1 compiler/floating-point-policy))
+    (is (every? #(= compiler/floating-point-policy (:floating-point-policy %)) results))
+    (is (= compiler/floating-point-policy
+           (get-in web [:manifest :kotoba.artifact/floating-point-policy])))
+    (is (str/includes? (:source web) "floatingPointPolicy:'forbidden-v1'")))
+  (is (some? (rejection-message "(defn main [] 1.5)")))
+  (is (some? (rejection-message "(defn identity [x :f64] :f64 x)")))
+  (is (some? (rejection-message "(defn main [] NaN)")))
+  (is (some? (rejection-message "(defn main [] Infinity)"))))
+
 ;; ───────────────────────── and/or/when ─────────────────────────
 
 (deftest and-short-circuits-and-evaluates-each-arg-once

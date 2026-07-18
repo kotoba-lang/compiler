@@ -18,6 +18,15 @@ profiles, conformance and runtime digests, CI run, test time, and expiry.
 
 The multi-target, deny-by-default compiler for the safe Kotoba language.
 
+All compilation results carry
+`:kotoba.floating-point/forbidden-v1`; restricted JavaScript artifacts also
+seal the equivalent `floatingPointPolicy: 'forbidden-v1'`. Floating-point
+literals, descriptors, parameters, results, operations, and boundary values
+are not admitted. JavaScript numbers, NaN, infinities, signed zero, implicit
+rounding, and integer-to-double coercion therefore cannot become accidental
+Kotoba semantics. Introducing floats requires a new versioned policy and ABI,
+not a silent widening of this profile.
+
 ## Relationship to `kotoba-lang/kotoba` and `kotoba-lang/kotoba-lang`
 
 This repository is the CLJC-native successor of `kotoba-lang/kotoba`'s
