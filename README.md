@@ -185,6 +185,12 @@ for the opposite variant. Its Web ABI is frozen `[true, bigint]` or
 `[false, bigint]`. This closes a monomorphic tagged-union ABI foundation; it
 does not yet admit generic or recursive ADTs.
 
+Parametric results use `[:result ok-type err-type]`. Their constructors and
+projections are the explicit `result-*-of` forms and always carry the same
+descriptor, so neither the frontend nor generated JavaScript guesses types
+from host shapes. Descriptors and nested runtime payloads are capped at depth
+8 and 64 nodes and are revalidated at every function/export boundary.
+
 The first bounded sequential collection is `:vector-i64`, constructed
 explicitly with `(vector-i64 ...)` and capped at 128 items. `vector-count`,
 `vector-get`, `vector-assoc`, and `vector-conj` preserve signed-i64 elements;

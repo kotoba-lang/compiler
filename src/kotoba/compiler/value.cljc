@@ -6,6 +6,8 @@
 (def keyword-value-byte-limit 512)
 (def map-entry-limit 128)
 (def vector-item-limit 128)
+(def adt-depth-limit 8)
+(def adt-node-limit 64)
 
 (defn utf8-byte-count!
   "Return the exact UTF-8 byte count without normalizing or replacing malformed
@@ -121,3 +123,53 @@
                  :cljs (and (i64/bigint-value? item) (i64/in-i64-range? item)))
       (throw (ex-info "vector item is not a signed i64" {:phase :value}))))
   value)
+
+(def ^:private leaf-value-types
+  #{:i64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64})
+
+(defn validate-value-type!
+  ([type] (validate-value-type! type 0 (volatile! 0)))
+  ([type depth nodes]
+   (vswap! nodes inc)
+   (when (> @nodes adt-node-limit)
+     (throw (ex-info "value type exceeds node limit" {:phase :value :limit adt-node-limit})))
+   (when (> depth adt-depth-limit)
+     (throw (ex-info "value type exceeds depth limit" {:phase :value :limit adt-depth-limit})))
+   (cond
+     (contains? leaf-value-types type) type
+     (and (vector? type) (= 3 (count type)) (= :result (first type)))
+     (do (validate-value-type! (second type) (inc depth) nodes)
+         (validate-value-type! (nth type 2) (inc depth) nodes)
+         type)
+     :else (throw (ex-info "value type is outside the safe profile"
+                           {:phase :value :type type})))))
+
+(defn bounded-typed-value!
+  "Validate a value under a canonical possibly-parametric type descriptor.
+  Recursive values share one fixed depth and node budget."
+  ([type value]
+   (validate-value-type! type)
+   (bounded-typed-value! type value 0 (volatile! 0)))
+  ([type value depth nodes]
+   (vswap! nodes inc)
+   (when (> @nodes adt-node-limit)
+     (throw (ex-info "ADT value exceeds node limit" {:phase :value :limit adt-node-limit})))
+   (when (> depth adt-depth-limit)
+     (throw (ex-info "ADT value exceeds depth limit" {:phase :value :limit adt-depth-limit})))
+   (case type
+     :i64 (do (when-not #?(:clj (and (integer? value) (<= Long/MIN_VALUE value Long/MAX_VALUE))
+                              :cljs (and (i64/bigint-value? value) (i64/in-i64-range? value)))
+                (throw (ex-info "value is not a signed i64" {:phase :value}))) value)
+     :string (bounded-string! value string-value-byte-limit)
+     :keyword (bounded-keyword! value keyword-value-byte-limit)
+     :map (bounded-map! value)
+     :bool (do (when-not (boolean? value)
+                 (throw (ex-info "value is not a boolean" {:phase :value}))) value)
+     :option-i64 (bounded-option-i64! value)
+     :result-i64 (bounded-result-i64! value)
+     :vector-i64 (bounded-vector-i64! value)
+     (do
+       (when-not (and (vector? value) (= 2 (count value)) (boolean? (first value)))
+         (throw (ex-info "value is not a parametric result" {:phase :value})))
+       (let [payload-type (if (first value) (second type) (nth type 2))]
+         [(first value) (bounded-typed-value! payload-type (second value) (inc depth) nodes)])))))
