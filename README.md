@@ -155,7 +155,8 @@ type follows the parameter vector:
   (string-concat "こんにちは、" name))
 ```
 
-This lowers to checked `kotoba.kir/v4`; `:string` and `:i64` remain distinct in
+This lowers to checked `kotoba.kir/v4`; `:string`, `:keyword`, `:map`, and
+`:i64` remain distinct in
 every function signature. The admitted string surface is deliberately small:
 `string-concat`, `string=?`, and `string-byte-length`. Literals must be
 well-formed UTF-16 and at most 4,096 UTF-8 bytes, all module literals together
@@ -164,6 +165,12 @@ Generated ESM revalidates types, Unicode shape, and byte limits at function and
 host boundaries. Native, Wasm, and ClojureScript targets reject KIR v4 until
 they have an equivalent typed ABI; strings are never replaced with hashes or
 silently treated as integer handles.
+
+Keywords preserve canonical Unicode text with a 512-byte bound and never use
+probabilistic integer hashing. The first owned map profile admits at most 128
+unique keyword keys with signed-i64 values. `get`, `assoc`, and `{:k value}`
+lower to typed KIR map operations; generated ESM uses canonical frozen entry
+arrays and persistent updates. Mixed/nested map values remain fail-closed.
 
 Release-oriented target identities explicitly bind execution format, ISA, OS,
 ABI, and runtime profile. Current explicit names are `wasm32-browser`, `wasm32-wasi`,

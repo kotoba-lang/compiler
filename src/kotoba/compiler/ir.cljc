@@ -39,6 +39,18 @@
       (catch #?(:clj Exception :cljs :default) error
         (trap! :invalid-string-value {:position position :message (ex-message error)})))
 
+    :keyword
+    (try
+      (value/bounded-keyword! runtime-value value/keyword-value-byte-limit)
+      (catch #?(:clj Exception :cljs :default) error
+        (trap! :invalid-keyword-value {:position position :message (ex-message error)})))
+
+    :map
+    (try
+      (value/bounded-map! runtime-value)
+      (catch #?(:clj Exception :cljs :default) error
+        (trap! :invalid-map-value {:position position :message (ex-message error)})))
+
     (trap! :unsupported-value-type {:type type :position position}))
   runtime-value)
 
@@ -126,6 +138,8 @@
     #?(:clj (long form) :cljs (i64/->bigint form))
     (string? form)
     (value/bounded-string! form value/string-literal-byte-limit)
+    (keyword? form)
+    (value/bounded-keyword! form value/keyword-value-byte-limit)
     (symbol? form) (if (contains? env form)
                      (get env form)
                      (trap! :unbound-symbol {:symbol form}))
@@ -179,6 +193,31 @@
         (= op 'string-concat)
         (let [[left right] (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
           (value/bounded-string! (str left right) value/string-value-byte-limit))
+
+        (= op 'map-new)
+        (let [values (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)
+              result (into (sorted-map) (map vec (partition 2 values)))]
+          (when-not (= (quot (count values) 2) (count result))
+            (trap! :duplicate-map-key {}))
+          (value/bounded-map! result))
+
+        (= op 'map-get)
+        (let [[map-form key-form default-form] args
+              map-value (eval-expr map-form env functions fuel heap call-stack cap-call)
+              key-value (eval-expr key-form env functions fuel heap call-stack cap-call)]
+          (value/bounded-map! map-value)
+          (value/bounded-keyword! key-value value/keyword-value-byte-limit)
+          (if (contains? map-value key-value)
+            (get map-value key-value)
+            (eval-expr default-form env functions fuel heap call-stack cap-call)))
+
+        (= op 'map-assoc)
+        (let [map-value (eval-expr (first args) env functions fuel heap call-stack cap-call)
+              values (mapv #(eval-expr % env functions fuel heap call-stack cap-call)
+                           (rest args))
+              result (reduce (fn [current [key item]] (assoc current key item))
+                             (value/bounded-map! map-value) (partition 2 values))]
+          (value/bounded-map! result))
 
         (contains? '#{kernel-load-u8 kernel-load-u8-4k kernel-load-u8-16k
                       kernel-store-u8 kernel-store-u8-4k
@@ -271,6 +310,8 @@
                                      (i64/in-i64-range? arg)))
                 (throw (ex-info "argument must be a signed i64" {:phase :ir :arg arg})))
          :string (value/bounded-string! arg value/string-value-byte-limit)
+         :keyword (value/bounded-keyword! arg value/keyword-value-byte-limit)
+         :map (value/bounded-map! arg)
          (throw (ex-info "argument type is unsupported" {:phase :ir :type type}))))
      (invoke-function function
                        (mapv (fn [arg type]

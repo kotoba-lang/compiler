@@ -1,7 +1,10 @@
-(ns kotoba.compiler.value)
+(ns kotoba.compiler.value
+  #?(:cljs (:require [kotoba.compiler.cljs-i64 :as i64])))
 
 (def string-literal-byte-limit 4096)
 (def string-value-byte-limit 65536)
+(def keyword-value-byte-limit 512)
+(def map-entry-limit 128)
 
 (defn utf8-byte-count!
   "Return the exact UTF-8 byte count without normalizing or replacing malformed
@@ -39,3 +42,34 @@
       (throw (ex-info "string exceeds UTF-8 byte limit"
                       {:phase :value :bytes bytes :limit limit})))
     value))
+
+(defn bounded-keyword!
+  [value limit]
+  (when-not (keyword? value)
+    (throw (ex-info "value is not a keyword" {:phase :value :value value})))
+  (let [text (str value)
+        bytes (utf8-byte-count! text)]
+    (when (> bytes limit)
+      (throw (ex-info "keyword exceeds UTF-8 byte limit"
+                      {:phase :value :bytes bytes :limit limit})))
+    value))
+
+(defn bounded-map!
+  "Validate the first bounded map profile: canonical keyword keys and i64
+  values only. The representation is immutable host data, never a pointer or
+  integer sentinel in the Kotoba value domain."
+  [value]
+  (when-not (map? value)
+    (throw (ex-info "value is not a map" {:phase :value :value value})))
+  (when (> (count value) map-entry-limit)
+    (throw (ex-info "map exceeds entry limit"
+                    {:phase :value :entries (count value) :limit map-entry-limit})))
+  (doseq [[key item] value]
+    (bounded-keyword! key keyword-value-byte-limit)
+    (when-not #?(:clj (and (integer? item)
+                            (<= Long/MIN_VALUE item Long/MAX_VALUE))
+                 :cljs (and (i64/bigint-value? item)
+                            (i64/in-i64-range? item)))
+      (throw (ex-info "map value is not a signed i64"
+                      {:phase :value :key key}))))
+  value)

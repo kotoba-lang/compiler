@@ -15,3 +15,15 @@
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"unpaired low surrogate"
                         (value/utf8-byte-count!
                          (String. (char-array [(char 0xdc00)]))))))
+
+(deftest bounded-keyword-and-map-values-are-owned-and-typed
+  (is (= :安全/確認 (value/bounded-keyword! :安全/確認 32)))
+  (is (= {:a 1 :b 2} (value/bounded-map! {:a 1 :b 2})))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a keyword"
+                        (value/bounded-keyword! "a" 32)))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a signed i64"
+                        (value/bounded-map! {:a "unsafe"})))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"exceeds entry limit"
+                        (value/bounded-map!
+                         (into {} (map (fn [index] [(keyword (str "k" index)) index])
+                                       (range 129)))))))
