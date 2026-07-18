@@ -2,6 +2,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [kotoba.compiler.core :as compiler]
+            [kotoba.compiler.frontend :as frontend]
             [kotoba.compiler.ir :as ir]
             [kotoba.compiler.project :as project]))
 
@@ -25,6 +26,21 @@
     (is (= "こんにちは、言葉" (ir/execute (:kir compiled) 'welcome ["言葉"])))
     (is (= ['welcome] (get-in compiled [:kir :exports])))
     (is (not-any? #{'greet 'prefix} (get-in compiled [:kir :exports])))))
+
+(deftest project-modules-admit-the-same-bounded-namespace-docstrings
+  (let [dependency (str/replace text-source "(ns example.text"
+                                "(ns example.text \"bounded project documentation\"")
+        linked (project/link-source {'example.app app-source 'example.text dependency}
+                                    'example.app)]
+    (is (= ['example.text 'example.app] (:module-order linked))))
+  (is (thrown-with-msg?
+       clojure.lang.ExceptionInfo #"namespace docstring exceeds admission limit"
+       (project/link-source
+        {'example.text
+         (str "(ns example.text "
+              (pr-str (apply str (repeat (inc frontend/max-namespace-docstring-chars) "x")))
+              " (:export [greet])) (defn greet [] 0)")}
+        'example.text))))
 
 (deftest project-linking-is-deterministic
   (let [a (project/link-source (array-map 'example.app app-source
