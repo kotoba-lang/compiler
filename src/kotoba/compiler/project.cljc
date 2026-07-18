@@ -81,9 +81,34 @@
 (defn- typed-params [params types]
   (if (every? #{:i64} types) params (vec (mapcat vector params types))))
 
+(defn- stub-value [type]
+  (cond
+    (= type :i64) 0
+    (= type :string) ""
+    (= type :keyword) :kotoba.stub/value
+    (= type :map) {}
+    (= type :bool) false
+    (= type :option-i64) '(option-none)
+    (= type :result-i64) '(result-ok 0)
+    (= type :vector-i64) '(vector-i64)
+    (and (vector? type) (= :result (first type)))
+    (list 'result-ok-of type (stub-value (second type)))
+    (and (vector? type) (= :option (first type)))
+    (list 'option-none-of type)
+    (and (vector? type) (= :variant (first type)))
+    (let [[tag payload-type] (first (nth type 2))]
+      (list 'variant-new type tag (stub-value payload-type)))
+    (and (vector? type) (= :vector (first type)))
+    (list* 'hetero-vector type (map stub-value (second type)))
+    (and (vector? type) (= :set (first type)))
+    (list 'typed-set type)
+    (and (vector? type) (= :record (first type)))
+    (list* 'record type (map (comp stub-value second) (nth type 2)))
+    :else (reject! "project import result type has no closed stub value"
+                   {:type type})))
+
 (defn- stub-form [stub {:keys [params param-types result]}]
-  (list 'defn- stub (typed-params params param-types) result
-        (if (= :string result) "" 0)))
+  (list 'defn- stub (typed-params params param-types) result (stub-value result)))
 
 (defn- rewrite-import-calls [form imported]
   (cond

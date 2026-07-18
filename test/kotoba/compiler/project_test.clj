@@ -27,6 +27,39 @@
     (is (= ['welcome] (get-in compiled [:kir :exports])))
     (is (not-any? #{'greet 'prefix} (get-in compiled [:kir :exports])))))
 
+(deftest project-stubs-preserve-typed-boolean-export-signatures
+  (let [provider
+        "(ns example.coverage (:export [covered?]))
+         (defn covered? [covered [:set :keyword] item :keyword] :bool
+           (typed-set-contains [:set :keyword] covered item))"
+        consumer
+        "(ns example.check
+           (:require [example.coverage :as coverage])
+           (:export [ready? pending?]))
+         (defn ready? [] :bool
+           (coverage/covered? (typed-set [:set :keyword] :ready) :ready))
+         (defn pending? [] :bool
+           (coverage/covered? (typed-set [:set :keyword] :ready) :pending))"
+        compiled (compiler/compile-project
+                  {'example.coverage provider 'example.check consumer}
+                  'example.check :js-kotoba-v1)]
+    (is (true? (ir/execute (:kir compiled) 'ready? [])))
+    (is (false? (ir/execute (:kir compiled) 'pending? [])))))
+
+(deftest project-stubs-preserve-structured-export-results
+  (let [person-type "[:record :example/person [[:name :string] [:age :i64]]]"
+        provider (str "(ns example.person (:export [make]))"
+                      "(defn make [name :string age :i64] " person-type
+                      " (record " person-type " name age))")
+        consumer (str "(ns example.age (:require [example.person :as person])"
+                      " (:export [age]))"
+                      "(defn age [] :i64 (record-get " person-type
+                      " (person/make \"Kotoba\" 7) :age))")
+        compiled (compiler/compile-project
+                  {'example.person provider 'example.age consumer}
+                  'example.age :js-kotoba-v1)]
+    (is (= 7 (ir/execute (:kir compiled) 'age [])))))
+
 (deftest project-modules-admit-the-same-bounded-namespace-docstrings
   (let [dependency (str/replace text-source "(ns example.text"
                                 "(ns example.text \"bounded project documentation\"")
