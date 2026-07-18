@@ -202,9 +202,7 @@
                   :i64 (concat (emit* form env) [0x50 0x45])
                   :bool (concat (i32-const (descriptor-id :bool))
                                 (emit* form env)
-                                (i32-const (get literal-indices [:bool true]))
-                                [0x10 (get intrinsic-indices 'typed-literal)
-                                 0x10 (get intrinsic-indices 'typed-equal)])
+                                [0x10 (get intrinsic-indices 'typed-tag)])
                   (throw (ex-info "typed Wasm condition must be bool or i64"
                                   {:phase :wasm-typed-lowering
                                    :type type :form form})))))
