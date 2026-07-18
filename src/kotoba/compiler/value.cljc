@@ -73,3 +73,23 @@
       (throw (ex-info "map value is not a signed i64"
                       {:phase :value :key key}))))
   value)
+
+(defn bounded-option-i64!
+  "Validate the first option profile. None is `[false]`; some i64 is
+  `[true value]`. Nil, host null/undefined, and integer sentinels are never
+  members of the runtime value domain. Return a canonical immutable value."
+  [value]
+  (when-not (and (vector? value)
+                 (or (= [false] value)
+                     (and (= 2 (count value)) (true? (first value)))))
+    (throw (ex-info "value is not a tagged option-i64"
+                    {:phase :value :value value})))
+  (if (false? (first value))
+    [false]
+    (let [item (second value)]
+      (when-not #?(:clj (and (integer? item)
+                              (<= Long/MIN_VALUE item Long/MAX_VALUE))
+                   :cljs (and (i64/bigint-value? item)
+                              (i64/in-i64-range? item)))
+        (throw (ex-info "option payload is not a signed i64" {:phase :value})))
+      [true item])))

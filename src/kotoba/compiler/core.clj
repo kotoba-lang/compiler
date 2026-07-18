@@ -43,7 +43,7 @@
         hir (frontend/analyze source)
         _ (when (and (= :kotoba.hir/v3 (:format hir))
                      (not= backend :js-kotoba-v1))
-            (throw (ex-info "typed string values currently require the kotoba-script web target"
+            (throw (ex-info "typed values currently require the kotoba-script web target"
                             {:phase :target :target target :backend backend
                              :value-profile :kotoba.value/typed-v1})))
         _ (when (and (nil? (:entry hir)) (not= backend :js-kotoba-v1))
@@ -77,7 +77,8 @@
                                           :string-module-literal-bytes 65536
                                           :string-value-bytes 65536
                                           :keyword-value-bytes 512
-                                          :map-entries 128))
+                                          :map-entries 128
+                                          :option-i64-slots 2))
             js-source (script/emit kir (merge {:source-digest source-digest
                                                :kir-digest kir-digest
                                                :compiler-version compiler-version}

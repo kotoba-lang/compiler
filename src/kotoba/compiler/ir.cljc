@@ -51,6 +51,17 @@
       (catch #?(:clj Exception :cljs :default) error
         (trap! :invalid-map-value {:position position :message (ex-message error)})))
 
+    :bool
+    (when-not (boolean? runtime-value)
+      (trap! :value-type-mismatch {:expected :bool :position position}))
+
+    :option-i64
+    (try
+      (value/bounded-option-i64! runtime-value)
+      (catch #?(:clj Exception :cljs :default) error
+        (trap! :invalid-option-i64-value
+               {:position position :message (ex-message error)})))
+
     (trap! :unsupported-value-type {:type type :position position}))
   runtime-value)
 
@@ -140,6 +151,7 @@
     (value/bounded-string! form value/string-literal-byte-limit)
     (keyword? form)
     (value/bounded-keyword! form value/keyword-value-byte-limit)
+    (boolean? form) form
     (symbol? form) (if (contains? env form)
                      (get env form)
                      (trap! :unbound-symbol {:symbol form}))
@@ -156,7 +168,9 @@
         (= op 'if)
         (let [[test then else] args
               test-value (eval-expr test env functions fuel heap call-stack cap-call)]
-          (eval-expr (if #?(:clj (zero? test-value) :cljs (i64/k-zero? test-value))
+          (eval-expr (if (if (boolean? test-value)
+                           (not test-value)
+                           #?(:clj (zero? test-value) :cljs (i64/k-zero? test-value)))
                        else then)
                      env functions fuel heap call-stack cap-call))
 
@@ -218,6 +232,27 @@
               result (reduce (fn [current [key item]] (assoc current key item))
                              (value/bounded-map! map-value) (partition 2 values))]
           (value/bounded-map! result))
+
+        (= op 'bool-not)
+        (not (eval-expr (first args) env functions fuel heap call-stack cap-call))
+
+        (= op 'option-some)
+        [true (eval-expr (first args) env functions fuel heap call-stack cap-call)]
+
+        (= op 'option-none) [false]
+
+        (= op 'option-some?)
+        (let [option (value/bounded-option-i64!
+                      (eval-expr (first args) env functions fuel heap call-stack cap-call))]
+          (true? (first option)))
+
+        (= op 'option-value)
+        (let [[option-form fallback-form] args
+              option (value/bounded-option-i64!
+                      (eval-expr option-form env functions fuel heap call-stack cap-call))]
+          (if (first option)
+            (second option)
+            (eval-expr fallback-form env functions fuel heap call-stack cap-call)))
 
         (contains? '#{kernel-load-u8 kernel-load-u8-4k kernel-load-u8-16k
                       kernel-store-u8 kernel-store-u8-4k
@@ -312,6 +347,9 @@
          :string (value/bounded-string! arg value/string-value-byte-limit)
          :keyword (value/bounded-keyword! arg value/keyword-value-byte-limit)
          :map (value/bounded-map! arg)
+         :bool (when-not (boolean? arg)
+                 (throw (ex-info "argument must be a boolean" {:phase :ir :arg arg})))
+         :option-i64 (value/bounded-option-i64! arg)
          (throw (ex-info "argument type is unsupported" {:phase :ir :type type}))))
      (invoke-function function
                        (mapv (fn [arg type]

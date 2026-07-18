@@ -27,3 +27,10 @@
                         (value/bounded-map!
                          (into {} (map (fn [index] [(keyword (str "k" index)) index])
                                        (range 129)))))))
+
+(deftest option-i64-has-an-explicit-bounded-tagged-representation
+  (is (= [false] (value/bounded-option-i64! [false])))
+  (is (= [true 7] (value/bounded-option-i64! [true 7])))
+  (doseq [invalid [nil 0 false [] [false 1] [true] [true "7"] [nil 7]]]
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (value/bounded-option-i64! invalid)))))
