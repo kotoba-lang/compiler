@@ -62,6 +62,13 @@
         (trap! :invalid-option-i64-value
                {:position position :message (ex-message error)})))
 
+    :result-i64
+    (try
+      (value/bounded-result-i64! runtime-value)
+      (catch #?(:clj Exception :cljs :default) error
+        (trap! :invalid-result-i64-value
+               {:position position :message (ex-message error)})))
+
     :vector-i64
     (try
       (value/bounded-vector-i64! runtime-value)
@@ -261,6 +268,26 @@
             (second option)
             (eval-expr fallback-form env functions fuel heap call-stack cap-call)))
 
+        (= op 'result-ok)
+        [true (eval-expr (first args) env functions fuel heap call-stack cap-call)]
+
+        (= op 'result-err)
+        [false (eval-expr (first args) env functions fuel heap call-stack cap-call)]
+
+        (= op 'result-ok?)
+        (let [result (value/bounded-result-i64!
+                      (eval-expr (first args) env functions fuel heap call-stack cap-call))]
+          (true? (first result)))
+
+        (contains? '#{result-value result-error} op)
+        (let [[result-form fallback-form] args
+              result (value/bounded-result-i64!
+                      (eval-expr result-form env functions fuel heap call-stack cap-call))
+              selected? (if (= op 'result-value) (first result) (not (first result)))]
+          (if selected?
+            (second result)
+            (eval-expr fallback-form env functions fuel heap call-stack cap-call)))
+
         (= op 'vector-new)
         (value/bounded-vector-i64!
          (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args))
@@ -415,6 +442,7 @@
          :bool (when-not (boolean? arg)
                  (throw (ex-info "argument must be a boolean" {:phase :ir :arg arg})))
          :option-i64 (value/bounded-option-i64! arg)
+         :result-i64 (value/bounded-result-i64! arg)
          :vector-i64 (value/bounded-vector-i64! arg)
          (throw (ex-info "argument type is unsupported" {:phase :ir :type type}))))
      (let [invoke #(invoke-function function

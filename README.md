@@ -156,7 +156,7 @@ type follows the parameter vector:
 ```
 
 This lowers to checked `kotoba.kir/v4`; `:string`, `:keyword`, `:map`, `:bool`,
-`:option-i64`, and `:i64` remain distinct in
+`:option-i64`, `:result-i64`, and `:i64` remain distinct in
 every function signature. The admitted string surface is deliberately small:
 `string-concat`, `string=?`, and `string-byte-length`. Literals must be
 well-formed UTF-16 and at most 4,096 UTF-8 bytes, all module literals together
@@ -176,6 +176,14 @@ to the none case of `:option-i64`; `(some value)`, `some?`, `nil?`, and
 `option-value` operate on an explicit bounded option. Web host values use
 frozen `[false]` or `[true, bigint]` tags. Host null/undefined, malformed tags,
 integer sentinels, and non-i64 payloads fail closed.
+
+The first algebraic-result profile is `:result-i64`. `(result-ok value)` and
+`(result-err error)` each carry exactly one signed-i64 payload;
+`result-ok?`, `result-value`, and `result-error` inspect it without host
+truthiness or sentinels, and the two projections evaluate their fallback only
+for the opposite variant. Its Web ABI is frozen `[true, bigint]` or
+`[false, bigint]`. This closes a monomorphic tagged-union ABI foundation; it
+does not yet admit generic or recursive ADTs.
 
 The first bounded sequential collection is `:vector-i64`, constructed
 explicitly with `(vector-i64 ...)` and capped at 128 items. `vector-count`,

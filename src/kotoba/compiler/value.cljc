@@ -95,6 +95,19 @@
         (throw (ex-info "option payload is not a signed i64" {:phase :value})))
       [true item])))
 
+(defn bounded-result-i64!
+  "Validate the first algebraic-result profile. `[true value]` is ok and
+  `[false error]` is err; both variants carry exactly one signed-i64 payload."
+  [value]
+  (when-not (and (vector? value) (= 2 (count value)) (boolean? (first value)))
+    (throw (ex-info "value is not a tagged result-i64"
+                    {:phase :value :value value})))
+  (let [item (second value)]
+    (when-not #?(:clj (and (integer? item) (<= Long/MIN_VALUE item Long/MAX_VALUE))
+                 :cljs (and (i64/bigint-value? item) (i64/in-i64-range? item)))
+      (throw (ex-info "result payload is not a signed i64" {:phase :value})))
+    [(first value) item]))
+
 (defn bounded-vector-i64!
   "Validate and return the first bounded sequential collection profile."
   [value]

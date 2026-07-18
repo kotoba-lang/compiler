@@ -4,6 +4,7 @@
   and keyword/map literals + get/assoc (new, desugared entirely to the
   existing heap-pair/list primitives -- no backend/codegen change)."
   (:require [clojure.test :refer [deftest is testing]]
+            [clojure.string :as str]
             [clojure.java.shell :as shell]
             [kotoba.compiler.core :as compiler]
             [kotoba.compiler.frontend :as frontend]
@@ -164,6 +165,29 @@
     (is (= '(map-get (map-new :a 1) :a 0)
            (get-in kir [:functions 0 :body])))
     (is (= 1 (ir/execute kir 'main [])))))
+
+(deftest result-i64-has-owned-source-reference-and-web-semantics
+  (let [source "(ns result.pilot (:export [ok? value error same?]))
+                (defn ok? [r :result-i64] :bool (result-ok? r))
+                (defn value [r :result-i64] (result-value r 99))
+                (defn error [r :result-i64] (result-error r 98))
+                (defn same? [a :result-i64 b :result-i64] (= a b))"
+        compiled (compiler/compile-source source :js-kotoba-v1)
+        kir (:kir compiled)]
+    (is (true? (ir/execute kir 'ok? [[true 7]])))
+    (is (false? (ir/execute kir 'ok? [[false 12]])))
+    (is (= 7 (ir/execute kir 'value [[true 7]])))
+    (is (= 99 (ir/execute kir 'value [[false 12]])))
+    (is (= 12 (ir/execute kir 'error [[false 12]])))
+    (is (= 98 (ir/execute kir 'error [[true 7]])))
+    (is (= 1 (ir/execute kir 'same? [[false 12] [false 12]])))
+    (is (= 2 (get-in compiled [:manifest :kotoba.artifact/limits :result-i64-slots])))
+    (is (str/includes? (:source compiled) "resultProfile:'tagged-i64-i64-v1'")))
+  (is (some? (rejection-message "(defn bad [] :result-i64 1)")))
+  (is (some? (rejection-message "(defn bad [] (result-ok true))")))
+  (doseq [target (remove #(= :js-kotoba-v1 (target/backend %)) compiler/supported-targets)]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"require the kotoba-script web target"
+                          (compiler/compile-source "(defn main [] :result-i64 (result-ok 1))" target)))))
 
 (deftest bounded-map-host-abi-runs-through-compiler-and-kotoba-script
   (let [source "(ns pilot.map (:export [lookup update]))

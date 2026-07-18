@@ -296,7 +296,7 @@ targets reject an entryless module. This target gate prevents a library-shaped
 source unit from silently acquiring different execution semantics across
 native, Wasm, or ClojureScript backends.
 
-Typed string, keyword, bounded-map, boolean, or option-i64 source advances HIR to `kotoba.hir/v3` and KIR to
+Typed string, keyword, bounded-map, boolean, option-i64, or result-i64 source advances HIR to `kotoba.hir/v3` and KIR to
 `kotoba.kir/v4`. Function `:param-types` and `:result` are checked before
 lowering and checked again by kotoba-script; the artifact seals the
 `kotoba.value/typed-v1` profile and its 4 KiB literal / 64 KiB module and value
@@ -304,6 +304,10 @@ limits, plus 512-byte keywords and maps of at most 128 unique keyword-to-i64
 entries. Strict booleans and a fixed one-or-two-slot tagged option-i64 ABI add
 no unbounded allocation; none and some are represented as frozen `[false]`
 and `[true, bigint]` values, never host null/undefined or integer sentinels.
+A fixed two-slot result-i64 tagged union similarly carries one signed-i64
+payload for both ok and err, with lazy opposite-variant fallbacks. It is the
+bounded monomorphic foundation for later generic ADTs, not a recursive value
+container.
 The first sequential collection profile is an explicitly constructed,
 128-item `vector<i64>` with signed-i64 element checks, frozen Web host values,
 lazy out-of-range lookup fallback, and persistent assoc/conj updates.
