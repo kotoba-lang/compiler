@@ -316,6 +316,16 @@
              payload-type
              (eval-expr fallback-form env functions fuel heap call-stack cap-call))))
 
+        (= op 'result-match-of)
+        (let [[type result-form ok-name ok-body err-name err-body] args
+              result (value/bounded-typed-value!
+                      type (eval-expr result-form env functions fuel heap call-stack cap-call))]
+          (if (first result)
+            (eval-expr ok-body (assoc env ok-name (second result))
+                       functions fuel heap call-stack cap-call)
+            (eval-expr err-body (assoc env err-name (second result))
+                       functions fuel heap call-stack cap-call)))
+
         (= op 'vector-new)
         (value/bounded-vector-i64!
          (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args))

@@ -97,7 +97,8 @@
   '{bool-not 1 option-some 1 option-none 0 option-some? 1 option-value 2
     result-ok 1 result-err 1 result-ok? 1 result-value 2 result-error 2})
 (def parametric-result-operations
-  '{result-ok-of 2 result-err-of 2 result-ok?-of 2 result-value-of 3 result-error-of 3})
+  '{result-ok-of 2 result-err-of 2 result-ok?-of 2 result-value-of 3 result-error-of 3
+    result-match-of 6})
 (def typed-vector-operations
   '{vector-count 1 vector-get 3 vector-at 2 vector-drop 2 vector-assoc 3 vector-conj 2})
 (def sequencing-operations '#{do})
@@ -111,7 +112,7 @@
              (set (keys parametric-result-operations))
              (set (keys typed-vector-operations))
              (set (keys string-operations))
-             '#{let if cap-call ns defn defn- some some? nil? vector-i64 vector-new}))
+             '#{let if cap-call ns defn defn- some some? nil? vector-i64 vector-new match-result}))
 (def max-functions 1024)
 (def max-expression-nodes 50000)
 (def max-lowered-nodes 100000)
@@ -701,6 +702,20 @@
         vector-i64 (do (when (> (count args) value/vector-item-limit)
                          (reject! "vector-i64 exceeds item limit" form))
                        (apply list 'vector-new (map desugar-expr args)))
+        match-result
+        (do
+          (when-not (= 4 (count args))
+            (reject! "match-result requires value, type, ok branch, and err branch" form))
+          (let [[result type ok-branch err-branch] args]
+            (when-not (and (seq? ok-branch) (= 3 (count ok-branch))
+                           (= 'ok (first ok-branch)) (symbol? (second ok-branch)))
+              (reject! "match-result requires exactly one (ok binder body) branch" form))
+            (when-not (and (seq? err-branch) (= 3 (count err-branch))
+                           (= 'err (first err-branch)) (symbol? (second err-branch)))
+              (reject! "match-result requires exactly one (err binder body) branch" form))
+            (list 'result-match-of type (desugar-expr result)
+                  (second ok-branch) (desugar-expr (nth ok-branch 2))
+                  (second err-branch) (desugar-expr (nth err-branch 2)))))
         result-ok-of (do (when-not (= 2 (count args)) (reject! "result-ok-of requires type and payload" form))
                          (list 'result-ok-of (first args) (desugar-expr (second args))))
         result-err-of (do (when-not (= 2 (count args)) (reject! "result-err-of requires type and payload" form))
@@ -845,6 +860,20 @@
         (do (when-not (= (get typed-safe-value-operations op) (count args))
               (reject! "typed safe-value operation arity mismatch" form))
             (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
+        (= op 'result-match-of)
+        (let [[type result ok-name ok-body err-name err-body] args]
+          (when-not (= 6 (count args))
+            (reject! "result-match-of shape is invalid" form))
+          (when-not (parametric-result-type? type)
+            (reject! "result match requires [:result ok-type err-type]" form))
+          (validate-value-type! type)
+          (when-not (and (symbol? ok-name) (nil? (namespace ok-name))
+                         (symbol? err-name) (nil? (namespace err-name)))
+            (reject! "result match binders must be unqualified symbols" form))
+          (validate-expr result locals functions (inc depth) budget)
+          (validate-expr ok-body (conj locals ok-name) functions (inc depth) budget)
+          (validate-expr err-body (conj locals err-name) functions (inc depth) budget))
 
         (contains? parametric-result-operations op)
         (do (when-not (= (get parametric-result-operations op) (count args))
@@ -1089,6 +1118,15 @@
           (require-expression-type! (infer-expression-type fallback locals signatures)
                                     (nth type 2) fallback)
           (nth type 2))
+        result-match-of
+        (let [[type result ok-name ok-body err-name err-body] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type result locals signatures) type result)
+          (let [ok-type (infer-expression-type ok-body (assoc locals ok-name (second type)) signatures)
+                err-type (infer-expression-type err-body (assoc locals err-name (nth type 2)) signatures)]
+            (when-not (= ok-type err-type)
+              (reject! "result match branches must have the same value type" form))
+            ok-type))
         (infer-call-type op args locals signatures)))
     :else (reject! "value has no admitted type" form)))
 

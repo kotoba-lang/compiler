@@ -190,6 +190,10 @@ projections are the explicit `result-*-of` forms and always carry the same
 descriptor, so neither the frontend nor generated JavaScript guesses types
 from host shapes. Descriptors and nested runtime payloads are capped at depth
 8 and 64 nodes and are revalidated at every function/export boundary.
+`match-result` requires the canonical pair of `(ok binder body)` and
+`(err binder body)` branches. Binder types come from the descriptor, branch
+result types must agree, and only the selected branch is evaluated; omitted,
+duplicated, reordered, or ill-typed branches fail during checking.
 
 The first bounded sequential collection is `:vector-i64`, constructed
 explicitly with `(vector-i64 ...)` and capped at 128 items. `vector-count`,
