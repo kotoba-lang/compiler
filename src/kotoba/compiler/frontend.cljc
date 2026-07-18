@@ -12,10 +12,27 @@
                 :cljs [[kotoba.compiler.kotoba-reader :as kr]
                        [kotoba.compiler.cljs-i64 :as i64]])))
 
+(defn- load-catalog-forbidden
+  "P0: merge catalog forbidden-heads when guest-grammar.edn is on classpath."
+  []
+  #?(:clj
+     (try
+       (let [c (or (clojure.java.io/resource "kotoba/lang/guest-grammar.edn")
+                   (clojure.java.io/resource "lang/guest-grammar.edn"))]
+         (if c
+           (with-open [r (clojure.java.io/reader c)]
+             (let [edn (clojure.edn/read (java.io.PushbackReader. r))
+                   heads (:forbidden-heads edn #{})]
+               (into #{} (map (fn [x] (if (symbol? x) x (symbol (name x))))) heads)))
+           #{}))
+       (catch Exception _ #{}))
+     :cljs #{}))
+
 (def forbidden-heads
-  '#{eval load load-file require use import ns-resolve resolve alter-var-root
-     future pmap agent send send-off new . .. set! defmacro throw try catch
-     locking dosync atom ref volatile!})
+  (into '#{eval load load-file require use import ns-resolve resolve alter-var-root
+           future pmap agent send send-off new . .. set! defmacro throw try catch
+           locking dosync atom ref volatile!}
+        (load-catalog-forbidden)))
 
 (def arithmetic '#{+ - * quot bit-xor bit-and})
 (def comparisons '#{= < > <= >=})
@@ -41,6 +58,7 @@
 ;; WASM-linear-memory-managed by the guest itself.
 (def logical-operations '#{and or when})
 (def map-operations '#{get assoc})
+(def sequencing-operations '#{do})
 (def string-operations '{string-byte-length 1 string=? 2 string-concat 2})
 (def reserved-function-names
   (set/union forbidden-heads arithmetic comparisons (set (keys heap-operations))
@@ -224,6 +242,17 @@
     :else (let [tmp (gensym "or-tmp__")]
             (list 'let [tmp (desugar-expr (first args))]
                   (list 'if tmp tmp (desugar-or (rest args)))))))
+
+
+(defn- desugar-do
+  "ADR-2607180900 L2: `(do a b c)` -> nested `let` returning last expression."
+  [args]
+  (cond
+    (empty? args) 0
+    (empty? (rest args)) (desugar-expr (first args))
+    :else (let [tmp (gensym "do-tmp__")]
+            (list 'let [tmp (desugar-expr (first args))]
+                  (desugar-do (rest args))))))
 
 (defn- fnv1a-i64
   "Deterministic 64-bit FNV-1a hash of S's UTF-8 bytes, used to intern
@@ -560,9 +589,13 @@
                  (list '< (desugar-expr (first args)) 0))
         and (desugar-and args)
         or (desugar-or args)
-        when (do (when-not (= 2 (count args))
-                   (reject! "when requires a test and exactly one result expression (this profile has no `do`, unlike kotoba-lang/kotoba's)" form))
-                 (list 'if (desugar-expr (first args)) (desugar-expr (second args)) 0))
+        when (do (when (empty? args)
+                   (reject! "when requires a test expression" form))
+                 (let [[test & body] args
+                       then (if (= 1 (count body))
+                              (desugar-expr (first body))
+                              (list* 'do (mapv desugar-expr body)))]
+                   (list 'if (desugar-expr test) then 0)))
         get (do (when-not (<= 2 (count args) 3)
                   (reject! "get requires a map, a key, and an optional default" form))
                 (let [[m k default] args]
