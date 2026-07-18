@@ -221,6 +221,14 @@ the projected/replacement type static. Updates return a new frozen value, and
 JavaScript object identity. Dynamic indexes, sparse values, append/drop, and
 host mutation are not admitted.
 
+Typed sets use `[:set item-type]` and at most 32 values inside the shared
+depth/node budget. Canonical values are `[descriptor, sorted-items]` with
+recursive type validation, a language-owned total order across every admitted
+value family, frozen Web arrays, and duplicate rejection. `(typed-set
+descriptor ...)`, count, membership, idempotent insertion, removal, and
+structural equality preserve this representation without observing host
+insertion order or object identity.
+
 The first bounded sequential collection is `:vector-i64`, constructed
 explicitly with `(vector-i64 ...)` and capped at 128 items. `vector-count`,
 `vector-get`, `vector-assoc`, and `vector-conj` preserve signed-i64 elements;

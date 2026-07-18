@@ -10,6 +10,7 @@
 (def adt-node-limit 64)
 (def variant-case-limit 32)
 (def heterogeneous-vector-item-limit 32)
+(def typed-set-item-limit 32)
 
 (defn utf8-byte-count!
   "Return the exact UTF-8 byte count without normalizing or replacing malformed
@@ -159,6 +160,9 @@
        (doseq [item-type item-types]
          (validate-value-type! item-type (inc depth) nodes))
        type)
+     (and (vector? type) (= 2 (count type)) (= :set (first type)))
+     (do (validate-value-type! (second type) (inc depth) nodes)
+         type)
      (and (vector? type) (= 3 (count type)) (= :variant (first type)))
      (let [[_ type-id cases] type]
        (when-not (and (keyword? type-id) (namespace type-id))
@@ -175,6 +179,74 @@
        type)
      :else (throw (ex-info "value type is outside the safe profile"
                            {:phase :value :type type})))))
+
+(declare compare-typed-values)
+
+(defn- compare-sequences [types left right]
+  (loop [remaining-types (seq types) left-items (seq left) right-items (seq right)]
+    (cond
+      (and (nil? left-items) (nil? right-items)) 0
+      (nil? left-items) -1
+      (nil? right-items) 1
+      :else (let [comparison (compare-typed-values (first remaining-types)
+                                                   (first left-items) (first right-items))]
+              (if (zero? comparison)
+                (recur (next remaining-types) (next left-items) (next right-items))
+                comparison)))))
+
+(defn compare-typed-values
+  "Language-owned total order for already validated values of one type."
+  [type left right]
+  (case type
+    :i64 (compare left right)
+    :string (compare left right)
+    :keyword (compare (str left) (str right))
+    :bool (compare left right)
+    :option-i64 (if (= (first left) (first right))
+                  (if (first left) (compare (second left) (second right)) 0)
+                  (if (first left) 1 -1))
+    :result-i64 (if (= (first left) (first right))
+                  (compare (second left) (second right))
+                  (if (first left) 1 -1))
+    :vector-i64 (compare-sequences (repeat (max (count left) (count right)) :i64)
+                                   left right)
+    :map (let [left-items (mapcat identity left)
+               right-items (mapcat identity right)
+               types (cycle [:keyword :i64])]
+           (compare-sequences types left-items right-items))
+    (cond
+      (= :option (first type))
+      (if (= (second left) (second right))
+        (if (second left)
+          (compare-typed-values (second type) (nth left 2) (nth right 2)) 0)
+        (if (second left) 1 -1))
+
+      (= :result (first type))
+      (if (= (first left) (first right))
+        (compare-typed-values (if (first left) (second type) (nth type 2))
+                              (second left) (second right))
+        (if (first left) 1 -1))
+
+      (= :variant (first type))
+      (let [cases (nth type 2)
+            indexes (zipmap (map first cases) (range))
+            left-index (get indexes (second left))
+            right-index (get indexes (second right))]
+        (if (= left-index right-index)
+          (compare-typed-values (second (nth cases left-index))
+                                (nth left 2) (nth right 2))
+          (compare left-index right-index)))
+
+      (= :vector (first type))
+      (compare-sequences (second type) (rest left) (rest right))
+
+      (= :set (first type))
+      (compare-sequences (repeat (max (count (second left)) (count (second right)))
+                                 (second type))
+                         (second left) (second right))
+
+      :else (throw (ex-info "value type has no canonical order"
+                            {:phase :value :type type})))))
 
 (defn bounded-typed-value!
   "Validate a value under a canonical possibly-parametric type descriptor.
@@ -241,5 +313,21 @@
                (map (fn [item-type item]
                       (bounded-typed-value! item-type item (inc depth) nodes))
                     item-types (rest value))))
+
+       (= :set (first type))
+       (let [item-type (second type)]
+         (when-not (and (vector? value) (= 2 (count value)) (= type (first value))
+                        (vector? (second value))
+                        (<= (count (second value)) typed-set-item-limit))
+           (throw (ex-info "value is not the declared typed set"
+                           {:phase :value :limit typed-set-item-limit})))
+         (let [items (mapv #(bounded-typed-value! item-type % (inc depth) nodes)
+                           (second value))
+               sorted-items (vec (sort #(compare-typed-values item-type %1 %2) items))]
+           (when (some (fn [[left right]]
+                         (zero? (compare-typed-values item-type left right)))
+                       (partition 2 1 sorted-items))
+             (throw (ex-info "typed set contains a duplicate item" {:phase :value})))
+           [type sorted-items]))
 
        :else (throw (ex-info "value type is outside the safe profile" {:phase :value}))))))

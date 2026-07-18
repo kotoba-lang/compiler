@@ -331,6 +331,11 @@ sequence; boundary validation checks descriptor identity, length, and each
 position recursively. Projection and persistent replacement admit only a
 statically in-range literal index, and equality is validated structural
 equality rather than host object identity.
+Typed sets use `[:set item-type]` with at most 32 recursively validated unique
+items. A language-owned total order canonicalizes the item vector independently
+of construction order. Boundaries reject duplicate, oversized, malformed and
+cross-descriptor values; membership and persistent insert/remove operate only
+on the canonical representation.
 The first sequential collection profile is an explicitly constructed,
 128-item `vector<i64>` with signed-i64 element checks, frozen Web host values,
 lazy out-of-range lookup fallback, and persistent assoc/conj updates.

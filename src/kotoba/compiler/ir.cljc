@@ -412,6 +412,65 @@
           #?(:clj (if (= left right) 1 0)
              :cljs (if (= left right) i64/one i64/zero)))
 
+        (= op 'typed-set-new)
+        (let [[type & item-forms] args
+              items (mapv #(eval-expr % env functions fuel heap call-stack cap-call)
+                          item-forms)]
+          (value/bounded-typed-value! type [type items]))
+
+        (= op 'typed-set-count)
+        (let [[type value-form] args
+              set-value (value/bounded-typed-value!
+                         type (eval-expr value-form env functions fuel heap call-stack cap-call))]
+          #?(:clj (long (count (second set-value)))
+             :cljs (i64/->bigint (count (second set-value)))))
+
+        (= op 'typed-set-contains)
+        (let [[type value-form item-form] args
+              set-value (value/bounded-typed-value!
+                         type (eval-expr value-form env functions fuel heap call-stack cap-call))
+              item (value/bounded-typed-value!
+                    (second type)
+                    (eval-expr item-form env functions fuel heap call-stack cap-call))]
+          (boolean (some #(zero? (value/compare-typed-values (second type) % item))
+                         (second set-value))))
+
+        (= op 'typed-set-conj)
+        (let [[type value-form item-form] args
+              set-value (value/bounded-typed-value!
+                         type (eval-expr value-form env functions fuel heap call-stack cap-call))
+              item (value/bounded-typed-value!
+                    (second type)
+                    (eval-expr item-form env functions fuel heap call-stack cap-call))]
+          (if (some #(zero? (value/compare-typed-values (second type) % item))
+                    (second set-value))
+            set-value
+            (do (when (>= (count (second set-value)) value/typed-set-item-limit)
+                  (trap! :set-too-large {:limit value/typed-set-item-limit}))
+                (value/bounded-typed-value!
+                 type [type (conj (second set-value) item)]))))
+
+        (= op 'typed-set-disj)
+        (let [[type value-form item-form] args
+              set-value (value/bounded-typed-value!
+                         type (eval-expr value-form env functions fuel heap call-stack cap-call))
+              item (value/bounded-typed-value!
+                    (second type)
+                    (eval-expr item-form env functions fuel heap call-stack cap-call))]
+          (value/bounded-typed-value!
+           type [type (filterv #(not (zero? (value/compare-typed-values
+                                             (second type) % item)))
+                               (second set-value))]))
+
+        (= op 'typed-set-equal)
+        (let [[type left-form right-form] args
+              left (value/bounded-typed-value!
+                    type (eval-expr left-form env functions fuel heap call-stack cap-call))
+              right (value/bounded-typed-value!
+                     type (eval-expr right-form env functions fuel heap call-stack cap-call))]
+          #?(:clj (if (= left right) 1 0)
+             :cljs (if (= left right) i64/one i64/zero)))
+
         (= op 'vector-new)
         (value/bounded-vector-i64!
          (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args))
