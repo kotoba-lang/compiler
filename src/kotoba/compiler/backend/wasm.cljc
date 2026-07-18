@@ -162,6 +162,18 @@
                       (i32-const index)
                       [0x10 (get intrinsic-indices
                                  (if (= item-type :i64) 'typed-get-i64 'typed-get-ref))]))
+            (emit-bool [code]
+              (concat code [0x10 (get intrinsic-indices 'typed-bool)]))
+            (emit-equal [type left right env]
+              (concat (i32-const (descriptor-id type))
+                      (emit* left env) (emit* right env)
+                      [0x10 (get intrinsic-indices 'typed-equal) 0xad]))
+            (emit-assoc [type value index replacement replacement-type env]
+              (concat (i32-const (descriptor-id type)) (emit* value env)
+                      (i32-const index) (emit* replacement env)
+                      [0x10 (get intrinsic-indices
+                                 (if (= replacement-type :i64)
+                                   'typed-assoc-i64 'typed-assoc-ref))]))
             (emit-match [type value-form branches env]
               (let [value-local (allocate! 0x6f)
                     tag-local (allocate! 0x7f)
@@ -298,6 +310,48 @@
                           index (first (keep-indexed #(when (= field (first %2)) %1) (nth type 2)))
                           item-type (second (nth (nth type 2) index))]
                       (emit-get type value index item-type env))
+                    (contains? '#{option-some?-of result-ok?-of} op)
+                    (let [[type value] args]
+                      (emit-bool (concat (i32-const (descriptor-id type)) (emit* value env)
+                                         [0x10 (get intrinsic-indices 'typed-tag)])))
+                    (contains? '#{option-value-of result-value-of result-error-of} op)
+                    (let [[type value fallback] args
+                          wanted (if (= op 'result-error-of) 0 1)
+                          payload-type (case op
+                                         option-value-of (second type)
+                                         result-value-of (second type)
+                                         result-error-of (nth type 2))
+                          value-local (allocate! 0x6f)]
+                      (concat (emit* value env) [0x21 value-local]
+                              (i32-const (descriptor-id type)) [0x20 value-local]
+                              [0x10 (get intrinsic-indices 'typed-tag)]
+                              (i32-const wanted) [0x46 0x04 (typed/wasm-type payload-type)]
+                              (emit-get type {:wasm-local value-local} 0 payload-type env)
+                              [0x05] (emit* fallback env) [0x0b]))
+                    (= op 'hetero-vector-assoc)
+                    (let [[type value index replacement] args]
+                      (emit-assoc type value index replacement (nth (second type) index) env))
+                    (= op 'record-assoc)
+                    (let [[type value field replacement] args
+                          index (first (keep-indexed #(when (= field (first %2)) %1) (nth type 2)))
+                          replacement-type (second (nth (nth type 2) index))]
+                      (emit-assoc type value index replacement replacement-type env))
+                    (contains? '#{hetero-vector-equal typed-set-equal record-equal} op)
+                    (let [[type left right] args] (emit-equal type left right env))
+                    (contains? '#{typed-set-contains typed-set-conj typed-set-disj} op)
+                    (let [[type value item] args
+                          item-type (second type)
+                          operation ({'typed-set-contains 0 'typed-set-conj 1 'typed-set-disj 2} op)
+                          contains? (= op 'typed-set-contains)
+                          code (concat (i32-const (descriptor-id type)) (emit* value env)
+                                       (when-not contains? (i32-const operation)) (emit* item env)
+                                       [0x10 (get intrinsic-indices
+                                                  (if contains?
+                                                    (if (= item-type :i64)
+                                                      'typed-set-contains-i64 'typed-set-contains-ref)
+                                                    (if (= item-type :i64)
+                                                      'typed-set-op-i64 'typed-set-op-ref)))])]
+                      (if (= op 'typed-set-contains) (emit-bool code) code))
                     (contains? '#{hetero-vector-count typed-set-count} op)
                     (let [[type value] args]
                       (concat (i32-const (descriptor-id type)) (emit* value env)
@@ -373,7 +427,15 @@
                          ['typed-tag "kotoba:typed" "tag" [0x60 2 0x7f 0x6f 1 0x7f]]
                          ['typed-get-i64 "kotoba:typed" "get-i64" [0x60 3 0x7f 0x6f 0x7f 1 0x7e]]
                          ['typed-get-ref "kotoba:typed" "get-ref" [0x60 3 0x7f 0x6f 0x7f 1 0x6f]]
-                         ['typed-count "kotoba:typed" "count" [0x60 2 0x7f 0x6f 1 0x7e]]])
+                         ['typed-count "kotoba:typed" "count" [0x60 2 0x7f 0x6f 1 0x7e]]
+                         ['typed-bool "kotoba:typed" "bool" [0x60 1 0x7f 1 0x6f]]
+                         ['typed-equal "kotoba:typed" "equal" [0x60 3 0x7f 0x6f 0x6f 1 0x7f]]
+                         ['typed-assoc-i64 "kotoba:typed" "assoc-i64" [0x60 4 0x7f 0x6f 0x7f 0x7e 1 0x6f]]
+                         ['typed-assoc-ref "kotoba:typed" "assoc-ref" [0x60 4 0x7f 0x6f 0x7f 0x6f 1 0x6f]]
+                         ['typed-set-op-i64 "kotoba:typed" "set-op-i64" [0x60 4 0x7f 0x6f 0x7f 0x7e 1 0x6f]]
+                         ['typed-set-op-ref "kotoba:typed" "set-op-ref" [0x60 4 0x7f 0x6f 0x7f 0x6f 1 0x6f]]
+                         ['typed-set-contains-i64 "kotoba:typed" "set-contains-i64" [0x60 3 0x7f 0x6f 0x7e 1 0x7f]]
+                         ['typed-set-contains-ref "kotoba:typed" "set-contains-ref" [0x60 3 0x7f 0x6f 0x6f 1 0x7f]]])
         imports (vec (concat typed-imports
                       (when has-cap? [['cap-call "kotoba:cap" "call"
                                        [0x60 2 0x7e 0x7e 1 0x7e]]])

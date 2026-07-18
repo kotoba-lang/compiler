@@ -17,7 +17,15 @@ const ALLOWED_IMPORTS = new Set([
   "kotoba:typed/tag/function",
   "kotoba:typed/get-i64/function",
   "kotoba:typed/get-ref/function",
-  "kotoba:typed/count/function"
+  "kotoba:typed/count/function",
+  "kotoba:typed/bool/function",
+  "kotoba:typed/equal/function",
+  "kotoba:typed/assoc-i64/function",
+  "kotoba:typed/assoc-ref/function",
+  "kotoba:typed/set-op-i64/function",
+  "kotoba:typed/set-op-ref/function",
+  "kotoba:typed/set-contains-i64/function",
+  "kotoba:typed/set-contains-ref/function"
 ]);
 
 export class KotobaHostError extends Error {
@@ -410,8 +418,69 @@ function createTypedRuntime(abi) {
       if (descriptor[0] === "vector" || descriptor[0] === "record") return BigInt(checked.length - 1);
       if (descriptor[0] === "set") return BigInt(checked[1].length);
       reject("invalid-typed-operation", "count is not defined for this descriptor");
+    },
+    bool(value) { return value !== 0; },
+    equal(descriptorId, left, right) {
+      const descriptor = descriptorAt(descriptorId);
+      return compareValue(descriptor, assertValue(descriptor, left), assertValue(descriptor, right)) === 0 ? 1 : 0;
+    },
+    "assoc-i64"(descriptorId, value, index, replacement) {
+      return assoc(descriptorId, value, index, i64(replacement));
+    },
+    "assoc-ref"(descriptorId, value, index, replacement) {
+      return assoc(descriptorId, value, index, replacement);
+    },
+    "set-op-i64"(descriptorId, value, operation, item) {
+      return setOperation(descriptorId, value, operation, i64(item));
+    },
+    "set-op-ref"(descriptorId, value, operation, item) {
+      return setOperation(descriptorId, value, operation, item);
+    },
+    "set-contains-i64"(descriptorId, value, item) {
+      return setContains(descriptorId, value, i64(item)) ? 1 : 0;
+    },
+    "set-contains-ref"(descriptorId, value, item) {
+      return setContains(descriptorId, value, item) ? 1 : 0;
     }
   });
+  const assoc = (descriptorId, value, index, replacement) => {
+    const descriptor = descriptorAt(descriptorId);
+    const checked = assertValue(descriptor, value);
+    const types = descriptor[0] === "vector" ? descriptor[1]
+      : descriptor[0] === "record" ? descriptor[2].map(([, type]) => type) : null;
+    if (types === null || !Number.isInteger(index) || index < 0 || index >= types.length)
+      reject("invalid-typed-operation", "typed assoc index is invalid");
+    assertValue(types[index], replacement);
+    const result = [...checked];
+    result[index + 1] = replacement;
+    return assertValue(descriptor, Object.freeze(result));
+  };
+  const setOperation = (descriptorId, value, operation, item) => {
+    const descriptor = descriptorAt(descriptorId);
+    if (!Array.isArray(descriptor) || descriptor[0] !== "set")
+      reject("invalid-typed-operation", "set operation requires a set descriptor");
+    const checked = assertValue(descriptor, value);
+    assertValue(descriptor[1], item);
+    const found = checked[1].some(existing => compareValue(descriptor[1], existing, item) === 0);
+    if (operation === 0) return found;
+    let items;
+    if (operation === 1) {
+      if (found) return checked;
+      if (checked[1].length >= 32) reject("invalid-typed-set", "typed set item budget exceeded");
+      items = [...checked[1], item].sort((left, right) => compareValue(descriptor[1], left, right));
+    } else if (operation === 2) {
+      items = checked[1].filter(existing => compareValue(descriptor[1], existing, item) !== 0);
+    } else reject("invalid-typed-operation", "unknown typed set operation");
+    return assertValue(descriptor, Object.freeze([descriptor, Object.freeze(items)]));
+  };
+  const setContains = (descriptorId, value, item) => {
+    const descriptor = descriptorAt(descriptorId);
+    if (!Array.isArray(descriptor) || descriptor[0] !== "set")
+      reject("invalid-typed-operation", "set contains requires a set descriptor");
+    const checked = assertValue(descriptor, value);
+    assertValue(descriptor[1], item);
+    return checked[1].some(existing => compareValue(descriptor[1], existing, item) === 0);
+  };
   return Object.freeze({ imports });
 }
 

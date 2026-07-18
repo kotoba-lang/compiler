@@ -63,11 +63,50 @@
     (is (= #{:reference-types} (:wasm-features compiled)))
     (is (zero? (:exit probe)) (:err probe))))
 
-(deftest unqualified-typed-wasm-operations-fail-during-lowering
-  (is (thrown-with-msg?
-       clojure.lang.ExceptionInfo #"typed Wasm operation is not qualified"
-       (compiler/compile-source
-        "(defn main [] [:vector [:i64]]
-           (hetero-vector-assoc [:vector [:i64]]
-             (hetero-vector [:vector [:i64]] 1) 0 2))"
-        :wasm32-kotoba-v1))))
+(deftest algebraic-operations-have-sealed-wasm-runtime-parity
+  (let [source
+        "(ns typed.operations (:export [main check-option read-option check-result read-result
+                                        update-vector compare-vector set-has set-add set-remove compare-set
+                                        update-record compare-record]))
+         (defn main [] 0)
+         (defn check-option [] :bool (option-some?-of [:option :i64] (option-some-of [:option :i64] 7)))
+         (defn read-option [] :i64 (option-value-of [:option :i64] (option-some-of [:option :i64] 7) (quot 1 0)))
+         (defn check-result [] :bool (result-ok?-of [:result :i64 :string] (result-ok-of [:result :i64 :string] 8)))
+         (defn read-result [] :i64 (result-value-of [:result :i64 :string] (result-ok-of [:result :i64 :string] 8) (quot 1 0)))
+         (defn update-vector [] :string
+           (hetero-vector-at [:vector [:i64 :string]]
+             (hetero-vector-assoc [:vector [:i64 :string]]
+               (hetero-vector [:vector [:i64 :string]] 1 \"before\") 1 \"after\") 1))
+         (defn compare-vector [] :i64
+           (hetero-vector-equal [:vector [:i64 :string]]
+             (hetero-vector [:vector [:i64 :string]] 1 \"same\")
+             (hetero-vector [:vector [:i64 :string]] 1 \"same\")))
+         (defn set-has [] :bool
+           (typed-set-contains [:set :i64] (typed-set [:set :i64] 1 2) 2))
+         (defn set-add [] :i64
+           (typed-set-count [:set :i64]
+             (typed-set-conj [:set :i64] (typed-set [:set :i64] 1) 2)))
+         (defn set-remove [] :i64
+           (typed-set-count [:set :i64]
+             (typed-set-disj [:set :i64] (typed-set [:set :i64] 1 2) 1)))
+         (defn compare-set [] :i64
+           (typed-set-equal [:set :i64]
+             (typed-set [:set :i64] 2 1) (typed-set [:set :i64] 1 2)))
+         (defn update-record [] :i64
+           (record-get [:record :demo/person [[:name :string] [:age :i64]]]
+             (record-assoc [:record :demo/person [[:name :string] [:age :i64]]]
+               (record [:record :demo/person [[:name :string] [:age :i64]]] \"A\" 1) :age 2) :age))
+         (defn compare-record [] :i64
+           (record-equal [:record :demo/person [[:name :string] [:age :i64]]]
+             (record [:record :demo/person [[:name :string] [:age :i64]]] \"A\" 1)
+             (record [:record :demo/person [[:name :string] [:age :i64]]] \"A\" 1)))"
+        compiled (compiler/compile-source source :wasm32-kotoba-v1)
+        probe (node-probe
+               compiled
+               (str "const x=h.instance.exports;"
+                    "const expected={'check-option':true,'read-option':7n,'check-result':true,'read-result':8n,"
+                    "'update-vector':'after','compare-vector':1n,'set-has':true,'set-add':2n,"
+                    "'set-remove':1n,'compare-set':1n,'update-record':2n,'compare-record':1n};"
+                    "for(const [name,value] of Object.entries(expected))"
+                    "if(x[name]()!=value){console.error(name,x[name](),value);process.exit(2)}"))]
+    (is (zero? (:exit probe)) (:err probe))))

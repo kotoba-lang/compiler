@@ -152,9 +152,9 @@
         (contains? '#{+ - * quot cap-call pair pair-first pair-second
                       string-byte-length map-get vector-count vector-get
                       vector-at vector-slice hetero-vector-count typed-set-count} op) :i64
-        (contains? '#{= < > <= >= string=? bool-not option-some? result-ok?
-                      result-ok?-of option-some?-of hetero-vector-equal
-                      typed-set-contains typed-set-equal record-equal} op) :bool
+        (contains? '#{= < > <= >= hetero-vector-equal typed-set-equal record-equal} op) :i64
+        (contains? '#{string=? bool-not option-some? result-ok?
+                      result-ok?-of option-some?-of typed-set-contains} op) :bool
         (= op 'string-concat) :string
         (= op 'variant-new) (first args)
         (contains? '#{option-some-of option-none-of result-ok-of result-err-of
