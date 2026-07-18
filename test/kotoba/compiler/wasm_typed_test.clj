@@ -155,3 +155,16 @@
                     "if(x.main()!==42n||x['strings-match']()!==true||"
                     "x['keyword-match']()!==1n)process.exit(2);"))]
     (is (zero? (:exit probe)) (:err probe))))
+
+(deftest typed-if-needs-no-unsealed-synthetic-boolean-literal
+  (let [source
+        "(ns typed.import-like (:export [main]))
+         (defn covered? [items [:set :keyword]] :bool
+           (typed-set-contains [:set :keyword] items :ready))
+         (defn main [] :i64
+           (if (covered? (typed-set [:set :keyword] :ready)) 42 0))"
+        compiled (compiler/compile-source source :wasm32-kotoba-v1)
+        probe (node-probe compiled
+                          "if(h.instance.exports.main()!==42n)process.exit(2);")]
+    (is (not-any? #{[:bool true]} (typed/literal-table (:kir compiled))))
+    (is (zero? (:exit probe)) (:err probe))))
