@@ -2,6 +2,7 @@
   (:require [kotoba.compiler.frontend :as frontend]
             [kotoba.compiler.compatibility :as compatibility]
             [kotoba.compiler.provenance :as provenance]
+            [kotoba.compiler.cache :as cache]
             [kotoba.compiler.project :as project]
             [kotoba.compiler.ir :as ir]
             [kotoba.compiler.admission :as admission]
@@ -184,6 +185,13 @@
   ([source target policy emit-metadata]
    (provenance/attach source policy emit-metadata
                       (compile-source* source target policy emit-metadata))))
+
+(defn compile-source-cached
+  [source target policy build-metadata cache-entry trust now]
+  (if cache-entry
+    (cache/admit! source target policy build-metadata cache-entry trust now)
+    {:hit? false
+     :result (compile-source source target policy build-metadata)}))
 
 (defn compile-project
   "Compile a closed namespace-symbol -> source-text map without ambient lookup."
