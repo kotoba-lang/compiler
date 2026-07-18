@@ -19,6 +19,10 @@
   (try (compiler/check-source source) nil
        (catch clojure.lang.ExceptionInfo e (ex-message e))))
 
+(defn- unsupported-typed-targets []
+  (remove #(contains? #{:js-kotoba-v1 :wasm32-kotoba-v1} (target/backend %))
+          compiler/supported-targets))
+
 (deftest floating-point-policy-is-forbidden-versioned-and-artifact-sealed
   (let [source "(defn main [] 1)"
         results (mapv #(compiler/compile-source source %) compiler/supported-targets)
@@ -129,8 +133,7 @@
     (is (= 1 (ir/execute kir 'same? [[1 2] [1 2]])))
     (is (= 128 (get-in compiled [:manifest :kotoba.artifact/limits :vector-i64-items])))
     (is (zero? (:exit result)) (:err result))
-    (doseq [target-name (remove #(= :js-kotoba-v1 (target/backend %))
-                                compiler/supported-targets)]
+    (doseq [target-name (unsupported-typed-targets)]
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"require the kotoba-script web target"
                             (compiler/compile-source source target-name))))))
@@ -167,8 +170,7 @@
     (is (= 0 (ir/execute (:kir compiled) 'same? [:a :b])))
     (is (zero? (:exit result)) (:err result))
     (is (not (re-find #"fnv|1099511628211|3750763034362895579" js-source)))
-    (doseq [target (remove #(= :js-kotoba-v1 (target/backend %))
-                           compiler/supported-targets)]
+    (doseq [target (unsupported-typed-targets)]
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"require the kotoba-script web target"
                             (compiler/compile-source source target))))))
@@ -199,7 +201,7 @@
     (is (str/includes? (:source compiled) "resultProfile:'tagged-i64-i64-v1'")))
   (is (some? (rejection-message "(defn bad [] :result-i64 1)")))
   (is (some? (rejection-message "(defn bad [] (result-ok true))")))
-  (doseq [target (remove #(= :js-kotoba-v1 (target/backend %)) compiler/supported-targets)]
+  (doseq [target (unsupported-typed-targets)]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"require the kotoba-script web target"
                           (compiler/compile-source "(defn main [] :result-i64 (result-ok 1))" target)))))
 
@@ -226,7 +228,7 @@
   (let [too-deep (nth (iterate (fn [t] [:result :i64 t]) :bool) 9)
         source (str "(defn bad [x " (pr-str too-deep) "] :bool true)")]
     (is (some? (rejection-message source))))
-  (doseq [target (remove #(= :js-kotoba-v1 (target/backend %)) compiler/supported-targets)]
+  (doseq [target (unsupported-typed-targets)]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"require the kotoba-script web target"
                           (compiler/compile-source
                            "(defn main [] [:result :i64 :bool] (result-ok-of [:result :i64 :bool] 1))"
@@ -336,8 +338,7 @@
            "(defn bad [v [:option :string]] (match-option v [:option :string] (none 0) (some x x)))"
            "(defn bad [v [:option :string]] (option-some?-of [:option :i64] v))"]]
     (is (some? (rejection-message source))))
-  (doseq [target-name (remove #(= :js-kotoba-v1 (target/backend %))
-                              compiler/supported-targets)]
+  (doseq [target-name (unsupported-typed-targets)]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
                           #"require the kotoba-script web target"
                           (compiler/compile-source
@@ -392,8 +393,7 @@
            "(defn bad [v [:vector [:i64 :string]]] :string (hetero-vector-at [:vector [:i64 :string]] v 2))"
            "(defn bad [v [:vector [:i64 :string]]] [:vector [:i64 :string]] (hetero-vector-assoc [:vector [:i64 :string]] v 0 \"wrong\"))"]]
     (is (some? (rejection-message source))))
-  (doseq [target-name (remove #(= :js-kotoba-v1 (target/backend %))
-                              compiler/supported-targets)]
+  (doseq [target-name (unsupported-typed-targets)]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
                           #"require the kotoba-script web target"
                           (compiler/compile-source
@@ -443,8 +443,7 @@
            "(defn bad [v [:set :i64]] :bool (typed-set-contains [:set :i64] v \"wrong\"))"
            "(defn bad [] [:set :i64] (typed-set [:set :i64] 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32))"]]
     (is (some? (rejection-message source))))
-  (doseq [target-name (remove #(= :js-kotoba-v1 (target/backend %))
-                              compiler/supported-targets)]
+  (doseq [target-name (unsupported-typed-targets)]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
                           #"require the kotoba-script web target"
                           (compiler/compile-source
@@ -492,8 +491,7 @@
            "(defn bad [v [:record :demo/person [[:name :string]]]] :string (record-get [:record :demo/person [[:name :string]]] v :missing))"
            "(defn bad [] [:record :demo/bad [[:x :i64] [:x :string]]] 0)"]]
     (is (some? (rejection-message source))))
-  (doseq [target-name (remove #(= :js-kotoba-v1 (target/backend %))
-                              compiler/supported-targets)]
+  (doseq [target-name (unsupported-typed-targets)]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
                           #"require the kotoba-script web target"
                           (compiler/compile-source
@@ -655,8 +653,7 @@
     (is (= ['add1] (get-in compiled [:kir :exports])))
     (is (nil? (get-in compiled [:kir :oracle-value])))
     (is (zero? (:exit result)) (:err result))
-    (doseq [target (remove #(= :js-kotoba-v1 (target/backend %))
-                           compiler/supported-targets)]
+    (doseq [target (unsupported-typed-targets)]
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"require the kotoba-script web target"
                             (compiler/compile-source source target)))))
   (is (= "entryless library requires an explicit non-empty namespace export list"
@@ -694,8 +691,7 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"string exceeds UTF-8 byte limit"
                           (ir/execute (:kir compiled) 'greet [(apply str (repeat 65530 "x"))])))
     (is (zero? (:exit result)) (:err result))
-    (doseq [target (remove #(= :js-kotoba-v1 (target/backend %))
-                           compiler/supported-targets)]
+    (doseq [target (unsupported-typed-targets)]
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"require the kotoba-script web target"
                             (compiler/compile-source source target)))))
   (is (= "expression type mismatch: expected string, got i64"
@@ -733,8 +729,7 @@
   (let [source "(defn main [] (get {:a 1 :b 2} :b))"
         compiled (compiler/compile-source source :js-kotoba-v1)]
     (is (= 2 (ir/execute (:kir compiled) 'main [])))
-    (doseq [target (remove #(= :js-kotoba-v1 (target/backend %))
-                           compiler/supported-targets)]
+    (doseq [target (unsupported-typed-targets)]
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"require the kotoba-script web target"
                             (compiler/compile-source source target))))))
 

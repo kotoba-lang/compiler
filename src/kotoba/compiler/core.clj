@@ -43,8 +43,8 @@
         backend (target-profile/backend target)
         hir (frontend/analyze source)
         _ (when (and (= :kotoba.hir/v3 (:format hir))
-                     (not= backend :js-kotoba-v1))
-            (throw (ex-info "typed values currently require the kotoba-script web target"
+                     (not (contains? #{:js-kotoba-v1 :wasm32-kotoba-v1} backend)))
+            (throw (ex-info "typed values currently require the kotoba-script web target or typed Wasm target"
                             {:phase :target :target target :backend backend
                              :value-profile :kotoba.value/typed-v1})))
         _ (when (and (nil? (:entry hir)) (not= backend :js-kotoba-v1))
@@ -55,10 +55,21 @@
         value (:oracle-value kir)]
     (cond
       (= backend :wasm32-kotoba-v1)
-      {:format :wasm/v1 :target target :target-profile profile
-       :hir hir :kir kir :admission admission
-       :floating-point-policy floating-point-policy
-       :limits {:fuel 256 :replenishable? false} :bytes (wasm/emit kir target)}
+      (let [typed-values? (= :kotoba.kir/v4 (:format kir))]
+        {:format :wasm/v1 :target target :target-profile profile
+         :hir hir :kir kir :admission admission
+         :floating-point-policy floating-point-policy
+         :value-profile (if typed-values? :kotoba.value/typed-v1 :kotoba.value/i64-v1)
+         :value-abi (if typed-values? :kotoba.typed/externref-v1 :kotoba.i64/direct-v1)
+         :wasm-features (if typed-values? #{:reference-types} #{})
+         :limits (cond-> {:fuel 256 :replenishable? false}
+                   typed-values? (assoc :parametric-adt-depth 8
+                                        :parametric-adt-nodes 64
+                                        :variant-cases 32
+                                        :heterogeneous-vector-items 32
+                                        :typed-set-items 32
+                                        :record-fields 32))
+         :bytes (wasm/emit kir target)})
 
       ;; ADR-2607151500: cljs backend emits SOURCE TEXT, not bytes -- no
       ;; kexe sealing (that artifact shape is native-code-specific: raw
