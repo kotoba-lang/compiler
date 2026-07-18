@@ -1,0 +1,47 @@
+# ADR 0005: Closed Kotoba module linking
+
+## Status
+
+Accepted.
+
+## Decision
+
+Multiple `.kotoba` source units are linked by the Kotoba compiler before KIR
+lowering. A project supplies a closed map from declared namespace symbols to
+source text and names one root namespace. No JVM, JavaScript, ClojureScript, or
+host module resolver participates in this operation.
+
+The admitted namespace dependency syntax is deliberately narrow:
+
+```clojure
+(ns example.app
+  (:require [example.text :as text])
+  (:export [welcome]))
+```
+
+Imports must use a unique alias. `:refer`, wildcard imports, implicit lookup,
+relative paths, and runtime loading are rejected. Only functions in the
+dependency's explicit `:export` vector can be called. The linker rejects missing
+source units, namespace/key mismatches, duplicate aliases or dependencies,
+unknown qualified calls, cycles, and projects above 256 modules or 1,024 linked
+functions.
+
+Dependencies are visited before consumers and linked into one compiler-private
+call graph. Only the root module's exports receive host-visible wrappers. The
+ordinary frontend then re-analyzes that complete graph, so type checking,
+capability-effect closure, fuel, literal limits, admission policy, and KIR
+validation apply across module boundaries rather than trusting per-module
+claims.
+
+`compile-project` records a canonical `kotoba.module-graph/v1`, exact source
+SHA-256 for every reachable module, and its graph digest. JavaScript manifests
+bind the graph digest and source digests to the emitted artifact metadata.
+Unreachable entries in the supplied source map do not enter the linked graph.
+
+## Consequences
+
+The first version rejects dependency cycles even though function-level mutual
+recursion inside one source unit remains valid. This makes initialization and
+graph identity unambiguous. Modules are source-linked, not separately cached;
+content-addressed interface and KIR caching can be added later without changing
+the closed resolution contract.

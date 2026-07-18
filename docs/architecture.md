@@ -281,6 +281,14 @@ still fail closed. Authority admission deliberately uses the union across all
 declared functions—including private ones—so changing visibility cannot alter
 the authority claimed by otherwise identical code.
 
+Project compilation is the sole exception to the single-source import rule.
+`compile-project` accepts a closed namespace-to-source map and supports only
+`[namespace :as alias]` dependencies. It links exported dependency functions
+into one private call graph before the ordinary frontend and KIR passes; there
+is no runtime module lookup. Missing, cyclic, private, undeclared, and non-alias
+imports fail before lowering. The manifest seals the reachable module order,
+each exact source SHA-256, and the canonical module graph digest. See ADR 0005.
+
 An explicit, non-empty export clause also admits a library without `main`, but
 only for `:js-kotoba-v1`. Its KIR has a nil entry and signature and is handed to
 `kotoba-script` as a restricted ESM library. All executable and non-JavaScript

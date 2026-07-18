@@ -1,5 +1,6 @@
 (ns kotoba.compiler.core
   (:require [kotoba.compiler.frontend :as frontend]
+            [kotoba.compiler.project :as project]
             [kotoba.compiler.ir :as ir]
             [kotoba.compiler.admission :as admission]
             [kotoba.compiler.backend.wasm :as wasm]
@@ -132,3 +133,24 @@
 
           (= target :x86_64-aiueos-user-v1)
           (assoc :binary (elf64/package-user artifact))))))))
+
+(defn compile-project
+  "Compile a closed namespace-symbol -> source-text map without ambient lookup."
+  ([sources root target] (compile-project sources root target {}))
+  ([sources root target policy]
+   (let [linked (project/link-source sources root)
+         module-digests (into (sorted-map)
+                              (map (fn [[namespace source]]
+                                     [namespace (text-sha256 source)]))
+                              (select-keys sources (:module-order linked)))
+         graph {:kotoba.module/schema :kotoba.module-graph/v1
+                :kotoba.module/root root
+                :kotoba.module/order (:module-order linked)
+                :kotoba.module/source-digests module-digests}
+         graph-digest (artifact/sha256 graph)
+         compiled (compile-source (:source linked) target policy)]
+     (cond-> (assoc compiled :project graph :project-digest graph-digest)
+       (:manifest compiled)
+       (update :manifest assoc
+               :kotoba.artifact/module-graph-digest graph-digest
+               :kotoba.artifact/module-source-digests module-digests)))))

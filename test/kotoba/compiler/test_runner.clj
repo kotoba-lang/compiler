@@ -17,6 +17,7 @@
             [kotoba.compiler.native-executor-test]
             [kotoba.compiler.admission-test]
             [kotoba.compiler.property-test]
+            [kotoba.compiler.project-test]
             [kotoba.compiler.receipt-test]
             [kotoba.compiler.release-test]
             [kotoba.compiler.security-fuzz-test]
@@ -47,5 +48,6 @@
                                           'kotoba.compiler.security-fuzz-test
                                           'kotoba.compiler.value-test
                                           'kotoba.compiler.verifier-profile-test
+                                          'kotoba.compiler.project-test
                                           'kotoba.compiler.property-test)]
     (when (pos? (+ fail error)) (System/exit 1))))
