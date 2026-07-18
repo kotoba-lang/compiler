@@ -286,10 +286,19 @@ tests passed. A separate NBB gate requires the closed receipt schema, exact
 expected project set, version syntax, evidence classes, and GitHub commit/run
 binding before upload. The uploaded artifact is still unsigned CI output and
 can expire; it cannot satisfy platform-release evidence or the worldwide 95%
-claim. Branded Chrome/Edge now run on Linux and Windows, with the runner
-platform bound into the receipt. These runs still do not establish
-previous-version compatibility, update-channel integrity, macOS behavior,
-mobile coverage, or physical-device isolation.
+claim. Branded Chrome/Edge stable now run on Linux and Windows, with the
+runner platform bound into the receipt. An additional Chrome Beta / Edge Beta
+lane (`KOTOBA_BETA_BROWSERS=1`, evidence kind `branded-browser-beta`) runs the
+same conformance suite against each vendor's pre-stable channel build. This is
+a forward-looking signal only -- Playwright's `channel` option selects a named
+release channel (stable/beta/dev/canary) and has no mechanism to pin an
+arbitrary historical version, so it cannot and does not establish backward
+previous-version compatibility, and it should not be read as having done so.
+Firefox and WebKit expose no beta/dev/nightly channel in Playwright, so no
+equivalent lane exists for them. These runs still do not establish
+previous-version compatibility, update-channel integrity (in-place upgrade
+behavior), macOS Chrome/Edge behavior, mobile coverage, or physical-device
+isolation.
 
 SafariDriver is an additional CI TCB and is enabled only on the ephemeral macOS
 runner. The controller does not accept remote URLs, arbitrary selectors,
