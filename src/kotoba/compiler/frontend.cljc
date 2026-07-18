@@ -880,6 +880,10 @@
         (do (when (empty? args)
               (reject! "hetero-vector requires a type descriptor" form))
             (list* 'hetero-vector-new (first args) (map desugar-expr (rest args))))
+        hetero-vector-new
+        (do (when (empty? args)
+              (reject! "hetero-vector-new requires a type descriptor" form))
+            (list* 'hetero-vector-new (first args) (map desugar-expr (rest args))))
         hetero-vector-count
         (do (when-not (= 2 (count args))
               (reject! "hetero-vector-count requires type and value" form))
@@ -901,6 +905,10 @@
         typed-set
         (do (when (empty? args)
               (reject! "typed-set requires a type descriptor" form))
+            (list* 'typed-set-new (first args) (map desugar-expr (rest args))))
+        typed-set-new
+        (do (when (empty? args)
+              (reject! "typed-set-new requires a type descriptor" form))
             (list* 'typed-set-new (first args) (map desugar-expr (rest args))))
         typed-set-count
         (do (when-not (= 2 (count args))
@@ -929,6 +937,10 @@
         record
         (do (when (empty? args)
               (reject! "record requires a type descriptor" form))
+            (list* 'record-new (first args) (map desugar-expr (rest args))))
+        record-new
+        (do (when (empty? args)
+              (reject! "record-new requires a type descriptor" form))
             (list* 'record-new (first args) (map desugar-expr (rest args))))
         record-get
         (do (when-not (= 3 (count args))

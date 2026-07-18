@@ -257,6 +257,17 @@ function createHeap() {
 function createTypedRuntime(abi) {
   if (abi === null) return null;
   const builders = new WeakSet();
+  const trustedDescriptors = new WeakSet();
+  const trustDescriptor = descriptor => {
+    if (!Array.isArray(descriptor) || trustedDescriptors.has(descriptor)) return;
+    trustedDescriptors.add(descriptor);
+    for (const item of descriptor) {
+      if (Array.isArray(item) && item.length === 2 && typeof item[0] === "string")
+        trustDescriptor(item[1]);
+      else trustDescriptor(item);
+    }
+  };
+  abi.descriptors.forEach(trustDescriptor);
   const descriptorAt = id => {
     if (!Number.isInteger(id) || id < 0 || id >= abi.descriptors.length)
       reject("invalid-typed-descriptor", "typed descriptor index is out of range");
@@ -324,6 +335,17 @@ function createTypedRuntime(abi) {
       return compareSequence(descriptor[2].map(([, type]) => type), left.slice(1), right.slice(1));
     reject("invalid-typed-value", "typed value has no canonical order");
   };
+  const sameDescriptor = (left, right) => {
+    if (left === right) return true;
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length)
+      return false;
+    for (let index = 0; index < left.length; index += 1)
+      if (!sameDescriptor(left[index], right[index])) return false;
+    return true;
+  };
+  const sameTrustedDescriptor = (left, right) =>
+    left === right || (Array.isArray(left) && trustedDescriptors.has(left) &&
+                       sameDescriptor(left, right));
   const assertValue = (descriptor, value, state = { depth: 0, nodes: 0 }) => {
     state.nodes += 1;
     state.depth += 1;
@@ -348,7 +370,7 @@ function createTypedRuntime(abi) {
       if (!Array.isArray(value) || !Object.isFrozen(value))
         reject("invalid-typed-value", "compound typed value must be a frozen array");
       if (kind === "option") {
-        if (value[0] !== descriptor || typeof value[1] !== "boolean" ||
+        if (!sameTrustedDescriptor(value[0], descriptor) || typeof value[1] !== "boolean" ||
             value.length !== (value[1] ? 3 : 2))
           reject("invalid-typed-value", "generic option shape or descriptor is invalid");
         if (value[1]) assertValue(descriptor[1], value[2], state);
@@ -358,15 +380,15 @@ function createTypedRuntime(abi) {
         assertValue(value[0] ? descriptor[1] : descriptor[2], value[1], state);
       } else if (kind === "variant") {
         const member = descriptor[2].find(([name]) => name === value[1]);
-        if (value[0] !== descriptor || value.length !== 3 || member === undefined)
+        if (!sameTrustedDescriptor(value[0], descriptor) || value.length !== 3 || member === undefined)
           reject("invalid-typed-value", "variant shape, descriptor, or tag is invalid");
         assertValue(member[1], value[2], state);
       } else if (kind === "vector") {
-        if (value[0] !== descriptor || value.length !== descriptor[1].length + 1)
+        if (!sameTrustedDescriptor(value[0], descriptor) || value.length !== descriptor[1].length + 1)
           reject("invalid-typed-value", "heterogeneous vector shape is invalid");
         descriptor[1].forEach((item, index) => assertValue(item, value[index + 1], state));
       } else if (kind === "set") {
-        if (value[0] !== descriptor || value.length !== 2 || !Array.isArray(value[1]) ||
+        if (!sameTrustedDescriptor(value[0], descriptor) || value.length !== 2 || !Array.isArray(value[1]) ||
             !Object.isFrozen(value[1]) || value[1].length > 32)
           reject("invalid-typed-value", "typed set shape is invalid");
         value[1].forEach(item => assertValue(descriptor[1], item, state));
@@ -374,7 +396,7 @@ function createTypedRuntime(abi) {
           if (compareValue(descriptor[1], value[1][index - 1], value[1][index]) >= 0)
             reject("invalid-typed-value", "typed set is duplicated or non-canonical");
       } else if (kind === "record") {
-        if (value[0] !== descriptor || value.length !== descriptor[2].length + 1)
+        if (!sameTrustedDescriptor(value[0], descriptor) || value.length !== descriptor[2].length + 1)
           reject("invalid-typed-value", "record shape or nominal descriptor is invalid");
         descriptor[2].forEach(([, type], index) => assertValue(type, value[index + 1], state));
       } else reject("invalid-typed-value", "unknown compound typed value");

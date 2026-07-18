@@ -193,6 +193,21 @@
               (concat (i32-const (descriptor-id type))
                       (emit* left env) (emit* right env)
                       [0x10 (get intrinsic-indices 'typed-equal) 0xad]))
+            (emit-test [form env]
+              (let [type (typed/infer-type
+                          form
+                          (into {} (map (fn [[key item]] [key (:type item)]) env))
+                          signatures)]
+                (case type
+                  :i64 (concat (emit* form env) [0x50 0x45])
+                  :bool (concat (i32-const (descriptor-id :bool))
+                                (emit* form env)
+                                (i32-const (get literal-indices [:bool true]))
+                                [0x10 (get intrinsic-indices 'typed-literal)
+                                 0x10 (get intrinsic-indices 'typed-equal)])
+                  (throw (ex-info "typed Wasm condition must be bool or i64"
+                                  {:phase :wasm-typed-lowering
+                                   :type type :form form})))))
             (emit-assoc [type value index replacement replacement-type env]
               (concat (i32-const (descriptor-id type)) (emit* value env)
                       (i32-const index) (emit* replacement env)
@@ -253,6 +268,15 @@
                                    (assoc current-env name {:index local :type type})
                                    (concat code value-code [0x21 local])))
                           (concat code (emit* body current-env)))))
+                    (= op 'if)
+                    (let [[test then else] args
+                          result-type (typed/infer-type
+                                       then
+                                       (into {} (map (fn [[key item]] [key (:type item)]) env))
+                                       signatures)]
+                      (concat (emit-test test env)
+                              [0x04 (typed/wasm-type result-type)]
+                              (emit* then env) [0x05] (emit* else env) [0x0b]))
                     (contains? '#{+ - * quot} op)
                     (let [opcode ({'+ 0x7c '- 0x7d '* 0x7e 'quot 0x7f} op)]
                       (if (and (= op '-) (= 1 (count args)))
@@ -262,6 +286,27 @@
                     (= op 'string-byte-length)
                     (concat (i32-const (descriptor-id :string)) (emit* (first args) env)
                             [0x10 (get intrinsic-indices 'typed-count)])
+                    (= op 'string=?)
+                    (emit-bool
+                     (concat (i32-const (descriptor-id :string))
+                             (emit* (first args) env) (emit* (second args) env)
+                             [0x10 (get intrinsic-indices 'typed-equal)]))
+                    (= op 'bool-not)
+                    (emit-bool (concat (emit-test (first args) env) [0x45]))
+                    (contains? '#{= < > <= >=} op)
+                    (let [operand-type (typed/infer-type
+                                        (first args)
+                                        (into {} (map (fn [[key item]] [key (:type item)]) env))
+                                        signatures)]
+                      (if (= operand-type :i64)
+                        (concat (emit* (first args) env) (emit* (second args) env)
+                                [({'= 0x51 '< 0x53 '> 0x55 '<= 0x57 '>= 0x59} op)
+                                 0xad])
+                        (if (= op '=)
+                          (emit-equal operand-type (first args) (second args) env)
+                          (throw (ex-info "typed Wasm ordering requires i64 operands"
+                                          {:phase :wasm-typed-lowering
+                                           :operation op :type operand-type})))))
                     (contains? '#{option-some-of option-none-of} op)
                     (let [[type & payload] args]
                       (emit-builder type (if (= op 'option-some-of) 1 0) payload
