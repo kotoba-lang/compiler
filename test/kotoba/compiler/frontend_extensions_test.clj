@@ -437,6 +437,55 @@
                            "(defn main [] [:set :i64] (typed-set [:set :i64] 1 2))"
                            target-name)))))
 
+(deftest bounded-records-own-nominal-schema-and-persistent-fields
+  (let [type [:record :demo/person [[:name :string] [:age :i64]
+                                     [:nickname [:option :string]]]]
+        option-type [:option :string]
+        source "(ns record.typed (:export [make name-of birthday same?]))
+                (defn make [] [:record :demo/person [[:name :string] [:age :i64] [:nickname [:option :string]]]]
+                  (record [:record :demo/person [[:name :string] [:age :i64] [:nickname [:option :string]]]]
+                          \"Kotoba\" 7 (option-none-of [:option :string])))
+                (defn name-of [value [:record :demo/person [[:name :string] [:age :i64] [:nickname [:option :string]]]]] :string
+                  (record-get [:record :demo/person [[:name :string] [:age :i64] [:nickname [:option :string]]]] value :name))
+                (defn birthday [value [:record :demo/person [[:name :string] [:age :i64] [:nickname [:option :string]]]] age :i64]
+                  [:record :demo/person [[:name :string] [:age :i64] [:nickname [:option :string]]]]
+                  (record-assoc [:record :demo/person [[:name :string] [:age :i64] [:nickname [:option :string]]]] value :age age))
+                (defn same? [left [:record :demo/person [[:name :string] [:age :i64] [:nickname [:option :string]]]]
+                             right [:record :demo/person [[:name :string] [:age :i64] [:nickname [:option :string]]]]]
+                  (record-equal [:record :demo/person [[:name :string] [:age :i64] [:nickname [:option :string]]]] left right))"
+        compiled (compiler/compile-source source :js-kotoba-v1)
+        kir (:kir compiled)
+        encoded (.encodeToString (java.util.Base64/getEncoder)
+                                 (.getBytes ^String (:source compiled) "UTF-8"))
+        probe (str "import('data:text/javascript;base64," encoded
+                   "').then(m=>{const x=m.instantiateKotoba({}),v=x.make(),u=x.birthday(v,8n);"
+                   "if(x['name-of'](v)!=='Kotoba'||v[2]!==7n||u[2]!==8n||v[2]!==7n)process.exit(2);"
+                   "if(!Object.isFrozen(v)||x['same?'](v,u)!==0n||x['same?'](v,v)!==1n)process.exit(3);"
+                   "const ot=Object.freeze(['record',':demo/account',v[0][2]]);"
+                   "try{x['name-of']([ot,'Kotoba',7n,[Object.freeze(['option','string']),false]]);process.exit(4)}"
+                   "catch(e){if(e.message!=='invalid-record')process.exit(5)}})")
+        node-result (shell/sh "node" "--input-type=module" "-e" probe)
+        value [type "Kotoba" 7 [option-type false]]]
+    (is (= value (ir/execute kir 'make [])))
+    (is (= "Kotoba" (ir/execute kir 'name-of [value])))
+    (is (= [type "Kotoba" 8 [option-type false]]
+           (ir/execute kir 'birthday [value 8])))
+    (is (= 1 (ir/execute kir 'same? [value value])))
+    (is (= 32 (get-in compiled [:manifest :kotoba.artifact/limits :record-fields])))
+    (is (zero? (:exit node-result)) (:err node-result)))
+  (doseq [source
+          ["(defn bad [] [:record :demo/person [[:name :string]]] (record [:record :demo/person [[:name :string]]] 7))"
+           "(defn bad [v [:record :demo/person [[:name :string]]]] :string (record-get [:record :demo/person [[:name :string]]] v :missing))"
+           "(defn bad [] [:record :demo/bad [[:x :i64] [:x :string]]] 0)"]]
+    (is (some? (rejection-message source))))
+  (doseq [target-name (remove #(= :js-kotoba-v1 (target/backend %))
+                              compiler/supported-targets)]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"require the kotoba-script web target"
+                          (compiler/compile-source
+                           "(defn main [] [:record :demo/one [[:x :i64]]] (record [:record :demo/one [[:x :i64]]] 1))"
+                           target-name)))))
+
 (deftest bounded-map-host-abi-runs-through-compiler-and-kotoba-script
   (let [source "(ns pilot.map (:export [lookup update]))
                 (defn lookup [value :map] (get value :a 0))

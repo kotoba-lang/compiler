@@ -108,6 +108,7 @@
 (def typed-set-operations
   '#{typed-set-new typed-set-count typed-set-contains typed-set-conj
      typed-set-disj typed-set-equal})
+(def record-operations '#{record-new record-get record-assoc record-equal})
 (def typed-vector-operations
   '{vector-count 1 vector-get 3 vector-at 2 vector-drop 2 vector-assoc 3 vector-conj 2})
 (def sequencing-operations '#{do})
@@ -123,10 +124,11 @@
              generic-option-operations
              heterogeneous-vector-operations
              typed-set-operations
+             record-operations
              (set (keys typed-vector-operations))
              (set (keys string-operations))
              '#{let if cap-call ns defn defn- some some? nil? vector-i64 vector-new
-                hetero-vector typed-set match-result match-variant match-option}))
+                hetero-vector typed-set record match-result match-variant match-option}))
 (def max-functions 1024)
 (def max-expression-nodes 50000)
 (def max-lowered-nodes 100000)
@@ -141,6 +143,7 @@
 (def max-variant-cases 32)
 (def max-heterogeneous-vector-items 32)
 (def max-typed-set-items 32)
+(def max-record-fields 32)
 ;; ADR-2607182410: bounds an optional `ns` `:capabilities` declaration set.
 ;; 256, not max-functions -- matches cap-call's own [0,255] id space (at
 ;; most 256 distinct capabilities can ever exist), not the unrelated
@@ -165,9 +168,12 @@
 (defn- typed-set-type? [type]
   (and (vector? type) (= 2 (count type)) (= :set (first type))))
 
+(defn- record-type? [type]
+  (and (vector? type) (= 3 (count type)) (= :record (first type))))
+
 (defn- structured-type? [type]
   (or (parametric-result-type? type) (variant-type? type) (generic-option-type? type)
-      (heterogeneous-vector-type? type) (typed-set-type? type)))
+      (heterogeneous-vector-type? type) (typed-set-type? type) (record-type? type)))
 
 (defn- validate-value-type!
   ([type] (validate-value-type! type 0 (volatile! 0)))
@@ -200,6 +206,20 @@
      (typed-set-type? type)
      (do (validate-value-type! (second type) (inc depth) nodes)
          type)
+     (record-type? type)
+     (let [[_ type-id fields] type]
+       (when-not (and (keyword? type-id) (namespace type-id))
+         (reject! "record type id must be a qualified keyword" type))
+       (when-not (and (vector? fields) (seq fields) (<= (count fields) max-record-fields)
+                      (every? #(and (vector? %) (= 2 (count %)) (keyword? (first %))) fields)
+                      (= (count fields) (count (distinct (map first fields)))))
+         (reject! "record fields must be a non-empty unique bounded vector" type))
+       (vswap! nodes + (+ 2 (* 2 (count fields))))
+       (when (> @nodes max-type-nodes)
+         (reject! "value type exceeds node limit" type))
+       (doseq [[_ field-type] fields]
+         (validate-value-type! field-type (inc depth) nodes))
+       type)
      (variant-type? type)
      (let [[_ type-id cases] type]
        (when-not (and (keyword? type-id) (namespace type-id))
@@ -880,6 +900,24 @@
               (reject! "typed-set-equal requires type and two values" form))
             (list 'typed-set-equal (first args) (desugar-expr (second args))
                   (desugar-expr (nth args 2))))
+        record
+        (do (when (empty? args)
+              (reject! "record requires a type descriptor" form))
+            (list* 'record-new (first args) (map desugar-expr (rest args))))
+        record-get
+        (do (when-not (= 3 (count args))
+              (reject! "record-get requires type, value, and literal field" form))
+            (list 'record-get (first args) (desugar-expr (second args)) (nth args 2)))
+        record-assoc
+        (do (when-not (= 4 (count args))
+              (reject! "record-assoc requires type, value, literal field, and replacement" form))
+            (list 'record-assoc (first args) (desugar-expr (second args))
+                  (nth args 2) (desugar-expr (nth args 3))))
+        record-equal
+        (do (when-not (= 3 (count args))
+              (reject! "record-equal requires type and two values" form))
+            (list 'record-equal (first args) (desugar-expr (second args))
+                  (desugar-expr (nth args 2))))
         result-ok-of (do (when-not (= 2 (count args)) (reject! "result-ok-of requires type and payload" form))
                          (list 'result-ok-of (first args) (desugar-expr (second args))))
         result-err-of (do (when-not (= 2 (count args)) (reject! "result-err-of requires type and payload" form))
@@ -1058,6 +1096,43 @@
           (validate-value-type! type)
           (when-not (typed-set-type? type)
             (reject! "typed set equality requires [:set item-type]" form))
+          (validate-expr left locals functions (inc depth) budget)
+          (validate-expr right locals functions (inc depth) budget))
+
+        (= op 'record-new)
+        (let [[type & values] args
+              fields (when (record-type? type) (nth type 2))]
+          (validate-value-type! type)
+          (when-not (and (record-type? type) (= (count fields) (count values)))
+            (reject! "record constructor must exactly match its descriptor" form))
+          (doseq [item values]
+            (validate-expr item locals functions (inc depth) budget)))
+
+        (= op 'record-get)
+        (let [[type value field] args
+              fields (when (record-type? type) (nth type 2))]
+          (when-not (= 3 (count args)) (reject! "record projection shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (and (record-type? type) (keyword? field) (some #{field} (map first fields)))
+            (reject! "record field must be a declared keyword literal" form))
+          (validate-expr value locals functions (inc depth) budget))
+
+        (= op 'record-assoc)
+        (let [[type value field replacement] args
+              fields (when (record-type? type) (nth type 2))]
+          (when-not (= 4 (count args)) (reject! "record replacement shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (and (record-type? type) (keyword? field) (some #{field} (map first fields)))
+            (reject! "record field must be a declared keyword literal" form))
+          (validate-expr value locals functions (inc depth) budget)
+          (validate-expr replacement locals functions (inc depth) budget))
+
+        (= op 'record-equal)
+        (let [[type left right] args]
+          (when-not (= 3 (count args)) (reject! "record equality shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (record-type? type)
+            (reject! "record equality requires a record descriptor" form))
           (validate-expr left locals functions (inc depth) budget)
           (validate-expr right locals functions (inc depth) budget))
 
@@ -1553,6 +1628,38 @@
           (require-expression-type! (infer-expression-type left locals signatures) type left)
           (require-expression-type! (infer-expression-type right locals signatures) type right)
           :i64)
+        record-new
+        (let [[type & values] args
+              fields (nth type 2)]
+          (validate-value-type! type)
+          (doseq [[[field field-type] item] (map vector fields values)]
+            (require-expression-type! (infer-expression-type item locals signatures)
+                                      field-type field))
+          type)
+        record-get
+        (let [[type value field] args
+              field-type (some (fn [[declared-field declared-type]]
+                                 (when (= declared-field field) declared-type))
+                               (nth type 2))]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          field-type)
+        record-assoc
+        (let [[type value field replacement] args
+              field-type (some (fn [[declared-field declared-type]]
+                                 (when (= declared-field field) declared-type))
+                               (nth type 2))]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          (require-expression-type! (infer-expression-type replacement locals signatures)
+                                    field-type replacement)
+          type)
+        record-equal
+        (let [[type left right] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type left locals signatures) type left)
+          (require-expression-type! (infer-expression-type right locals signatures) type right)
+          :i64)
         (infer-call-type op args locals signatures)))
     :else (reject! "value has no admitted type" form)))
 
@@ -1936,6 +2043,7 @@
                                                          (contains? generic-option-operations (first %))
                                                          (contains? heterogeneous-vector-operations (first %))
                                                          (contains? typed-set-operations (first %))
+                                                         (contains? record-operations (first %))
                                                          (= 'vector-new (first %))
                                                          (contains? typed-vector-operations (first %)))))
                                            (tree-seq coll? seq body))))

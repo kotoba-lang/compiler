@@ -471,6 +471,43 @@
           #?(:clj (if (= left right) 1 0)
              :cljs (if (= left right) i64/one i64/zero)))
 
+        (= op 'record-new)
+        (let [[type & value-forms] args
+              values (mapv #(eval-expr % env functions fuel heap call-stack cap-call)
+                           value-forms)]
+          (value/bounded-typed-value! type (into [type] values)))
+
+        (= op 'record-get)
+        (let [[type value-form field] args
+              record-value (value/bounded-typed-value!
+                            type (eval-expr value-form env functions fuel heap call-stack cap-call))
+              field-index (first (keep-indexed (fn [index [declared-field _]]
+                                                 (when (= declared-field field) index))
+                                               (nth type 2)))]
+          (when (nil? field-index) (trap! :unknown-record-field {:field field}))
+          (nth record-value (inc field-index)))
+
+        (= op 'record-assoc)
+        (let [[type value-form field replacement-form] args
+              record-value (value/bounded-typed-value!
+                            type (eval-expr value-form env functions fuel heap call-stack cap-call))
+              replacement (eval-expr replacement-form env functions fuel heap call-stack cap-call)
+              field-index (first (keep-indexed (fn [index [declared-field _]]
+                                                 (when (= declared-field field) index))
+                                               (nth type 2)))]
+          (when (nil? field-index) (trap! :unknown-record-field {:field field}))
+          (value/bounded-typed-value! type
+                                      (assoc record-value (inc field-index) replacement)))
+
+        (= op 'record-equal)
+        (let [[type left-form right-form] args
+              left (value/bounded-typed-value!
+                    type (eval-expr left-form env functions fuel heap call-stack cap-call))
+              right (value/bounded-typed-value!
+                     type (eval-expr right-form env functions fuel heap call-stack cap-call))]
+          #?(:clj (if (= left right) 1 0)
+             :cljs (if (= left right) i64/one i64/zero)))
+
         (= op 'vector-new)
         (value/bounded-vector-i64!
          (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args))
