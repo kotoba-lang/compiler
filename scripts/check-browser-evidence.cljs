@@ -14,11 +14,17 @@
 (def platform (.-platform js/process))
 (def platform-name (if (= "win32" platform) "windows" platform))
 (def branded-projects #{(str "chrome-stable-" platform-name) (str "edge-stable-" platform-name)})
+;; Beta-channel projects are the same branded Chrome/Edge builds pinned to the beta
+;; release channel instead of stable. This is a forward-looking pre-stable signal, not a
+;; backward previous-version pin (Playwright's `channel` option has no historical-version
+;; mechanism) -- see playwright.config.mjs for the full rationale.
+(def beta-projects #{(str "chrome-beta-" platform-name) (str "edge-beta-" platform-name)})
 (def expected-projects
-  (cond
-    (= "1" js/process.env.KOTOBA_SAFARI_ONLY) #{"safari-stable-macos"}
-    (= "1" js/process.env.KOTOBA_BRANDED_BROWSERS) (set/union base-projects branded-projects)
-    :else base-projects))
+  (if (= "1" js/process.env.KOTOBA_SAFARI_ONLY)
+    #{"safari-stable-macos"}
+    (cond-> base-projects
+      (= "1" js/process.env.KOTOBA_BRANDED_BROWSERS) (set/union branded-projects)
+      (= "1" js/process.env.KOTOBA_BETA_BROWSERS) (set/union beta-projects))))
 
 (lib/ensure! (= expected-keys (set (keys evidence))) "browser evidence: unknown or missing receipt field")
 (lib/ensure! (= "kotoba.browser-engine-evidence/v2" (:format evidence)) "browser evidence: format mismatch")
@@ -39,7 +45,7 @@
                "browser evidence: identity schema mismatch")
   (lib/ensure! (boolean (re-matches #"[0-9]+(?:\.[0-9]+)+" (:version identity)))
                "browser evidence: invalid browser version")
-  (lib/ensure! (contains? #{"engine" "mobile-emulation" "branded-browser"} (:evidenceKind identity))
+  (lib/ensure! (contains? #{"engine" "mobile-emulation" "branded-browser" "branded-browser-beta"} (:evidenceKind identity))
                "browser evidence: invalid evidence kind"))
 (println (str "browser-evidence: verified " (count (:projects evidence))
               " versioned project identities for " (:commit evidence)))
