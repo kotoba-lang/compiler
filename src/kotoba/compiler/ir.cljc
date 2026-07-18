@@ -326,6 +326,21 @@
             (eval-expr err-body (assoc env err-name (second result))
                        functions fuel heap call-stack cap-call)))
 
+        (= op 'variant-new)
+        (let [[type tag payload-form] args]
+          (value/bounded-typed-value!
+           type [type tag (eval-expr payload-form env functions fuel heap call-stack cap-call)]))
+
+        (= op 'variant-match)
+        (let [[type value-form branches] args
+              variant (value/bounded-typed-value!
+                       type (eval-expr value-form env functions fuel heap call-stack cap-call))
+              tag (second variant)
+              [_ binder body] (some #(when (= tag (first %)) %) branches)]
+          (when-not binder (trap! :unknown-variant-case {:tag tag}))
+          (eval-expr body (assoc env binder (nth variant 2))
+                     functions fuel heap call-stack cap-call))
+
         (= op 'vector-new)
         (value/bounded-vector-i64!
          (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args))

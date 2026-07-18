@@ -206,7 +206,7 @@
     (is (= type (get-in kir [:functions 0 :result])))
     (is (= 8 (get-in compiled [:manifest :kotoba.artifact/limits :parametric-adt-depth])))
     (is (= 64 (get-in compiled [:manifest :kotoba.artifact/limits :parametric-adt-nodes])))
-    (is (str/includes? (:source compiled) "parametricAdtLimits:Object.freeze({depth:8,nodes:64})"))
+    (is (str/includes? (:source compiled) "parametricAdtLimits:Object.freeze({depth:8,nodes:64,variantCases:32})"))
     (is (thrown? clojure.lang.ExceptionInfo
                  (ir/execute kir 'inspect [[false [true "bad"]]]))))
   (let [too-deep (nth (iterate (fn [t] [:result :i64 t]) :bool) 9)
@@ -245,6 +245,37 @@
   (doseq [source ["(defn bad [r [:result :i64 :bool]] (match-result r [:result :i64 :bool] (ok x x)))"
                   "(defn bad [r [:result :i64 :bool]] (match-result r [:result :i64 :bool] (err e 1) (ok x x)))"
                   "(defn bad [r [:result :i64 :bool]] (match-result r [:result :i64 :bool] (ok x x) (err e false)))"]]
+    (is (some? (rejection-message source)))))
+
+(deftest closed-variants-have-canonical-identity-and-exhaustive-matching
+  (let [type [:variant :demo/status [[:ready :i64] [:failed :string]]]
+        source "(ns variant.demo (:export [ready describe]))
+                (defn ready [] [:variant :demo/status [[:ready :i64] [:failed :string]]]
+                  (variant-new [:variant :demo/status [[:ready :i64] [:failed :string]]] :ready 7))
+                (defn describe [v [:variant :demo/status [[:ready :i64] [:failed :string]]]]
+                  (match-variant v [:variant :demo/status [[:ready :i64] [:failed :string]]]
+                    (:ready n (+ n 1))
+                    (:failed message (string-byte-length message))))"
+        compiled (compiler/compile-source source :js-kotoba-v1)
+        kir (:kir compiled)
+        encoded (.encodeToString (java.util.Base64/getEncoder)
+                                 (.getBytes ^String (:source compiled) "UTF-8"))
+        probe (str "import('data:text/javascript;base64," encoded
+                   "').then(m=>{const x=m.instantiateKotoba({});"
+                   "const t=Object.freeze(['variant',':demo/status',Object.freeze([Object.freeze([':ready','i64']),Object.freeze([':failed','string'])])]);"
+                   "if(x.describe([t,':ready',9n])!==10n||x.describe([t,':failed','安全'])!==6n)process.exit(2)})")
+        node-result (shell/sh "node" "--input-type=module" "-e" probe)]
+    (is (= [type :ready 7] (ir/execute kir 'ready [])))
+    (is (= 10 (ir/execute kir 'describe [[type :ready 9]])))
+    (is (= 6 (ir/execute kir 'describe [[type :failed "安全"]])))
+    (is (zero? (:exit node-result)) (:err node-result))
+    (is (= 32 (get-in compiled [:manifest :kotoba.artifact/limits :variant-cases])))
+    (is (str/includes? (:source compiled) "variantCases:32"))
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (ir/execute kir 'describe [[[:variant :other/status [[:ready :i64]]] :ready 9]]))))
+  (doseq [source ["(defn bad [v [:variant :demo/x [[:a :i64] [:b :i64]]]] (match-variant v [:variant :demo/x [[:a :i64] [:b :i64]]] (:a x x)))"
+                  "(defn bad [v [:variant :demo/x [[:a :i64] [:b :i64]]]] (match-variant v [:variant :demo/x [[:a :i64] [:b :i64]]] (:b x x) (:a y y)))"
+                  "(defn bad [] [:variant :demo/x [[:a :i64]]] (variant-new [:variant :demo/x [[:a :i64]]] :unknown 1))"]]
     (is (some? (rejection-message source)))))
 
 (deftest bounded-map-host-abi-runs-through-compiler-and-kotoba-script

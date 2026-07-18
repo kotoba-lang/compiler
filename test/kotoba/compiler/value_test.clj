@@ -54,6 +54,21 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"depth limit"
                           (value/validate-value-type! too-deep)))))
 
+(deftest closed-variant-values-carry-their-complete-type-identity
+  (let [type [:variant :demo/status [[:ready :i64] [:failed :string]]]]
+    (is (= [type :ready 7]
+           (value/bounded-typed-value! type [type :ready 7])))
+    (is (= [type :failed "安全"]
+           (value/bounded-typed-value! type [type :failed "安全"])))
+    (doseq [invalid [[[:variant :other/status [[:ready :i64]]] :ready 7]
+                     [type :unknown 7] [type :ready "7"] [type :failed 7]]]
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (value/bounded-typed-value! type invalid)))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"qualified keyword"
+                        (value/validate-value-type! [:variant :status [[:ready :i64]]])))
+  (is (thrown? clojure.lang.ExceptionInfo
+               (value/validate-value-type! [:variant :demo/dup [[:same :i64] [:same :bool]]]))))
+
 (deftest vector-i64-is-bounded-and-homogeneous
   (is (= [1 2 3] (value/bounded-vector-i64! [1 2 3])))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a vector-i64"
