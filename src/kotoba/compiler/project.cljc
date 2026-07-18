@@ -25,9 +25,14 @@
   (let [ns-forms (filter #(and (seq? %) (= 'ns (first %))) forms)]
     (when-not (= 1 (count ns-forms))
       (reject! "project module requires exactly one namespace" {:count (count ns-forms)}))
-    (let [[_ name & clauses] (first ns-forms)]
+    (let [[_ name & raw-clauses] (first ns-forms)
+          [docstring clauses] (if (string? (first raw-clauses))
+                                [(first raw-clauses) (next raw-clauses)]
+                                [nil raw-clauses])]
       (when-not (and (simple-symbol? name) (not (str/blank? (str name))))
         (reject! "invalid project namespace" {:namespace name}))
+      (when (and docstring (> (count docstring) frontend/max-namespace-docstring-chars))
+        (reject! "namespace docstring exceeds admission limit" {:namespace name}))
       (loop [remaining clauses exports nil requires []]
         (if-let [clause (first remaining)]
           (cond
