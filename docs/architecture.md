@@ -300,6 +300,14 @@ into one private call graph before the ordinary frontend and KIR passes; there
 is no runtime module lookup. Missing, cyclic, private, undeclared, and non-alias
 imports fail before lowering. The manifest seals the reachable module order,
 each exact source SHA-256, and the canonical module graph digest. See ADR 0005.
+The public JVM CLI exposes the same linker as
+`compile <root> --source-path <directory>`. It resolves only the root's
+transitive closure, maps namespace segments to directories and hyphens to
+underscores, and selects `.kotoba`, then `.cljk`, then `.cljc`. Every resolved
+real path must remain below the explicit directory and its declared namespace
+must match the requested namespace; symlink escape and path substitution fail
+closed. This filesystem discovery does not run in the compiled program and
+does not widen runtime authority.
 
 An explicit, non-empty export clause also admits a library without `main`, but
 only for `:js-kotoba-v1`. Its KIR has a nil entry and signature and is handed to

@@ -11,6 +11,15 @@ lowering. A project supplies a closed map from declared namespace symbols to
 source text and names one root namespace. No JVM, JavaScript, ClojureScript, or
 host module resolver participates in this operation.
 
+For the public JVM CLI, `compile root.kotoba --source-path src` constructs that
+closed map from the reachable dependency closure before calling
+`compile-project`. Resolution is deterministic: namespace dots become path
+separators, hyphens become underscores, and extension priority is `.kotoba`,
+`.cljk`, `.cljc`. The root and every dependency must resolve by real path below
+the explicitly supplied source directory and declare exactly the namespace
+requested by the graph. Runtime lookup, classpath lookup, directory-wide eager
+loading, symlink escape, and namespace/path substitution are rejected.
+
 The admitted namespace dependency syntax is deliberately narrow:
 
 ```clojure

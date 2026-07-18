@@ -17,7 +17,11 @@
 (defn- reject! [message data]
   (throw (ex-info message (assoc data :phase :project-link))))
 
-(defn- ns-info [forms]
+(defn module-info
+  "Return the bounded declared namespace, exports and alias-only requires for
+  one project module. This is also the authority used by filesystem graph
+  discovery; discovery and linking therefore cannot disagree on syntax."
+  [forms]
   (let [ns-forms (filter #(and (seq? %) (= 'ns (first %))) forms)]
     (when-not (= 1 (count ns-forms))
       (reject! "project module requires exactly one namespace" {:count (count ns-forms)}))
@@ -206,7 +210,7 @@
                      (map (fn [[declared source]]
                             (let [forms (frontend/read-forms source)
                                   _ (admit-project-forms! forms counters)
-                                  info (ns-info forms)]
+                                  info (module-info forms)]
                               (when-not (= declared (:namespace info))
                                 (reject! "source-map key does not match declared namespace"
                                          {:key declared :declared (:namespace info)}))
