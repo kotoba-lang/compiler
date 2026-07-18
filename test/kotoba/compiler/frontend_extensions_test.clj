@@ -53,6 +53,41 @@
   (is (some? (rejection-message "(defn or [] 1) (defn main [] 0)")))
   (is (some? (rejection-message "(defn when [] 1) (defn main [] 0)"))))
 
+(deftest booleans-and-option-i64-have-owned-source-and-reference-semantics
+  (let [source "(ns pilot.option (:export [negate present? missing? unwrap same?]))
+                (defn negate [value :bool] :bool (bool-not value))
+                (defn present? [value :option-i64] :bool (some? value))
+                (defn missing? [value :option-i64] :bool (nil? value))
+                (defn unwrap [value :option-i64] (option-value value 9))
+                (defn same? [left :option-i64 right :option-i64] (= left right))"
+        compiled (compiler/compile-source source :js-kotoba-v1)
+        kir (:kir compiled)
+        encoded (.encodeToString (java.util.Base64/getEncoder)
+                                 (.getBytes ^String (:source compiled) "UTF-8"))
+        probe (str "import('data:text/javascript;base64," encoded
+                   "').then(m=>{const x=m.instantiateKotoba({});"
+                   "if(x.negate(true)!==false||x['present?']([true,7n])!==true||x['missing?']([false])!==true)process.exit(2);"
+                   "if(x.unwrap([true,7n])!==7n||x.unwrap([false])!==9n)process.exit(3);"
+                   "if(x['same?']([false],[false])!==1n||x['same?']([true,7n],[true,8n])!==0n)process.exit(4)})")
+        result (shell/sh "node" "--input-type=module" "-e" probe)]
+    (is (= false (ir/execute kir 'negate [true])))
+    (is (= true (ir/execute kir 'present? [[true 7]])))
+    (is (= true (ir/execute kir 'missing? [[false]])))
+    (is (= 9 (ir/execute kir 'unwrap [[false]])))
+    (is (= 1 (ir/execute kir 'same? [[true 7] [true 7]])))
+    (is (= :kotoba.value/typed-v1 (:value-profile compiled)))
+    (is (= 2 (get-in compiled [:manifest :kotoba.artifact/limits :option-i64-slots])))
+    (is (zero? (:exit result)) (:err result))))
+
+(deftest nil-lowers-only-to-tagged-option-none-and-invalid-mixes-fail-closed
+  (let [checked (compiler/check-source
+                 "(ns pilot.none (:export [missing])) (defn missing [] :option-i64 nil)")]
+    (is (= '(option-none) (get-in checked [:hir :functions 0 :body]))))
+  (is (some? (rejection-message "(defn bad [] :bool 0)")))
+  (is (some? (rejection-message "(defn bad [] :option-i64 false)")))
+  (is (some? (rejection-message "(defn bad [x :option-i64] (= x 0))")))
+  (is (some? (rejection-message "(defn bad [] (option-some true))"))))
+
 ;; ───────────────────────── keyword + map + get + assoc ─────────────────────────
 
 (deftest keyword-literals-preserve-canonical-identity-without-i64-hashing
@@ -187,7 +222,7 @@
                           'main [])))))
 
 (deftest top-level-constants-never-execute-code-or-shadow-locals
-  (is (= "constant value must be closed bounded integer/string/keyword/vector/map data"
+  (is (= "constant value must be closed bounded integer/string/keyword/boolean/nil/vector/map data"
          (rejection-message "(def danger (+ 1 2)) (defn main [] danger)")))
   (is (= "duplicate constant name"
          (rejection-message "(def x 1) (def x 2) (defn main [] x)")))

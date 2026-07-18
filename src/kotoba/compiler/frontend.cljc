@@ -93,6 +93,8 @@
 (def logical-operations '#{and or when})
 (def map-operations '#{get assoc})
 (def typed-map-operations '#{map-new map-get map-assoc})
+(def typed-safe-value-operations
+  '{bool-not 1 option-some 1 option-none 0 option-some? 1 option-value 2})
 (def sequencing-operations '#{do})
 (def string-operations '{string-byte-length 1 string=? 2 string-concat 2})
 (def reserved-function-names
@@ -100,8 +102,9 @@
              (set (keys kernel-memory-operations))
              (set (keys kernel-privileged-operations))
              list-operations predicate-operations logical-operations map-operations typed-map-operations
+             (set (keys typed-safe-value-operations))
              (set (keys string-operations))
-             '#{let if cap-call ns defn defn-}))
+             '#{let if cap-call ns defn defn- some some? nil?}))
 (def max-functions 1024)
 (def max-expression-nodes 50000)
 (def max-lowered-nodes 100000)
@@ -116,7 +119,7 @@
 ;; most 256 distinct capabilities can ever exist), not the unrelated
 ;; function-count limit.
 (def max-namespace-capabilities 256)
-(def value-types #{:i64 :string :keyword :map})
+(def value-types #{:i64 :string :keyword :map :bool :option-i64})
 
 (defn- kotoba-integer?
   "True for a value that is (or stands for) a `.kotoba` integer literal --
@@ -522,6 +525,8 @@
 (defn- desugar-expr [form]
   (cond
     (keyword? form) form
+    (boolean? form) form
+    (nil? form) '(option-none)
     (map? form) (desugar-map form)
     ;; ADR-2607150000: vector-as-data reuses desugar-list's pair-chain
     ;; encoding verbatim -- a vector and a `(list ...)` call become
@@ -662,6 +667,12 @@
                     (apply list 'map-assoc (desugar-expr m)
                            (mapcat (fn [[k v]] [(desugar-expr k) (desugar-expr v)])
                                    (partition 2 kvs)))))
+        some (do (when-not (= 1 (count args)) (reject! "some requires one i64 operand" form))
+                 (list 'option-some (desugar-expr (first args))))
+        some? (do (when-not (= 1 (count args)) (reject! "some? requires one option operand" form))
+                  (list 'option-some? (desugar-expr (first args))))
+        nil? (do (when-not (= 1 (count args)) (reject! "nil? requires one option operand" form))
+                 (list 'bool-not (list 'option-some? (desugar-expr (first args)))))
         ;; ADR-2607182410: `(cap-call :some/name value)` -> `(cap-call <int>
         ;; (desugar-expr value))`, resolving the keyword against
         ;; capability-registry BEFORE validate-expr/direct-facts ever see the
@@ -731,6 +742,7 @@
       form
       (catch #?(:clj Exception :cljs :default) error
         (reject! (ex-message error) form)))
+    (boolean? form) form
     (symbol? form) (if (contains? locals form) form
                        (reject! "unbound or dynamic symbol is forbidden" form))
     (seq? form)
@@ -789,6 +801,11 @@
                           (reject! "map-assoc requires map and keyword/value pairs" form)))
             (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
 
+        (contains? typed-safe-value-operations op)
+        (do (when-not (= (get typed-safe-value-operations op) (count args))
+              (reject! "typed safe-value operation arity mismatch" form))
+            (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
         (contains? kernel-memory-operations op)
         (do (when-not (= (get kernel-memory-operations op) (count args))
               (reject! "kernel memory operation arity mismatch" form))
@@ -828,8 +845,24 @@
       (= op '=)
       (do (when-not (= (first types) (second types))
             (reject! "equality operands must have the same value type" args))
-          (when-not (contains? #{:i64 :keyword} (first types))
+          (when-not (contains? #{:i64 :keyword :bool :option-i64} (first types))
             (reject! "equality type is outside the safe value profile" args))
+          :i64)
+
+      (= op 'bool-not)
+      (do (require-expression-type! (first types) :bool (first args)) :bool)
+
+      (= op 'option-some)
+      (do (require-expression-type! (first types) :i64 (first args)) :option-i64)
+
+      (= op 'option-none) :option-i64
+
+      (= op 'option-some?)
+      (do (require-expression-type! (first types) :option-i64 (first args)) :bool)
+
+      (= op 'option-value)
+      (do (require-expression-type! (first types) :option-i64 (first args))
+          (require-expression-type! (second types) :i64 (second args))
           :i64)
 
       (contains? (disj comparisons '=) op)
@@ -902,6 +935,7 @@
     (kotoba-integer? form) :i64
     (string? form) :string
     (keyword? form) :keyword
+    (boolean? form) :bool
     (symbol? form) (or (get locals form)
                        (reject! "unbound symbol has no value type" form))
     (seq? form)
@@ -917,7 +951,8 @@
                  test-type (infer-expression-type test locals signatures)
                  then-type (infer-expression-type then locals signatures)
                  else-type (infer-expression-type else locals signatures)]
-             (require-expression-type! test-type :i64 test)
+             (when-not (contains? #{:i64 :bool} test-type)
+               (reject! "if test must be bool or legacy i64" test))
              (when-not (= then-type else-type)
                (reject! "if branches must have the same value type" form))
              then-type)
@@ -1070,7 +1105,7 @@
       (mapv (fn [[pattern type]]
               (when-not (contains? value-types type)
                 (reject! "parameter type is outside the safe value profile" type))
-              (when (and (contains? #{:string :keyword :map} type)
+              (when (and (contains? #{:string :keyword :map :bool :option-i64} type)
                          (not (or (symbol? pattern) (and (= type :map) (map? pattern)))))
                 (reject! "typed values require plain-symbol bindings" pattern))
               {:pattern pattern :type type})
@@ -1095,6 +1130,8 @@
                       true
                       (catch #?(:clj Exception :cljs :default) _ false))
     (keyword? value) true
+    (boolean? value) true
+    (nil? value) true
     (vector? value) (and (<= (count value) max-list-items)
                          (every? constant-literal? value))
     (map? value) (and (<= (count value) max-list-items)
@@ -1112,7 +1149,7 @@
       (reject! "constant must contain exactly one literal value" form))
     (let [value (first declaration)]
       (when-not (constant-literal? value)
-        (reject! "constant value must be closed bounded integer/string/keyword/vector/map data" value))
+        (reject! "constant value must be closed bounded integer/string/keyword/boolean/nil/vector/map data" value))
       {:name name :value value})))
 
 (declare substitute-constants)
@@ -1284,10 +1321,12 @@
     (check-lowering-budget! parsed)
     (let [typed-values? (boolean
                          (some (fn [{:keys [param-types result body]}]
-                                 (or (some #{:string :keyword :map} param-types)
-                                     (contains? #{:string :keyword :map} result)
-                                     (some #(or (string? %) (keyword? %)
-                                                (and (seq? %) (contains? typed-map-operations (first %))))
+                                 (or (some #{:string :keyword :map :bool :option-i64} param-types)
+                                     (contains? #{:string :keyword :map :bool :option-i64} result)
+                                     (some #(or (string? %) (keyword? %) (boolean? %)
+                                                (and (seq? %)
+                                                     (or (contains? typed-map-operations (first %))
+                                                         (contains? typed-safe-value-operations (first %)))))
                                            (tree-seq coll? seq body))))
                                parsed))
           function-effects (infer-effects parsed)
