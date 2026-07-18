@@ -116,7 +116,39 @@
   (testing "dependency edge count"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"dependency edges exceed"
                           (project/link-source (dependency-project 24 true)
-                                               'bounds.m23)))))
+                                               'bounds.m23))))
+  (testing "aggregate expression nodes"
+    (let [body (apply str (repeat 100000 "(f) "))
+          source (fn [namespace]
+                   (str "(ns " namespace " (:export [f])) "
+                        "(defn f [] (do " body "0))"))]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"expression nodes exceed"
+                            (project/link-source
+                             {'bounds.expr-a (source 'bounds.expr-a)
+                              'bounds.expr-b (source 'bounds.expr-b)}
+                             'bounds.expr-a)))))
+  (testing "aggregate literal count"
+    (let [body (apply str (repeat 33000 "0 "))
+          source (fn [namespace]
+                   (str "(ns " namespace " (:export [f])) "
+                        "(defn f [] (do " body "0))"))]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"project literals exceed"
+                            (project/link-source
+                             {'bounds.literal-a (source 'bounds.literal-a)
+                              'bounds.literal-b (source 'bounds.literal-b)}
+                             'bounds.literal-a)))))
+  (testing "aggregate string literal bytes"
+    (let [literal (pr-str (apply str (repeat 4096 "x")))
+          body (str/join " " (repeat 15 literal))
+          sources (into {}
+                        (map (fn [index]
+                               (let [namespace (symbol (str "bounds.str" index))]
+                                 [namespace
+                                  (str "(ns " namespace " (:export [f])) "
+                                       "(defn f [] (do " body "))")]))
+                        (range 18)))]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"string literal bytes exceed"
+                            (project/link-source sources 'bounds.str0))))))
 
 (deftest capability-effects-close-across-module-boundaries
   (let [sources
