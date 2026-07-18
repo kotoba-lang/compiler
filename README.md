@@ -248,6 +248,17 @@ persistent. Exact nominal descriptor, arity, and recursive field validation
 exclude cross-schema substitution, unknown/dynamic fields, sparse host objects,
 prototype behavior, and host identity from record semantics.
 
+The machine-readable corpus at
+`resources/kotoba/compiler/typed-value-conformance.edn` is the shared
+qualification source for these algebraic value families and the floating-point
+denial policy. It currently executes every positive vector against the
+reference interpreter and restricted Web emitter, and verifies the same
+compile-time or runtime fail-closed boundary for negative vectors. Wasm remains
+unqualified for this typed ABI until it consumes this exact corpus without
+integer handles, host-object identity, or backend-specific coercion. `.cljk` is
+a Kotoba source extension selecting the compiler; it is not a separate runtime
+ABI and must follow the ABI of the selected target.
+
 The first bounded sequential collection is `:vector-i64`, constructed
 explicitly with `(vector-i64 ...)` and capped at 128 items. `vector-count`,
 `vector-get`, `vector-assoc`, and `vector-conj` preserve signed-i64 elements;
