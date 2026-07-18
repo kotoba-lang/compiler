@@ -93,6 +93,8 @@
       (let [report (edn/read-string (str out))]
         (is (:ok report))
         (is (= output (:output report)))
+        (is (= :kotoba.provenance/v1
+               (:format (edn/read-string (slurp (:provenance-output report))))))
         (if (= expected-format :wasm/v1)
           (is (= [0 0x61 0x73 0x6d]
                  (mapv #(bit-and % 0xff)

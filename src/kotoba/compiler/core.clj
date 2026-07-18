@@ -1,6 +1,7 @@
 (ns kotoba.compiler.core
   (:require [kotoba.compiler.frontend :as frontend]
             [kotoba.compiler.compatibility :as compatibility]
+            [kotoba.compiler.provenance :as provenance]
             [kotoba.compiler.project :as project]
             [kotoba.compiler.ir :as ir]
             [kotoba.compiler.admission :as admission]
@@ -34,9 +35,9 @@
    (let [hir (frontend/analyze source)]
      {:hir hir :admission (admission/check hir policy)})))
 
-(defn compile-source
-  ([source target] (compile-source source target {}))
-  ([source target policy] (compile-source source target policy {}))
+(defn- compile-source*
+  ([source target] (compile-source* source target {}))
+  ([source target policy] (compile-source* source target policy {}))
   ([source target policy emit-metadata]
    (when-not (contains? supported-targets target)
      (throw (ex-info "unsupported target" {:target target :supported supported-targets})))
@@ -176,6 +177,13 @@
 
           (= target :x86_64-aiueos-user-v1)
           (assoc :binary (elf64/package-user artifact))))))))
+
+(defn compile-source
+  ([source target] (compile-source source target {}))
+  ([source target policy] (compile-source source target policy {}))
+  ([source target policy emit-metadata]
+   (provenance/attach source policy emit-metadata
+                      (compile-source* source target policy emit-metadata))))
 
 (defn compile-project
   "Compile a closed namespace-symbol -> source-text map without ambient lookup."

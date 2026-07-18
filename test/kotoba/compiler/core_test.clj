@@ -5,6 +5,7 @@
             [kotoba.compiler.artifact :as artifact]
             [kotoba.compiler.core :as compiler]
             [kotoba.compiler.ir :as ir]
+            [kotoba.compiler.provenance :as provenance]
             [kotoba.compiler.verifier :as verifier]))
 
 (def source "(ns demo) (defn main [] (+ 40 2))")
@@ -13,6 +14,34 @@
    (defn abs [x] (if (< x 0) (- x) x))
    (defn score [x bonus] (let [m (* x 2) total (+ m bonus)] (abs total)))
    (defn main [] (score -20 -2))")
+
+(deftest compilation-provenance-binds-input-policy-pipeline-and-every-output
+  (doseq [target [:wasm32-kotoba-v1 :js-kotoba-v1 :cljs-kotoba-v1
+                  :x86_64-kotoba-v1 :x86_64-aiueos-kernel-v1]]
+    (let [policy {} result (compiler/compile-source source target policy)
+          statement (:provenance result)]
+      (is (= :kotoba.provenance/v1 (:format statement)))
+      (is (= target (:target statement)))
+      (is (= statement (provenance/verify! source policy result)))
+      (is (re-matches #"[0-9a-f]{64}" (:source-sha256 statement)))
+      (is (contains? (:outputs statement) :primary))
+      (when (:manifest result)
+        (is (= statement (get-in result [:manifest :kotoba.artifact/provenance]))))))
+  (let [result (compiler/compile-source source :wasm32-kotoba-v1 {})]
+    (doseq [[changed-source changed-policy changed-result]
+            [["(defn main [] 43)" {} result]
+             [source {:allow #{:ambient/network}} result]
+             [source {} result]
+             [source {} (assoc result :bytes
+                               (byte-array (cons (unchecked-byte 1)
+                                                 (drop 1 (:bytes result)))))]
+             [source {} (assoc-in result [:provenance :target] :wasm32-wasi-kotoba-v1)]]]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"provenance rejected"
+                            (if (identical? changed-result result)
+                              (provenance/verify! changed-source changed-policy
+                                                  {:package-lock-digest (apply str (repeat 64 "a"))}
+                                                  changed-result)
+                              (provenance/verify! changed-source changed-policy changed-result)))))))
 
 (deftest all-backends-share-one-kir
   (let [results (map #(compiler/compile-source source %) compiler/targets)]
