@@ -139,7 +139,23 @@
 (defn compile-project
   "Compile a closed namespace-symbol -> source-text map without ambient lookup."
   ([sources root target] (compile-project sources root target {}))
-  ([sources root target policy]
+  ([sources root target policy] (compile-project sources root target policy {}))
+  ([sources root target policy supply-chain]
+   (let [allowed-keys #{:package-lock-digest :trust-policy-digest
+                        :package-receipt-digest}
+         values (when (map? supply-chain) (vals supply-chain))
+         supplied (count (filter some? values))]
+     (when-not (and (map? supply-chain)
+                    (every? allowed-keys (keys supply-chain))
+                    (or (zero? supplied)
+                        (and (= allowed-keys (set (keys supply-chain)))
+                             (= 3 supplied)
+                             (every? #(and (string? %)
+                                           (re-matches #"[0-9a-f]{64}" %))
+                                     values))))
+       (throw (ex-info "invalid verified supply-chain identity"
+                       {:phase :project-link
+                        :reason :invalid-supply-chain-identity}))))
    (let [linked (project/link-source sources root)
          module-digests (into (sorted-map)
                               (map (fn [[namespace source]]
@@ -151,10 +167,18 @@
                 :kotoba.module/source-digests module-digests}
          graph-digest (artifact/sha256 graph)
          compiled (compile-source (:source linked) target policy
-                                  {:module-graph-digest graph-digest
-                                   :module-source-digests module-digests})]
+                                  (merge {:module-graph-digest graph-digest
+                                          :module-source-digests module-digests}
+                                         supply-chain))]
      (cond-> (assoc compiled :project graph :project-digest graph-digest)
        (:manifest compiled)
-       (update :manifest assoc
-               :kotoba.artifact/module-graph-digest graph-digest
-               :kotoba.artifact/module-source-digests module-digests)))))
+       (update :manifest merge
+               (merge {:kotoba.artifact/module-graph-digest graph-digest
+                       :kotoba.artifact/module-source-digests module-digests}
+                      (when (seq supply-chain)
+                        {:kotoba.artifact/package-lock-digest
+                         (:package-lock-digest supply-chain)
+                         :kotoba.artifact/trust-policy-digest
+                         (:trust-policy-digest supply-chain)
+                         :kotoba.artifact/package-receipt-digest
+                         (:package-receipt-digest supply-chain)})))))))

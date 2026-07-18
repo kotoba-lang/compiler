@@ -60,6 +60,29 @@
     (is (not= (get-in a [:manifest :kotoba.artifact/output-digest])
               (get-in changed [:manifest :kotoba.artifact/output-digest])))))
 
+(deftest compiler-seals-verified-supply-chain-identity
+  (let [digest (fn [character] (apply str (repeat 64 character)))
+        supply-chain {:package-lock-digest (digest "a")
+                      :trust-policy-digest (digest "b")
+                      :package-receipt-digest (digest "c")}
+        compiled (compiler/compile-project
+                  {'sealed.app "(ns sealed.app (:export [answer])) (defn answer [] 42)"}
+                  'sealed.app :js-kotoba-v1 {} supply-chain)]
+    (is (= (digest "a")
+           (get-in compiled [:manifest :kotoba.artifact/package-lock-digest])))
+    (is (= (digest "b")
+           (get-in compiled [:manifest :kotoba.artifact/trust-policy-digest])))
+    (is (= (digest "c")
+           (get-in compiled [:manifest :kotoba.artifact/package-receipt-digest])))
+    (is (str/includes? (:source compiled)
+                       (str "packageLockDigest:\"" (digest "a") "\"")))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"invalid verified supply-chain identity"
+                          (compiler/compile-project
+                           {'sealed.app "(ns sealed.app (:export [answer])) (defn answer [] 42)"}
+                           'sealed.app :js-kotoba-v1 {}
+                           {:package-lock-digest (digest "a")})))))
+
 (deftest project-imports-fail-closed
   (testing "missing source"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"outside the closed project"
