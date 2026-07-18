@@ -278,6 +278,58 @@
                   "(defn bad [] [:variant :demo/x [[:a :i64]]] (variant-new [:variant :demo/x [[:a :i64]]] :unknown 1))"]]
     (is (some? (rejection-message source)))))
 
+(deftest generic-options-have-canonical-none-identity-and-lazy-exhaustive-matching
+  (let [type [:option :string]
+        source "(ns option.generic (:export [some-text none-text describe force]))
+                (defn- explode [] :string (explode))
+                (defn some-text [] [:option :string]
+                  (option-some-of [:option :string] \"安全\"))
+                (defn none-text [] [:option :string]
+                  (option-none-of [:option :string]))
+                (defn describe [value [:option :string]]
+                  (match-option value [:option :string]
+                    (none 7)
+                    (some text (string-byte-length text))))
+                (defn force [value [:option :string]] :string
+                  (option-value-of [:option :string] value (explode)))"
+        compiled (compiler/compile-source source :js-kotoba-v1)
+        kir (:kir compiled)
+        encoded (.encodeToString (java.util.Base64/getEncoder)
+                                 (.getBytes ^String (:source compiled) "UTF-8"))
+        probe (str "import('data:text/javascript;base64," encoded
+                   "').then(m=>{const x=m.instantiateKotoba({}),t=Object.freeze(['option','string']);"
+                   "const s=x['some-text'](),n=x['none-text']();"
+                   "if(s[0][0]!=='option'||s[1]!==true||s[2]!=='安全'||n[1]!==false)process.exit(2);"
+                   "if(x.describe([t,true,'安全'])!==6n||x.describe([t,false])!==7n||x.force([t,true,'安全'])!=='安全')process.exit(3);"
+                   "try{x.describe([Object.freeze(['option','i64']),false]);process.exit(4)}"
+                   "catch(e){if(e.message!=='invalid-generic-option')process.exit(5)}})")
+        node-result (shell/sh "node" "--input-type=module" "-e" probe)]
+    (is (= [type true "安全"] (ir/execute kir 'some-text [])))
+    (is (= [type false] (ir/execute kir 'none-text [])))
+    (is (= 6 (ir/execute kir 'describe [[type true "安全"]])))
+    (is (= 7 (ir/execute kir 'describe [[type false]])))
+    (is (= "安全" (ir/execute kir 'force [[type true "安全"]])))
+    (is (= 3 (get-in compiled [:manifest :kotoba.artifact/limits
+                               :generic-option-max-slots])))
+    (is (zero? (:exit node-result)) (:err node-result))
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (ir/execute kir 'describe [[[:option :i64] false]]))))
+  (doseq [source
+          ["(defn bad [] [:option :string] (option-some-of [:option :string] 7))"
+           "(defn bad [] [:option :string] (option-none-of [:option :i64]))"
+           "(defn bad [v [:option :string]] (match-option v [:option :string] (none 0)))"
+           "(defn bad [v [:option :string]] (match-option v [:option :string] (some x 1) (none 0)))"
+           "(defn bad [v [:option :string]] (match-option v [:option :string] (none 0) (some x x)))"
+           "(defn bad [v [:option :string]] (option-some?-of [:option :i64] v))"]]
+    (is (some? (rejection-message source))))
+  (doseq [target-name (remove #(= :js-kotoba-v1 (target/backend %))
+                              compiler/supported-targets)]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"require the kotoba-script web target"
+                          (compiler/compile-source
+                           "(defn main [] [:option :string] (option-none-of [:option :string]))"
+                           target-name)))))
+
 (deftest bounded-map-host-abi-runs-through-compiler-and-kotoba-script
   (let [source "(ns pilot.map (:export [lookup update]))
                 (defn lookup [value :map] (get value :a 0))

@@ -320,6 +320,11 @@ User-defined finite variants extend the descriptor graph with
 `[:variant :qualified/type [[:case payload-type] ...]]`. The full descriptor
 is part of runtime identity, case counts are capped at 32, and generalized
 matching requires exact declaration-order coverage with typed payload binders.
+Generic options use `[:option payload-type]` and carry that full descriptor in
+both none and some runtime values. None is never represented by null,
+undefined, or an untyped sentinel. Construction, projection, lazy fallback,
+and exhaustive none/some matching revalidate exact descriptor identity and
+the bounded payload at every reference/Web boundary.
 The first sequential collection profile is an explicitly constructed,
 128-item `vector<i64>` with signed-i64 element checks, frozen Web host values,
 lazy out-of-range lookup fallback, and persistent assoc/conj updates.

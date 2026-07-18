@@ -202,6 +202,14 @@ descriptor, case keyword, and payload; a same-named case from a different
 descriptor cannot cross a boundary. `match-variant` requires every case once,
 in declaration order, and admits no wildcard that could hide schema growth.
 
+Generic options use `[:option payload-type]`. Their canonical Web ABI is
+`[descriptor, false]` for none and `[descriptor, true, payload]` for some, so
+even a payload-free none retains exact type identity. `option-some-of`,
+`option-none-of`, `option-some?-of`, `option-value-of`, and exhaustive
+`match-option` carry the descriptor explicitly. Null, undefined, untyped
+sentinels, cross-option substitution, malformed tags, and eager fallback
+evaluation are rejected.
+
 The first bounded sequential collection is `:vector-i64`, constructed
 explicitly with `(vector-i64 ...)` and capped at 128 items. `vector-count`,
 `vector-get`, `vector-assoc`, and `vector-conj` preserve signed-i64 elements;

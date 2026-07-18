@@ -69,6 +69,26 @@
   (is (thrown? clojure.lang.ExceptionInfo
                (value/validate-value-type! [:variant :demo/dup [[:same :i64] [:same :bool]]]))))
 
+(deftest generic-option-none-retains-its-complete-type-identity
+  (let [string-option [:option :string]
+        i64-option [:option :i64]
+        nested-option [:option [:result :i64 :bool]]]
+    (is (= [string-option false]
+           (value/bounded-typed-value! string-option [string-option false])))
+    (is (= [string-option true "安全"]
+           (value/bounded-typed-value! string-option [string-option true "安全"])))
+    (is (= [nested-option true [true 7]]
+           (value/bounded-typed-value! nested-option [nested-option true [true 7]])))
+    (doseq [invalid [[i64-option false]
+                     [string-option]
+                     [string-option false "extra"]
+                     [string-option true]
+                     [string-option true 7]
+                     [string-option nil]
+                     nil]]
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (value/bounded-typed-value! string-option invalid))))))
+
 (deftest vector-i64-is-bounded-and-homogeneous
   (is (= [1 2 3] (value/bounded-vector-i64! [1 2 3])))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a vector-i64"

@@ -341,6 +341,40 @@
           (eval-expr body (assoc env binder (nth variant 2))
                      functions fuel heap call-stack cap-call))
 
+        (= op 'option-some-of)
+        (let [[type payload-form] args]
+          (value/bounded-typed-value!
+           type [type true (eval-expr payload-form env functions fuel heap call-stack cap-call)]))
+
+        (= op 'option-none-of)
+        (let [[type] args]
+          (value/bounded-typed-value! type [type false]))
+
+        (= op 'option-some?-of)
+        (let [[type option-form] args
+              option (value/bounded-typed-value!
+                      type (eval-expr option-form env functions fuel heap call-stack cap-call))]
+          (true? (second option)))
+
+        (= op 'option-value-of)
+        (let [[type option-form fallback-form] args
+              option (value/bounded-typed-value!
+                      type (eval-expr option-form env functions fuel heap call-stack cap-call))]
+          (if (true? (second option))
+            (nth option 2)
+            (value/bounded-typed-value!
+             (second type)
+             (eval-expr fallback-form env functions fuel heap call-stack cap-call))))
+
+        (= op 'option-match)
+        (let [[type option-form none-body some-name some-body] args
+              option (value/bounded-typed-value!
+                      type (eval-expr option-form env functions fuel heap call-stack cap-call))]
+          (if (true? (second option))
+            (eval-expr some-body (assoc env some-name (nth option 2))
+                       functions fuel heap call-stack cap-call)
+            (eval-expr none-body env functions fuel heap call-stack cap-call)))
+
         (= op 'vector-new)
         (value/bounded-vector-i64!
          (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args))
