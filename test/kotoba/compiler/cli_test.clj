@@ -2,7 +2,8 @@
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
-            [kotoba.compiler.cli :as cli])
+            [kotoba.compiler.cli :as cli]
+            [kotoba.compiler.frontend :as frontend])
   (:import [java.io StringWriter]))
 
 (defn- temp-kotoba-source!
@@ -26,11 +27,28 @@
                 (ex-info "rejected" {:phase :subset :limit 10
                                      :form '(secret payload) :path "/private/path"}))]
     (is (= {:format :kotoba.cli-error/v1 :ok false :error :subset
+            :diagnostic {:format :kotoba.diagnostic/v1
+                         :code :kotoba/source-rejected :severity :error}
             :message "rejected" :details {:phase :subset :limit 10}}
            report)))
   (is (= {:format :kotoba.cli-error/v1 :ok false :error :internal
+          :diagnostic {:format :kotoba.diagnostic/v1
+                       :code :kotoba/internal-error :severity :error}
           :message "internal compiler error"}
          (cli/error-report (ex-info "sensitive host failure" {:secret "value"})))))
+
+(deftest structured-diagnostic-has-stable-code-and-bounded-source-span
+  (let [error (try
+                (frontend/analyze
+                 "(defn main []\n  (forbidden-call 1))")
+                nil
+                (catch clojure.lang.ExceptionInfo error error))
+        report (cli/error-report error "program.cljk")]
+    (is (= :kotoba/source-rejected (get-in report [:diagnostic :code])))
+    (is (= "program.cljk" (get-in report [:diagnostic :source])))
+    (is (= {:line 2 :column 3}
+           (select-keys (get-in report [:diagnostic :span]) [:line :column])))
+    (is (not (contains? report :form)))))
 
 (deftest unknown-command-emits-one-machine-readable-line-without-stack
   (let [status (atom nil)

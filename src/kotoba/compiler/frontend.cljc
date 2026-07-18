@@ -291,7 +291,7 @@
     (throw (ex-info "reader evaluation is forbidden" {:phase :read})))
   (check-reader-depth! source)
   #?(:clj
-     (let [r (rt/string-push-back-reader source)]
+     (let [r (rt/indexing-push-back-reader source)]
        (loop [out []]
          (when (> (count out) 10000)
            (throw (ex-info "too many top-level forms" {:phase :read})))
@@ -318,8 +318,18 @@
          (throw (ex-info "too many top-level forms" {:phase :read})))
        out)))
 
+(defn- form-span [form]
+  (let [{:keys [line column end-line end-column offset end-offset]} (meta form)]
+    (when (and (integer? line) (integer? column))
+      (cond-> {:line line :column column}
+        (integer? end-line) (assoc :end-line end-line)
+        (integer? end-column) (assoc :end-column end-column)
+        (integer? offset) (assoc :offset offset)
+        (integer? end-offset) (assoc :end-offset end-offset)))))
+
 (defn- reject! [message form]
-  (throw (ex-info message {:phase :subset :form form})))
+  (throw (ex-info message (cond-> {:phase :subset :form form}
+                            (form-span form) (assoc :span (form-span form))))))
 
 (declare valid-name?)
 
@@ -641,7 +651,7 @@
         (cons op (map #(replace-recur % helper-name loop-names captured) args))))
     :else form))
 
-(defn- desugar-expr [form]
+(defn- desugar-expr* [form]
   (cond
     (keyword? form) form
     (boolean? form) form
@@ -951,6 +961,14 @@
                  (map desugar-expr (rest args)))
           (apply list op (map desugar-expr args)))
         (apply list op (map desugar-expr args))))))
+
+(defn- desugar-expr [form]
+  (let [result (desugar-expr* form)
+        location (select-keys (meta form)
+                              [:line :column :end-line :end-column :offset :end-offset])]
+    (if (and (seq location) (or (coll? result) (symbol? result)))
+      (with-meta result (merge (meta result) location))
+      result)))
 
 (defn- valid-name? [value]
   (and (simple-symbol? value) (<= (count (name value)) max-symbol-chars)))
@@ -1887,14 +1905,15 @@
                      (get constants form)
                      form)
     (seq? form)
-    (let [[op & args] form]
-      (case op
-        quote form
-        (let loop) (let [[bindings & body] args
-                         [bindings' bound'] (substitute-bindings op bindings constants bound)]
-                     (list* op bindings'
-                            (map #(substitute-constants % constants bound') body)))
-        (list* op (map #(substitute-constants % constants bound) args))))
+    (let [[op & args] form
+          result (case op
+                   quote form
+                   (let loop) (let [[bindings & body] args
+                                    [bindings' bound'] (substitute-bindings op bindings constants bound)]
+                                (list* op bindings'
+                                       (map #(substitute-constants % constants bound') body)))
+                   (list* op (map #(substitute-constants % constants bound) args)))]
+      (if (seq (meta form)) (with-meta result (meta form)) result))
     (vector? form) (mapv #(substitute-constants % constants bound) form)
     (map? form) (into (empty form)
                       (map (fn [[k v]] [(substitute-constants k constants bound)

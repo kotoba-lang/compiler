@@ -5,6 +5,7 @@
             [kotoba.compiler.core :as compiler]
             [kotoba.compiler.coverage :as coverage]
             [kotoba.compiler.coverage-evidence :as coverage-evidence]
+            [kotoba.compiler.diagnostic :as diagnostic]
             [kotoba.compiler.ios-aot :as ios-aot]
             [kotoba.compiler.native-executor :as native-executor]
             [kotoba.compiler.packaging.pe32plus :as pe32plus]
@@ -47,15 +48,18 @@
   #{:phase :target :artifact-target :host-target :entry :arity :limit :status
     :reason :runtime-sha256 :not-before :expires :now})
 
-(defn error-report [error]
+(defn error-report
+  ([error] (error-report error nil))
+  ([error source-name]
   (let [data (ex-data error)
         phase (or (:phase data) :internal)
         details (select-keys data detail-keys)]
     (cond-> {:format :kotoba.cli-error/v1
              :ok false
              :error phase
+             :diagnostic (diagnostic/from-error error source-name)
              :message (if (= phase :internal) "internal compiler error" (ex-message error))}
-      (seq details) (assoc :details details))))
+      (seq details) (assoc :details details)))))
 
 (defn exit-code [phase]
   (case phase
@@ -347,7 +351,10 @@
   (try
     (apply dispatch! args)
     (catch clojure.lang.ExceptionInfo error
-      (let [report (error-report error)]
+      (let [source (second args)
+            source-name (when (source-path/source-kind source)
+                          (.getName (java.io.File. source)))
+            report (error-report error source-name)]
         (binding [*out* *err*] (println (pr-str report)))
         (*exit* (exit-code (:error report)))))
     (catch Throwable _
