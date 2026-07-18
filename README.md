@@ -177,6 +177,14 @@ to the none case of `:option-i64`; `(some value)`, `some?`, `nil?`, and
 frozen `[false]` or `[true, bigint]` tags. Host null/undefined, malformed tags,
 integer sentinels, and non-i64 payloads fail closed.
 
+The first bounded sequential collection is `:vector-i64`, constructed
+explicitly with `(vector-i64 ...)` and capped at 128 items. `vector-count`,
+`vector-get`, `vector-assoc`, and `vector-conj` preserve signed-i64 elements;
+get uses a lazy fallback for every out-of-range index, while assoc traps.
+Generated Web values are frozen arrays and updates are persistent. Existing
+legacy vector literals are not silently reinterpreted until type-directed
+literal/destructuring lowering is complete.
+
 Release-oriented target identities explicitly bind execution format, ISA, OS,
 ABI, and runtime profile. Current explicit names are `wasm32-browser`, `wasm32-wasi`,
 `x86_64-linux`, `x86_64-macos`, `x86_64-windows`, `aarch64-linux`,

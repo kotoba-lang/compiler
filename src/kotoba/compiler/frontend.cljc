@@ -95,6 +95,8 @@
 (def typed-map-operations '#{map-new map-get map-assoc})
 (def typed-safe-value-operations
   '{bool-not 1 option-some 1 option-none 0 option-some? 1 option-value 2})
+(def typed-vector-operations
+  '{vector-count 1 vector-get 3 vector-assoc 3 vector-conj 2})
 (def sequencing-operations '#{do})
 (def string-operations '{string-byte-length 1 string=? 2 string-concat 2})
 (def reserved-function-names
@@ -103,8 +105,9 @@
              (set (keys kernel-privileged-operations))
              list-operations predicate-operations logical-operations map-operations typed-map-operations
              (set (keys typed-safe-value-operations))
+             (set (keys typed-vector-operations))
              (set (keys string-operations))
-             '#{let if cap-call ns defn defn- some some? nil?}))
+             '#{let if cap-call ns defn defn- some some? nil? vector-i64 vector-new}))
 (def max-functions 1024)
 (def max-expression-nodes 50000)
 (def max-lowered-nodes 100000)
@@ -119,7 +122,7 @@
 ;; most 256 distinct capabilities can ever exist), not the unrelated
 ;; function-count limit.
 (def max-namespace-capabilities 256)
-(def value-types #{:i64 :string :keyword :map :bool :option-i64})
+(def value-types #{:i64 :string :keyword :map :bool :option-i64 :vector-i64})
 
 (defn- kotoba-integer?
   "True for a value that is (or stands for) a `.kotoba` integer literal --
@@ -673,6 +676,9 @@
                   (list 'option-some? (desugar-expr (first args))))
         nil? (do (when-not (= 1 (count args)) (reject! "nil? requires one option operand" form))
                  (list 'bool-not (list 'option-some? (desugar-expr (first args)))))
+        vector-i64 (do (when (> (count args) value/vector-item-limit)
+                         (reject! "vector-i64 exceeds item limit" form))
+                       (apply list 'vector-new (map desugar-expr args)))
         ;; ADR-2607182410: `(cap-call :some/name value)` -> `(cap-call <int>
         ;; (desugar-expr value))`, resolving the keyword against
         ;; capability-registry BEFORE validate-expr/direct-facts ever see the
@@ -806,6 +812,16 @@
               (reject! "typed safe-value operation arity mismatch" form))
             (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
 
+        (= op 'vector-new)
+        (do (when (> (count args) value/vector-item-limit)
+              (reject! "vector-new exceeds item limit" form))
+            (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
+        (contains? typed-vector-operations op)
+        (do (when-not (= (get typed-vector-operations op) (count args))
+              (reject! "typed vector operation arity mismatch" form))
+            (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
         (contains? kernel-memory-operations op)
         (do (when-not (= (get kernel-memory-operations op) (count args))
               (reject! "kernel memory operation arity mismatch" form))
@@ -845,7 +861,7 @@
       (= op '=)
       (do (when-not (= (first types) (second types))
             (reject! "equality operands must have the same value type" args))
-          (when-not (contains? #{:i64 :keyword :bool :option-i64} (first types))
+          (when-not (contains? #{:i64 :keyword :bool :option-i64 :vector-i64} (first types))
             (reject! "equality type is outside the safe value profile" args))
           :i64)
 
@@ -864,6 +880,28 @@
       (do (require-expression-type! (first types) :option-i64 (first args))
           (require-expression-type! (second types) :i64 (second args))
           :i64)
+
+      (= op 'vector-new)
+      (do (doseq [[arg type] (map vector args types)]
+            (require-expression-type! type :i64 arg))
+          :vector-i64)
+
+      (= op 'vector-count)
+      (do (require-expression-type! (first types) :vector-i64 (first args)) :i64)
+
+      (= op 'vector-get)
+      (do (require-expression-type! (nth types 0) :vector-i64 (nth args 0))
+          (require-expression-type! (nth types 1) :i64 (nth args 1))
+          (require-expression-type! (nth types 2) :i64 (nth args 2)) :i64)
+
+      (= op 'vector-assoc)
+      (do (require-expression-type! (nth types 0) :vector-i64 (nth args 0))
+          (require-expression-type! (nth types 1) :i64 (nth args 1))
+          (require-expression-type! (nth types 2) :i64 (nth args 2)) :vector-i64)
+
+      (= op 'vector-conj)
+      (do (require-expression-type! (nth types 0) :vector-i64 (nth args 0))
+          (require-expression-type! (nth types 1) :i64 (nth args 1)) :vector-i64)
 
       (contains? (disj comparisons '=) op)
       (do (doseq [[arg type] (map vector args types)]
@@ -1105,7 +1143,7 @@
       (mapv (fn [[pattern type]]
               (when-not (contains? value-types type)
                 (reject! "parameter type is outside the safe value profile" type))
-              (when (and (contains? #{:string :keyword :map :bool :option-i64} type)
+              (when (and (contains? #{:string :keyword :map :bool :option-i64 :vector-i64} type)
                          (not (or (symbol? pattern) (and (= type :map) (map? pattern)))))
                 (reject! "typed values require plain-symbol bindings" pattern))
               {:pattern pattern :type type})
@@ -1321,12 +1359,14 @@
     (check-lowering-budget! parsed)
     (let [typed-values? (boolean
                          (some (fn [{:keys [param-types result body]}]
-                                 (or (some #{:string :keyword :map :bool :option-i64} param-types)
-                                     (contains? #{:string :keyword :map :bool :option-i64} result)
+                                 (or (some #{:string :keyword :map :bool :option-i64 :vector-i64} param-types)
+                                     (contains? #{:string :keyword :map :bool :option-i64 :vector-i64} result)
                                      (some #(or (string? %) (keyword? %) (boolean? %)
                                                 (and (seq? %)
                                                      (or (contains? typed-map-operations (first %))
-                                                         (contains? typed-safe-value-operations (first %)))))
+                                                         (contains? typed-safe-value-operations (first %))
+                                                         (= 'vector-new (first %))
+                                                         (contains? typed-vector-operations (first %)))))
                                            (tree-seq coll? seq body))))
                                parsed))
           function-effects (infer-effects parsed)

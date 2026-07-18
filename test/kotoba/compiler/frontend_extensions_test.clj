@@ -88,6 +88,48 @@
   (is (some? (rejection-message "(defn bad [x :option-i64] (= x 0))")))
   (is (some? (rejection-message "(defn bad [] (option-some true))"))))
 
+(deftest bounded-vector-i64-has-owned-reference-and-web-semantics
+  (let [source "(ns pilot.vector (:export [count-items lookup update append same?]))
+                (defn count-items [value :vector-i64] (vector-count value))
+                (defn lookup [value :vector-i64 index :i64] (vector-get value index 99))
+                (defn update [value :vector-i64 index :i64 item :i64] :vector-i64
+                  (vector-assoc value index item))
+                (defn append [value :vector-i64 item :i64] :vector-i64
+                  (vector-conj value item))
+                (defn same? [left :vector-i64 right :vector-i64] (= left right))"
+        compiled (compiler/compile-source source :js-kotoba-v1)
+        kir (:kir compiled)
+        encoded (.encodeToString (java.util.Base64/getEncoder)
+                                 (.getBytes ^String (:source compiled) "UTF-8"))
+        probe (str "import('data:text/javascript;base64," encoded
+                   "').then(m=>{const x=m.instantiateKotoba({});const before=[1n,2n];"
+                   "const after=x.update(before,0n,7n);const appended=x.append(after,8n);"
+                   "if(x['count-items'](before)!==2n||x.lookup(before,-1n)!==99n||x.lookup(before,999n)!==99n)process.exit(2);"
+                   "if(before[0]!==1n||after[0]!==7n||appended.length!==3||!Object.isFrozen(appended))process.exit(3)})")
+        result (shell/sh "node" "--input-type=module" "-e" probe)]
+    (is (= 3 (ir/execute kir 'count-items [[1 2 3]])))
+    (is (= 99 (ir/execute kir 'lookup [[1 2] -1])))
+    (is (= [7 2] (ir/execute kir 'update [[1 2] 0 7])))
+    (is (= [1 2 3] (ir/execute kir 'append [[1 2] 3])))
+    (is (= 1 (ir/execute kir 'same? [[1 2] [1 2]])))
+    (is (= 128 (get-in compiled [:manifest :kotoba.artifact/limits :vector-i64-items])))
+    (is (zero? (:exit result)) (:err result))
+    (doseq [target-name (remove #(= :js-kotoba-v1 (target/backend %))
+                                compiler/supported-targets)]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"require the kotoba-script web target"
+                            (compiler/compile-source source target-name))))))
+
+(deftest vector-i64-constructor-is-explicit-and-bounded
+  (let [checked (compiler/check-source
+                 "(ns pilot.vector-new (:export [items]))
+                  (defn items [] :vector-i64 (vector-i64 1 2 3))")]
+    (is (= '(vector-new 1 2 3) (get-in checked [:hir :functions 0 :body]))))
+  (is (some? (rejection-message
+              (str "(defn main [] :vector-i64 (vector-i64 "
+                   (clojure.string/join " " (range 129)) "))"))))
+  (is (some? (rejection-message "(defn bad [] :vector-i64 (vector-i64 1 true))"))))
+
 ;; ───────────────────────── keyword + map + get + assoc ─────────────────────────
 
 (deftest keyword-literals-preserve-canonical-identity-without-i64-hashing
