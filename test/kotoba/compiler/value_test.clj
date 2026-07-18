@@ -35,6 +35,13 @@
     (is (thrown? clojure.lang.ExceptionInfo
                  (value/bounded-option-i64! invalid)))))
 
+(deftest result-i64-has-two-closed-payload-bearing-variants
+  (is (= [true 7] (value/bounded-result-i64! [true 7])))
+  (is (= [false -3] (value/bounded-result-i64! [false -3])))
+  (doseq [invalid [[true] [false] [true 1 2] [:ok 1] [true "1"] nil]]
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (value/bounded-result-i64! invalid)))))
+
 (deftest vector-i64-is-bounded-and-homogeneous
   (is (= [1 2 3] (value/bounded-vector-i64! [1 2 3])))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a vector-i64"

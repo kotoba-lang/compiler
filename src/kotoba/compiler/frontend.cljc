@@ -94,7 +94,8 @@
 (def map-operations '#{get assoc})
 (def typed-map-operations '#{map-new map-get map-assoc})
 (def typed-safe-value-operations
-  '{bool-not 1 option-some 1 option-none 0 option-some? 1 option-value 2})
+  '{bool-not 1 option-some 1 option-none 0 option-some? 1 option-value 2
+    result-ok 1 result-err 1 result-ok? 1 result-value 2 result-error 2})
 (def typed-vector-operations
   '{vector-count 1 vector-get 3 vector-at 2 vector-drop 2 vector-assoc 3 vector-conj 2})
 (def sequencing-operations '#{do})
@@ -122,7 +123,7 @@
 ;; most 256 distinct capabilities can ever exist), not the unrelated
 ;; function-count limit.
 (def max-namespace-capabilities 256)
-(def value-types #{:i64 :string :keyword :map :bool :option-i64 :vector-i64})
+(def value-types #{:i64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64})
 
 (defn- kotoba-integer?
   "True for a value that is (or stands for) a `.kotoba` integer literal --
@@ -856,7 +857,7 @@
       (= op '=)
       (do (when-not (= (first types) (second types))
             (reject! "equality operands must have the same value type" args))
-          (when-not (contains? #{:i64 :keyword :bool :option-i64 :vector-i64} (first types))
+          (when-not (contains? #{:i64 :keyword :bool :option-i64 :result-i64 :vector-i64} (first types))
             (reject! "equality type is outside the safe value profile" args))
           :i64)
 
@@ -873,6 +874,17 @@
 
       (= op 'option-value)
       (do (require-expression-type! (first types) :option-i64 (first args))
+          (require-expression-type! (second types) :i64 (second args))
+          :i64)
+
+      (contains? '#{result-ok result-err} op)
+      (do (require-expression-type! (first types) :i64 (first args)) :result-i64)
+
+      (= op 'result-ok?)
+      (do (require-expression-type! (first types) :result-i64 (first args)) :bool)
+
+      (contains? '#{result-value result-error} op)
+      (do (require-expression-type! (first types) :result-i64 (first args))
           (require-expression-type! (second types) :i64 (second args))
           :i64)
 
@@ -1146,7 +1158,7 @@
       (mapv (fn [[pattern type]]
               (when-not (contains? value-types type)
                 (reject! "parameter type is outside the safe value profile" type))
-              (when (and (contains? #{:string :keyword :map :bool :option-i64 :vector-i64} type)
+              (when (and (contains? #{:string :keyword :map :bool :option-i64 :result-i64 :vector-i64} type)
                          (not (or (symbol? pattern)
                                   (and (= type :map) (map? pattern))
                                   (and (= type :vector-i64) (vector? pattern)))))
@@ -1364,8 +1376,8 @@
     (check-lowering-budget! parsed)
     (let [typed-values? (boolean
                          (some (fn [{:keys [param-types result body]}]
-                                 (or (some #{:string :keyword :map :bool :option-i64 :vector-i64} param-types)
-                                     (contains? #{:string :keyword :map :bool :option-i64 :vector-i64} result)
+                                 (or (some #{:string :keyword :map :bool :option-i64 :result-i64 :vector-i64} param-types)
+                                     (contains? #{:string :keyword :map :bool :option-i64 :result-i64 :vector-i64} result)
                                      (some #(or (string? %) (keyword? %) (boolean? %)
                                                 (and (seq? %)
                                                      (or (contains? typed-map-operations (first %))
