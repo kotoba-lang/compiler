@@ -23,7 +23,8 @@
             [kotoba.compiler.ir :as ir]
             [kotoba.compiler.backend.wasm :as wasm]
             [kotoba.compiler.kotoba-reader :as kr]
-            [kotoba.compiler.nbb.io :as io]))
+            [kotoba.compiler.nbb.io :as io]
+            [kotoba.compiler.source-path :as source-path]))
 
 ;; Mirrors `kotoba.compiler.cli`'s `parse-target`, restricted to the three
 ;; wasm32 target names -- the only ones this fast path claims. Every other
@@ -39,10 +40,7 @@
 (defn- usage-error! [message]
   (throw (ex-info message {:phase :usage})))
 
-(defn- kotoba-source! [path]
-  (when-not (and (string? path) (.endsWith path ".kotoba"))
-    (usage-error! "error: input must be a .kotoba file"))
-  path)
+(defn- kotoba-source! [path] (source-path/admit! path))
 
 ;; Mirrors `kotoba.compiler.bounded-edn`'s `max-depth`/`max-token-chars`/
 ;; `max-nodes`/`max-string-chars` exactly -- applied ONLY to `--policy`

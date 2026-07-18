@@ -12,6 +12,7 @@
             [kotoba.compiler.release :as release]
             [kotoba.compiler.runtime-identity :as runtime-identity]
             [kotoba.compiler.signing :as signing]
+            [kotoba.compiler.source-path :as source-path]
             [kotoba.compiler.target :as target-profile]
             [kotoba.compiler.verifier :as verifier]
             [clojure.data.json :as json]
@@ -40,11 +41,7 @@
 
 (def ^:dynamic *exit* (fn [status] (System/exit status)))
 
-(defn- kotoba-source! [path]
-  (when-not (and (string? path) (str/ends-with? path ".kotoba"))
-    (throw (ex-info "source input must use the .kotoba extension"
-                    {:phase :usage})))
-  path)
+(defn- kotoba-source! [path] (source-path/admit! path))
 
 (def ^:private detail-keys
   #{:phase :target :artifact-target :host-target :entry :arity :limit :status

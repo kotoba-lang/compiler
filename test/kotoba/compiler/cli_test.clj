@@ -5,11 +5,13 @@
             [kotoba.compiler.cli :as cli])
   (:import [java.io StringWriter]))
 
-(defn- temp-kotoba-source! [contents]
-  (let [file (doto (java.io.File/createTempFile "kotoba-cli-test-" ".kotoba")
+(defn- temp-kotoba-source!
+  ([contents] (temp-kotoba-source! contents ".kotoba"))
+  ([contents extension]
+  (let [file (doto (java.io.File/createTempFile "kotoba-cli-test-" extension)
                (.deleteOnExit))]
     (spit file contents)
-    (.getPath file)))
+    (.getPath file))))
 
 (deftest phase-exit-codes-are-stable
   (is (= 64 (cli/exit-code :usage)))
@@ -47,7 +49,7 @@
 
 (deftest compile-and-check-require-kotoba-source-files
   (doseq [command ["compile" "check"]
-          path ["program.clj" "program.cljc" "program.KOTOBA" "program"]]
+          path ["program.clj" "program.cljs" "program.KOTOBA" "program"]]
     (let [status (atom nil)
           writer (StringWriter.)]
       (binding [cli/*exit* #(reset! status %)
@@ -56,7 +58,29 @@
       (let [report (edn/read-string (str writer))]
         (is (= 64 @status))
         (is (= :usage (:error report)))
-        (is (= "source input must use the .kotoba extension" (:message report)))))))
+        (is (= "source input must use .kotoba, .cljk, or .cljc" (:message report)))))))
+
+(deftest admitted-extensions-select-the-requested-backend
+  (doseq [[extension target expected-format]
+          [[".cljk" "js" :javascript/esm]
+           [".cljk" "wasm32" :wasm/v1]
+           [".cljc" "js" :javascript/esm]
+           [".cljc" "wasm32" :wasm/v1]]]
+    (let [source (temp-kotoba-source! "(defn main [] 42)" extension)
+          output (.getPath (doto (java.io.File/createTempFile "kotoba-target-selection-" ".out")
+                             (.deleteOnExit)))
+          out (StringWriter.)]
+      (binding [*out* out]
+        (cli/-main "compile" source "--target" target "--output" output))
+      (let [report (edn/read-string (str out))]
+        (is (:ok report))
+        (is (= output (:output report)))
+        (if (= expected-format :wasm/v1)
+          (is (= [0 0x61 0x73 0x6d]
+                 (mapv #(bit-and % 0xff)
+                       (take 4 (java.nio.file.Files/readAllBytes
+                                (.toPath (java.io.File. output)))))))
+          (is (str/includes? (slurp output) "export")))))))
 
 (deftest compile-cljs-target-writes-real-source-not-a-corrupted-nil-artifact
   (testing "regression test for a real bug found live: `compile --target
