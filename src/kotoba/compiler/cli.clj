@@ -8,6 +8,7 @@
             [kotoba.compiler.diagnostic :as diagnostic]
             [kotoba.compiler.ios-aot :as ios-aot]
             [kotoba.compiler.interface :as interface]
+            [kotoba.compiler.project-files :as project-files]
             [kotoba.compiler.native-executor :as native-executor]
             [kotoba.compiler.packaging.pe32plus :as pe32plus]
             [kotoba.compiler.receipt :as receipt]
@@ -65,7 +66,7 @@
 (defn exit-code [phase]
   (case phase
     :usage 64
-    (:decode :read :subset :admission :ir :verify :coverage) 65
+    (:decode :read :subset :admission :ir :verify :coverage :project-link) 65
     (:signature :trust :runtime-identity) 77
     :output 74
     :execute 69
@@ -256,6 +257,7 @@
                         :kernel-sha256 (:embedded-kernel-sha256 packaged)})))
     "compile"
     (let [input (kotoba-source! (second args))
+          source-root (option args "--source-path")
           target (parse-target (or (option args "--target") "wasm32"))
           output (or (option args "--output")
                      (str input (case (:execution (target-profile/profile target))
@@ -271,7 +273,10 @@
           _ (when-not (contains? #{nil "object" "image"} artifact-kind)
               (throw (ex-info "unknown native artifact kind"
                               {:phase :artifact-target :artifact artifact-kind})))
-          result (compiler/compile-source (bounded-edn/read-text-file input) target policy)]
+          result (if source-root
+                   (let [{:keys [sources root]} (project-files/load-closed-graph input source-root)]
+                     (compiler/compile-project sources root target policy))
+                   (compiler/compile-source (bounded-edn/read-text-file input) target policy))]
       (case (:format result)
         :wasm/v1 (atomic-output/write-bytes! output (:bytes result))
         ;; ADR-2607151500: the cljs backend emits SOURCE TEXT, not an

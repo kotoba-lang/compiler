@@ -1,5 +1,6 @@
 (ns kotoba.compiler.cli-test
   (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [kotoba.compiler.cli :as cli]
@@ -101,6 +102,52 @@
                        (take 4 (java.nio.file.Files/readAllBytes
                                 (.toPath (java.io.File. output)))))))
           (is (str/includes? (slurp output) "export")))))))
+
+(deftest compile-source-path-loads-only-a-closed-qualified-project
+  (let [directory (.toFile (java.nio.file.Files/createTempDirectory
+                            "kotoba-cli-project-" (make-array java.nio.file.attribute.FileAttribute 0)))
+        dependency (io/file directory "example/text.kotoba")
+        root (io/file directory "example/app.kotoba")
+        output (io/file directory "app.mjs")
+        out (StringWriter.)]
+    (.mkdirs (.getParentFile dependency))
+    (spit dependency
+          "(ns example.text (:export [answer])) (defn answer [] 42)")
+    (spit root
+          "(ns example.app (:require [example.text :as text]) (:export [main]))
+           (defn main [] (text/answer))")
+    (binding [*out* out]
+      (cli/-main "compile" (.getPath root) "--source-path" (.getPath directory)
+                 "--target" "js" "--output" (.getPath output)))
+    (let [report (edn/read-string (str out))
+          manifest (edn/read-string (slurp (str output ".manifest.edn")))]
+      (is (:ok report))
+      (is (.isFile output))
+      (is (= #{'example.app 'example.text}
+             (set (keys (:kotoba.artifact/module-source-digests manifest))))))))
+
+(deftest compile-source-path-rejects-namespace-path-substitution
+  (let [directory (.toFile (java.nio.file.Files/createTempDirectory
+                            "kotoba-cli-project-reject-"
+                            (make-array java.nio.file.attribute.FileAttribute 0)))
+        dependency (io/file directory "example/text.kotoba")
+        root (io/file directory "example/app.kotoba")
+        status (atom nil)
+        err (StringWriter.)]
+    (.mkdirs (.getParentFile dependency))
+    (spit dependency
+          "(ns attacker.substitute (:export [answer])) (defn answer [] 42)")
+    (spit root
+          "(ns example.app (:require [example.text :as text]) (:export [main]))
+           (defn main [] (text/answer))")
+    (binding [cli/*exit* #(reset! status %)
+              *err* err]
+      (cli/-main "compile" (.getPath root) "--source-path" (.getPath directory)
+                 "--target" "js"))
+    (let [report (edn/read-string (str err))]
+      (is (= 65 @status))
+      (is (= :project-link (:error report)))
+      (is (= "resolved path namespace does not match requirement" (:message report))))))
 
 (deftest compile-cljs-target-writes-real-source-not-a-corrupted-nil-artifact
   (testing "regression test for a real bug found live: `compile --target
