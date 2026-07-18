@@ -349,6 +349,13 @@ descriptor precedes the declaration-ordered field values in the runtime ABI;
 boundaries validate exact schema, arity, and every field recursively. Static
 keyword projection, persistent replacement, and structural equality never
 delegate to host object keys, prototypes, mutation, or identity.
+One versioned EDN conformance corpus now owns positive and negative vectors for
+generic options, parametric results, closed variants, heterogeneous vectors,
+typed sets, nominal records, and the forbidden floating-point policy. Reference
+and restricted Web execute that same data today. Future Wasm qualification must
+consume it directly and produce the same values or trap classes. `.cljk`
+changes source discovery only; it does not introduce a JVM runtime or a second
+typed-value ABI.
 The first sequential collection profile is an explicitly constructed,
 128-item `vector<i64>` with signed-i64 element checks, frozen Web host values,
 lazy out-of-range lookup fallback, and persistent assoc/conj updates.
