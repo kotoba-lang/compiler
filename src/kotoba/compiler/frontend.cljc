@@ -34,6 +34,42 @@
            locking dosync atom ref volatile!}
         (load-catalog-forbidden)))
 
+;; ADR-2607182410: compiler-local capability NAME -> [0,255] id registry, so
+;; `.kotoba` source can write `(cap-call :identity/sign msg)` instead of a
+;; magic number. This is a DISTINCT numbering system from any other repo's
+;; capability table (in particular kotoba-core-contracts'
+;; capability_contract.edn -- see resources/kotoba/compiler/
+;; capability-registry.edn's header comment for why reuse was rejected).
+;; `:cljs` mirrors the resource file's content by hand: unlike `:clj`, `:cljs`
+;; here has no wired-up synchronous classpath-resource read (the same
+;; limitation `load-catalog-forbidden` above documents by falling back to
+;; `#{}` on `:cljs` -- this fallback is a full copy rather than an empty set
+;; only because keeping ~7 short entries in sync by hand is cheap; it MUST be
+;; kept byte-identical to the resource file whenever an entry is added,
+;; renamed, or removed there).
+(def ^:private capability-registry-cljs-fallback
+  '{:identity/sign 1 :identity/verify 2 :hash/sha256 3 :http/post 4
+    :log/read 5 :log/append 6 :clock/now 7})
+
+(defn- load-capability-registry []
+  #?(:clj
+     (try
+       (let [c (clojure.java.io/resource "kotoba/compiler/capability-registry.edn")]
+         (if c
+           (with-open [r (clojure.java.io/reader c)]
+             (clojure.edn/read (java.io.PushbackReader. r)))
+           capability-registry-cljs-fallback))
+       (catch Exception _ capability-registry-cljs-fallback))
+     :cljs capability-registry-cljs-fallback))
+
+(def capability-registry
+  "Compiler-local capability-name -> id map, loaded once at namespace-load
+  time (see load-capability-registry). A missing/unloadable resource falls
+  back to a small hand-maintained default rather than an empty map -- still
+  closed-world/deny-by-default for any name outside it, just with a non-empty
+  default set of names available even if the classpath resource is absent."
+  (load-capability-registry))
+
 (def arithmetic '#{+ - * quot bit-xor bit-and})
 (def comparisons '#{= < > <= >=})
 (def heap-operations '{pair 2 pair-first 1 pair-second 1})
@@ -76,6 +112,11 @@
 (def max-list-items 128)
 (def max-namespace-docstring-chars 4096)
 (def max-function-docstring-chars 4096)
+;; ADR-2607182410: bounds an optional `ns` `:capabilities` declaration set.
+;; 256, not max-functions -- matches cap-call's own [0,255] id space (at
+;; most 256 distinct capabilities can ever exist), not the unrelated
+;; function-count limit.
+(def max-namespace-capabilities 256)
 (def value-types #{:i64 :string})
 
 (defn- kotoba-integer?
@@ -155,9 +196,15 @@
 (declare valid-name?)
 
 (defn- namespace-parts
-  "Parse the bounded namespace header. `:export` is the only admitted
-  clause: it grants host visibility but no ambient authority or module
-  loading. Import/require clauses remain fail-closed."
+  "Parse the bounded namespace header. `:export` and `:capabilities`
+  (ADR-2607182410) are the only admitted clauses, each at most once (in
+  either order): `:export` grants host visibility but no ambient authority
+  or module loading; `:capabilities` optionally declares the closed set of
+  named capabilities (see capability-registry) the namespace's `cap-call`
+  forms may use -- `analyze`'s `check-namespace-capabilities!` then requires
+  this declared set to exactly match what's actually used (declare-then-
+  check, mirroring the `:aiueos/imports` pattern). Import/require clauses
+  remain fail-closed."
   [form]
   (let [[op namespace-symbol & tail] form]
     (when-not (and (= 'ns op) (symbol? namespace-symbol)
@@ -169,20 +216,41 @@
                              [(first tail) (rest tail)] [nil tail])]
       (when (and docstring (> (count docstring) max-namespace-docstring-chars))
         (reject! "namespace docstring exceeds admission limit" docstring))
-      (when (> (count tail) 1)
-        (reject! "namespace admits at most one :export clause" form))
-      (let [clause (first tail)]
-        (when (and clause
-                   (not (and (seq? clause) (= :export (first clause))
-                             (= 2 (count clause)) (vector? (second clause)))))
+      (when (> (count tail) 2)
+        (reject! "namespace admits at most an :export clause and a :capabilities clause" form))
+      ;; ADR-2607182410: `:export`'s original (pre-existing, test-asserted)
+      ;; rejection message is preserved VERBATIM for every clause shape it
+      ;; already covered pre-`:capabilities` -- a non-`seq?` clause, an
+      ;; unrecognized clause head, or a malformed `(:export ...)` -- so
+      ;; existing callers/tests asserting on that exact string are
+      ;; unaffected. Only a recognized-but-malformed `(:capabilities ...)`
+      ;; clause gets the new, `:capabilities`-specific message (a shape no
+      ;; pre-existing source could ever have produced).
+      (doseq [clause tail]
+        (when-not (seq? clause)
           (reject! "only a bounded :export vector is admitted in namespace clauses" clause))
-        (let [exports (when clause (vec (second clause)))]
-          (when (and exports
-                     (or (> (count exports) max-functions)
-                         (not= (count exports) (count (distinct exports)))
-                         (not-every? valid-name? exports)))
-            (reject! "namespace exports must be unique bounded function names" exports))
-          {:namespace namespace-symbol :exports exports})))))
+        (case (first clause)
+          :export (when-not (and (= 2 (count clause)) (vector? (second clause)))
+                    (reject! "only a bounded :export vector is admitted in namespace clauses" clause))
+          :capabilities (when-not (and (= 2 (count clause)) (set? (second clause)))
+                          (reject! "only a bounded :capabilities set is admitted in namespace clauses" clause))
+          (reject! "only a bounded :export vector is admitted in namespace clauses" clause)))
+      (when (not= (count tail) (count (distinct (map first tail))))
+        (reject! "namespace admits each of :export/:capabilities at most once" form))
+      (let [export-clause (first (filter #(= :export (first %)) tail))
+            capabilities-clause (first (filter #(= :capabilities (first %)) tail))
+            exports (when export-clause (vec (second export-clause)))
+            capabilities (when capabilities-clause (set (second capabilities-clause)))]
+        (when (and exports
+                   (or (> (count exports) max-functions)
+                       (not= (count exports) (count (distinct exports)))
+                       (not-every? valid-name? exports)))
+          (reject! "namespace exports must be unique bounded function names" exports))
+        (when (and capabilities
+                   (or (> (count capabilities) max-namespace-capabilities)
+                       (not-every? #(and (keyword? %) (namespace %)) capabilities)))
+          (reject! "namespace :capabilities must be a bounded set of namespaced keywords" capabilities))
+        {:namespace namespace-symbol :exports exports :capabilities capabilities}))))
 
 (declare desugar-expr form-free-symbols replace-recur)
 
@@ -212,6 +280,36 @@
 ;; encounters `loop` forms in the same left-to-right desugaring order and
 ;; always assigns the same names.
 (def ^:dynamic *loop-counter* nil)
+
+;; ADR-2607182410: bound (via `binding`, once per `analyze` call, same
+;; lifetime as `*loop-counter*` above -- not per-defn) to a `volatile!` set
+;; that `resolve-capability-keyword!` conjoins each named capability onto as
+;; `(cap-call :some/name ...)` forms are desugared. `analyze` derefs it once
+;; all defns are desugared to check an optional `ns` `:capabilities`
+;; declaration (declared-but-unused / used-but-undeclared) -- see
+;; `check-namespace-capabilities!`. `nil` outside `analyze` (e.g. from a
+;; direct unit-test call to `desugar-expr`) means "don't track," not "reject
+;; every keyword": tracking is a purely additional ns-level lint, never part
+;; of resolving the keyword to its id.
+(def ^:dynamic *used-capability-keywords* nil)
+
+(defn- resolve-capability-keyword!
+  "Resolve a `cap-call` NAME argument (a namespaced keyword, e.g.
+  `:identity/sign`) against `capability-registry` to its [0,255] int id, at
+  desugar time -- strictly before HIR/KIR construction, so every downstream
+  consumer (validate-expr's arity/range check, direct-facts'
+  effect-extraction, ir.cljc, every backend, admission.cljc, verifier.clj)
+  sees the EXACT SAME plain-integer `cap-call` shape the pre-existing
+  `(cap-call <int> value)` form has always produced -- none of them are
+  aware a keyword was ever written. An unregistered keyword is a hard
+  parse-time rejection (closed-world/deny-by-default for names, mirroring
+  the existing [0,255]-range check for the integer form)."
+  [kw form]
+  (if-let [id (get capability-registry kw)]
+    (do (when *used-capability-keywords*
+          (vswap! *used-capability-keywords* conj kw))
+        id)
+    (reject! (str "cap-call names an unregistered capability: " kw) form)))
 
 (defn- desugar-list [args form]
   (when (> (count args) max-list-items)
@@ -623,6 +721,26 @@
                                             (list map-without-helper-name acc-map k-sym)))))
                             (desugar-expr m)
                             (partition 2 kvs))))
+        ;; ADR-2607182410: `(cap-call :some/name value)` -> `(cap-call <int>
+        ;; (desugar-expr value))`, resolving the keyword against
+        ;; capability-registry BEFORE validate-expr/direct-facts ever see the
+        ;; form -- everything downstream keeps working exactly as it does
+        ;; for the pre-existing literal-int form, byte-for-byte. Only
+        ;; intercepts when the FIRST arg is actually a keyword; any other
+        ;; shape (correct int form, or a malformed call of any other arity)
+        ;; falls through to the identical generic case below, unchanged, so
+        ;; validate-expr's own existing arity/range check still fires with
+        ;; its original message for every case this desugar step doesn't
+        ;; specifically own. `(rest args)` (not a fixed `[value]`
+        ;; destructure) preserves whatever argument count followed the
+        ;; keyword, so a malformed `(cap-call :kw)` or `(cap-call :kw a b)`
+        ;; still reaches validate-expr's "requires ... one value" rejection
+        ;; instead of being silently coerced into a well-formed 2-arg call.
+        cap-call
+        (if (and (seq args) (keyword? (first args)))
+          (list* 'cap-call (resolve-capability-keyword! (first args) form)
+                 (map desugar-expr (rest args)))
+          (apply list op (map desugar-expr args)))
         (apply list op (map desugar-expr args))))))
 
 (defn- valid-name? [value]
@@ -887,6 +1005,26 @@
     (when (> cost max-lowered-nodes)
       (reject! "lowered program budget exhausted" cost))))
 
+(defn- check-namespace-capabilities!
+  "ADR-2607182410 declare-then-check for an optional `ns` `:capabilities`
+  clause: DECLARED (namespace-parts' :capabilities) must equal exactly what
+  was actually USED via a named `(cap-call :some/name ...)` anywhere in the
+  namespace (collected into *used-capability-keywords* as each is resolved
+  during desugaring) -- both directions are rejected, mirroring the
+  `:aiueos/imports` declare-then-check convention this org already uses
+  elsewhere (orgs/kotoba-lang/aiueos/examples/apps/notes.edn). A no-arg-
+  cap-call-by-int module has an empty `used` set regardless -- this check
+  only ever fires when the `ns` form actually wrote a `:capabilities`
+  clause (`declared` is nil otherwise, see analyze's call site)."
+  [declared used]
+  (when declared
+    (let [undeclared (set/difference used declared)
+          unused (set/difference declared used)]
+      (when (seq undeclared)
+        (reject! "cap-call uses a capability not declared in namespace :capabilities" undeclared))
+      (when (seq unused)
+        (reject! "namespace :capabilities declares a capability never used via cap-call" unused)))))
+
 (defn- param-name+wrap
   "For one `defn` PARAM: a plain symbol is kept as-is (identity wrap). A
   vector/map destructuring pattern (ADR-2607150000) gets a fresh gensym'd
@@ -1053,7 +1191,17 @@
         ;; (param-name+wrap above), not just plain symbols. *loop-counter*
         ;; is bound ONCE for the whole source (not per-defn) so loop-helper
         ;; names stay unique across every defn, not just within one.
-        parsed (binding [*loop-counter* (volatile! 0)]
+        ;; ADR-2607182410: `used-capabilities` is created OUTSIDE the
+        ;; `binding` below (unlike *loop-counter*'s own fresh volatile,
+        ;; which only needs to live inside it) so `check-namespace-
+        ;; capabilities!` can still deref it once `parsed` is fully built
+        ;; and `binding`'s dynamic extent has ended -- the *var* rebinding
+        ;; ends with the `let`, but the volatile object itself, referenced
+        ;; here from outside, keeps whatever `resolve-capability-keyword!`
+        ;; conjoined onto it during desugaring.
+        used-capabilities (volatile! #{})
+        parsed (binding [*loop-counter* (volatile! 0)
+                          *used-capability-keywords* used-capabilities]
                ;; `vec` (forcing) must stay INSIDE `binding`'s dynamic
                ;; extent: `mapcat` is lazy, so `(vec (binding [...]
                ;; (mapcat ...)))` would rebind *loop-counter* only around
@@ -1130,6 +1278,7 @@
       (reject! "main must take zero arguments" 'main))
     (when (and entry (not (some #{entry} exports)))
       (reject! "main entrypoint must be exported" exports))
+    (check-namespace-capabilities! (:capabilities namespace-info) @used-capabilities)
     (let [budget (volatile! 0)]
       (doseq [{:keys [params body]} parsed]
         (validate-expr body (set params) signatures 0 budget)))

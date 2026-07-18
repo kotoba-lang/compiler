@@ -500,6 +500,26 @@ kotoba -M compile examples/capability.kotoba --target wasm32 \
   --policy examples/capability-policy.edn --output capability.wasm
 ```
 
+`cap-call`'s capability id may also be written as a namespaced keyword name
+(ADR-2607182410) instead of a magic integer, e.g. `(cap-call :identity/sign
+value)`. The name is resolved against this compiler's own local registry,
+`resources/kotoba/compiler/capability-registry.edn` (a small, closed
+name->id table -- deliberately separate from any other repo's capability
+table), at parse time -- before anything else in the compiler runs, so
+`--policy` still grants/denies by the resolved integer id exactly as before.
+An unregistered name is a hard parse-time error. `examples/capability-named.
+kotoba` / `examples/capability-named.edn` are the named-form counterpart of
+the pair above, and additionally show the optional `ns` `(:capabilities
+#{...})` declaration, which the compiler checks is an exact match (declared
+== used) for every named `cap-call` in that namespace:
+
+```bash
+kotoba -M check examples/capability-named.kotoba \
+  --policy examples/capability-named.edn
+kotoba -M compile examples/capability-named.kotoba --target wasm32 \
+  --policy examples/capability-named.edn --output capability-named.wasm
+```
+
 After putting `bin/kotoba` on `PATH`, the public command is simply
 `kotoba -M ...`. The bootstrap currently uses Clojure internally, but that is
 not part of the compiler CLI contract and can be replaced by the self-hosted
