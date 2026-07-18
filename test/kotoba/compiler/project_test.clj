@@ -196,3 +196,30 @@
       (is (= #{[:cap/call 7] [:cap/call 9]} (get-in compiled [:kir :effects])))
       (is (str/includes? (:source compiled)
                          "requiredCapabilities:Object.freeze([7,9])")))))
+
+(deftest changed-exports-and-dependency-substitution-fail-or-reseal
+  (let [root "(ns substitution.root
+                (:require [substitution.dep :as dep])
+                (:export [run]))
+              (defn run [] (dep/value))"
+        dependency "(ns substitution.dep (:export [value])) (defn value [] 41)"
+        sources {'substitution.root root 'substitution.dep dependency}
+        original (compiler/compile-project sources 'substitution.root :js-kotoba-v1)
+        substituted (compiler/compile-project
+                     (assoc sources 'substitution.dep
+                            "(ns substitution.dep (:export [value])) (defn value [] 42)")
+                     'substitution.root :js-kotoba-v1)]
+    (testing "changing an imported export fails before backend emission"
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo #"not an admitted exported import"
+           (compiler/compile-project
+            (assoc sources 'substitution.dep
+                   "(ns substitution.dep (:export [replacement]))
+                    (defn replacement [] 41)")
+            'substitution.root :js-kotoba-v1))))
+    (testing "same-interface dependency bytes produce a distinct sealed artifact"
+      (is (not= (:project-digest original) (:project-digest substituted)))
+      (is (not= (get-in original [:manifest :kotoba.artifact/module-source-digests])
+                (get-in substituted [:manifest :kotoba.artifact/module-source-digests])))
+      (is (not= (get-in original [:manifest :kotoba.artifact/output-digest])
+                (get-in substituted [:manifest :kotoba.artifact/output-digest]))))))
