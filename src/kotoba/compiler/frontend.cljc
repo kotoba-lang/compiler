@@ -96,7 +96,7 @@
 (def typed-safe-value-operations
   '{bool-not 1 option-some 1 option-none 0 option-some? 1 option-value 2})
 (def typed-vector-operations
-  '{vector-count 1 vector-get 3 vector-assoc 3 vector-conj 2})
+  '{vector-count 1 vector-get 3 vector-at 2 vector-drop 2 vector-assoc 3 vector-conj 2})
 (def sequencing-operations '#{do})
 (def string-operations '{string-byte-length 1 string=? 2 string-concat 2})
 (def reserved-function-names
@@ -430,18 +430,11 @@
     (coll? form) (some uses-map-without? form)
     :else false))
 
-(defn- nth-pair-second
-  "N nested `pair-second`s around EXPR (0 => expr itself) -- the pair-chain
-  position N steps past the head, used by both vector destructuring
-  (below) and vector-as-data indexing."
-  [expr n]
-  (nth (iterate (fn [e] (list 'pair-second e)) expr) n))
-
 (defn- destructure-binding
   "Expands ONE `[pattern value-expr]` `let`/`defn`-param binding into a flat
   seq of `[symbol expr]` pairs (ADR-2607150000). PATTERN is a plain symbol
-  (kept as-is, 1 pair), a positional vector `[a b & rest]` (pair-chain
-  destructuring via pair-first/pair-second, 1 pair per named/rest symbol),
+  (kept as-is, 1 pair), a positional vector `[a b & rest]` (bounded
+  vector-i64 destructuring via trapping vector-at/vector-drop),
   or a map `{:keys [a b]}` (association-list destructuring via the `get`
   special form, 1 pair per key). VALUE-EXPR must already be desugared --
   callers desugar it once; every pattern binds a single gensym'd temp to it
@@ -461,9 +454,9 @@
         (reject! "`&` in vector destructuring must be followed by exactly one rest-binding symbol" pattern))
       (into [[tmp value-expr]]
             (concat
-             (map-indexed (fn [i name] [name (list 'pair-first (nth-pair-second tmp i))]) positional)
+             (map-indexed (fn [i name] [name (list 'vector-at tmp i)]) positional)
              (when-let [rest-name (second rest-part)]
-               [[rest-name (nth-pair-second tmp (count positional))]]))))
+               [[rest-name (list 'vector-drop tmp (count positional))]]))))
 
     (map? pattern)
     (let [keys-vec (:keys pattern)]
@@ -531,16 +524,18 @@
     (boolean? form) form
     (nil? form) '(option-none)
     (map? form) (desugar-map form)
-    ;; ADR-2607150000: vector-as-data reuses desugar-list's pair-chain
-    ;; encoding verbatim -- a vector and a `(list ...)` call become
-    ;; identical runtime representations, matching this language's
-    ;; existing "no runtime type tags" design. Safe to dispatch generically
+    ;; Vector literals now enter the owned bounded vector-i64 profile rather
+    ;; than the legacy untagged pair arena. Binding and parameter vectors are
+    ;; consumed by their enclosing forms and never reach this branch.
     ;; here because `let`'s OWN bindings vector never reaches this branch:
     ;; the `let` case below fully owns processing it directly (via
     ;; destructure-binding) and never routes it back through desugar-expr
     ;; as a bare value. `defn` params are consumed entirely inside
     ;; `analyze`, before any desugar-expr call, for the same reason.
-    (vector? form) (desugar-list (seq form) form)
+    (vector? form)
+    (do (when (> (count form) value/vector-item-limit)
+          (reject! "vector literal exceeds item limit" form))
+        (apply list 'vector-new (map desugar-expr form)))
     (not (seq? form)) form
     :else
     (let [[op & args] form]
@@ -894,6 +889,14 @@
           (require-expression-type! (nth types 1) :i64 (nth args 1))
           (require-expression-type! (nth types 2) :i64 (nth args 2)) :i64)
 
+      (= op 'vector-at)
+      (do (require-expression-type! (nth types 0) :vector-i64 (nth args 0))
+          (require-expression-type! (nth types 1) :i64 (nth args 1)) :i64)
+
+      (= op 'vector-drop)
+      (do (require-expression-type! (nth types 0) :vector-i64 (nth args 0))
+          (require-expression-type! (nth types 1) :i64 (nth args 1)) :vector-i64)
+
       (= op 'vector-assoc)
       (do (require-expression-type! (nth types 0) :vector-i64 (nth args 0))
           (require-expression-type! (nth types 1) :i64 (nth args 1))
@@ -1144,7 +1147,9 @@
               (when-not (contains? value-types type)
                 (reject! "parameter type is outside the safe value profile" type))
               (when (and (contains? #{:string :keyword :map :bool :option-i64 :vector-i64} type)
-                         (not (or (symbol? pattern) (and (= type :map) (map? pattern)))))
+                         (not (or (symbol? pattern)
+                                  (and (= type :map) (map? pattern))
+                                  (and (= type :vector-i64) (vector? pattern)))))
                 (reject! "typed values require plain-symbol bindings" pattern))
               {:pattern pattern :type type})
             (partition 2 raw-params)))

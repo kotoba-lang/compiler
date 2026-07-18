@@ -280,6 +280,25 @@
             (nth items #?(:clj index :cljs (js/Number index)))
             (eval-expr fallback-form env functions fuel heap call-stack cap-call)))
 
+        (= op 'vector-at)
+        (let [[items-form index-form] args
+              items (value/bounded-vector-i64!
+                     (eval-expr items-form env functions fuel heap call-stack cap-call))
+              index (eval-expr index-form env functions fuel heap call-stack cap-call)]
+          (when-not (and (not (neg? index)) (< index (count items)))
+            (trap! :vector-index-out-of-range {:index index}))
+          (nth items #?(:clj index :cljs (js/Number index))))
+
+        (= op 'vector-drop)
+        (let [[items-form count-form] args
+              items (value/bounded-vector-i64!
+                     (eval-expr items-form env functions fuel heap call-stack cap-call))
+              drop-count (eval-expr count-form env functions fuel heap call-stack cap-call)]
+          (when-not (and (not (neg? drop-count)) (<= drop-count (count items)))
+            (trap! :vector-drop-out-of-range {:count drop-count}))
+          (value/bounded-vector-i64!
+           (subvec items #?(:clj drop-count :cljs (js/Number drop-count)))))
+
         (= op 'vector-assoc)
         (let [[items-form index-form item-form] args
               items (value/bounded-vector-i64!
@@ -398,15 +417,26 @@
          :option-i64 (value/bounded-option-i64! arg)
          :vector-i64 (value/bounded-vector-i64! arg)
          (throw (ex-info "argument type is unsupported" {:phase :ir :type type}))))
-     (invoke-function function
-                       (mapv (fn [arg type]
-                               (if (= type :i64)
-                                 (#?(:clj long :cljs i64/->bigint) arg)
-                                 arg))
-                             args param-types)
-                       functions
-                      (volatile! fuel) {:cells (volatile! []) :capacity pair-capacity}
-                      [] cap-call))))
+     (let [invoke #(invoke-function function
+                                    (mapv (fn [arg type]
+                                            (if (= type :i64)
+                                              (#?(:clj long :cljs i64/->bigint) arg)
+                                              arg))
+                                          args param-types)
+                                    functions
+                                    (volatile! fuel) {:cells (volatile! []) :capacity pair-capacity}
+                                    [] cap-call)]
+       #?(:clj
+          ;; A host JVM with a small native stack can exhaust that stack just
+          ;; before the fixed Kotoba call budget does.  Host resource errors
+          ;; must never escape the language boundary: normalize this one
+          ;; precise failure to the same deterministic, fail-closed trap.
+          (try
+            (invoke)
+            (catch StackOverflowError _
+              (trap! :fuel-exhausted {:limit fuel :host-stack-exhausted true})))
+          :cljs
+          (invoke))))))
 
 (defn lower [hir]
   (let [kernel-operations '#{kernel-load-u8 kernel-load-u8-4k kernel-load-u8-16k

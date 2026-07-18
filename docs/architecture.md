@@ -307,6 +307,10 @@ and `[true, bigint]` values, never host null/undefined or integer sentinels.
 The first sequential collection profile is an explicitly constructed,
 128-item `vector<i64>` with signed-i64 element checks, frozen Web host values,
 lazy out-of-range lookup fallback, and persistent assoc/conj updates.
+Ordinary vector literals and flat vector destructuring now lower into this
+profile. Required destructured positions use a trapping access operation;
+`& rest` returns a new bounded vector suffix. Explicit lists remain pair-arena
+values, so vectors and lists are no longer silently type-erased together.
 Only the restricted JavaScript target currently admits that profile.
 Other targets fail at target selection, before backend emission, rather than
 type-erasing strings, keywords, maps, booleans, or options into i64 hashes,

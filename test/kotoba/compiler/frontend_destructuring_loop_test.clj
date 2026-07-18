@@ -1,7 +1,7 @@
 (ns kotoba.compiler.frontend-destructuring-loop-test
   "Tests for ADR-2607150000's remaining language extensions: destructuring
-  (let + defn params, one level only), vector-as-data (reuses desugar-list's
-  pair-chain encoding), and loop/recur (compiled to a synthesized recursive
+  (let + defn params, one level only), bounded vector-i64 literals, and
+  loop/recur (compiled to a synthesized recursive
   helper with purely-syntactic free-variable capture). Also regression-covers
   two bugs found and fixed while implementing these: (1) `let`'s bindings
   vector previously bypassed desugar-expr entirely (vectors aren't `seq?`),
@@ -35,21 +35,20 @@
   (is (= 1 (oracle "(defn main [] (let [m {:a 1}] (get m :a)))")))
   (is (= 1 (oracle "(defn main [] (if (let [k :a] (= k :a)) 1 0))"))
       "a keyword literal as a let binding value must also desugar")
-  (is (= 3 (oracle "(defn main [] (let [v [1 2 3]] (pair-first (pair-second (pair-second v)))))"))
+  (is (= 3 (oracle "(defn main [] (let [v [1 2 3]] (vector-at v 2)))"))
       "a vector literal as a let binding value must also desugar"))
 
 ;; ───────────────────────── vector-as-data ─────────────────────────
 
-(deftest vector-literals-reuse-the-list-pair-chain-encoding
-  (is (= 1 (oracle "(defn main [] (pair-first [1 2 3]))")))
-  (is (= 2 (oracle "(defn main [] (pair-first (pair-second [1 2 3])))")))
-  (is (= 3 (oracle "(defn main [] (pair-first (pair-second (pair-second [1 2 3]))))"))))
+(deftest vector-literals-use-the-bounded-typed-vector-profile
+  (is (= 1 (oracle "(defn main [] (vector-at [1 2 3] 0))")))
+  (is (= 2 (oracle "(defn main [] (vector-at [1 2 3] 1))")))
+  (is (= 3 (oracle "(defn main [] (vector-at [1 2 3] 2))"))))
 
-(deftest vector-and-equivalent-list-produce-the-same-desugared-body
-  (let [v (:hir (compiler/check-source "(defn main [] (pair-first [1 2 3]))"))
+(deftest vector-and-list-have-distinct-owned-representations
+  (let [v (:hir (compiler/check-source "(defn main [] (vector-at [1 2 3] 0))"))
         l (:hir (compiler/check-source "(defn main [] (pair-first (list 1 2 3)))"))]
-    (is (= (:body (first (:functions v))) (:body (first (:functions l))))
-        "a vector literal and the equivalent `(list ...)` call must desugar identically")))
+    (is (not= (:body (first (:functions v))) (:body (first (:functions l)))))))
 
 (deftest lets-own-bindings-vector-never-reaches-generic-vector-as-data-dispatch
   ;; A malformed (odd-length) bindings vector must still surface `let`'s OWN
@@ -63,8 +62,12 @@
 (deftest vector-destructuring-in-let-binds-positional-and-rest
   (is (= 3 (oracle "(defn main [] (let [[a b] [1 2]] (+ a b)))")))
   (is (= 3 (oracle "(defn main [] (let [[a b & r] [1 2 3 4]] (+ a b)))")))
-  (is (= 3 (oracle "(defn main [] (let [[a b & r] [1 2 3 4]] (pair-first r)))"))
+  (is (= 3 (oracle "(defn main [] (let [[a b & r] [1 2 3 4]] (vector-at r 0)))"))
       "the rest binding collects everything after the named positions"))
+
+(deftest vector-destructuring-missing-position-fails-closed
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"vector-index-out-of-range"
+                        (oracle "(defn main [] (let [[a b] [1]] (+ a b)))"))))
 
 (deftest map-destructuring-in-let-binds-via-keys
   (is (= 30 (oracle "(defn main [] (let [{:keys [a b]} {:a 10 :b 20}] (+ a b)))")))
@@ -93,13 +96,13 @@
 ;; ───────────────────────── destructuring: defn params ─────────────────────────
 
 (deftest defn-params-support-vector-destructuring
-  (is (= 15 (oracle "(ns t) (defn addpair [[a b]] (+ a b)) (defn main [] (addpair [7 8]))"))))
+  (is (= 15 (oracle "(ns t) (defn addpair [[a b] :vector-i64] (+ a b)) (defn main [] (addpair [7 8]))"))))
 
 (deftest defn-params-support-map-destructuring
   (is (= 7 (oracle "(ns t) (defn addkv [{:keys [a b]} :map] (+ a b)) (defn main [] (addkv {:a 3 :b 4}))"))))
 
 (deftest defn-params-mix-plain-symbols-and-destructuring-patterns
-  (is (= 16 (oracle "(ns t) (defn f [x [a b]] (+ x (+ a b))) (defn main [] (f 10 [3 3]))"))))
+  (is (= 16 (oracle "(ns t) (defn f [x :i64 [a b] :vector-i64] (+ x (+ a b))) (defn main [] (f 10 [3 3]))"))))
 
 ;; ───────────────────────── loop/recur ─────────────────────────
 

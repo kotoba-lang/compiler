@@ -181,9 +181,12 @@ The first bounded sequential collection is `:vector-i64`, constructed
 explicitly with `(vector-i64 ...)` and capped at 128 items. `vector-count`,
 `vector-get`, `vector-assoc`, and `vector-conj` preserve signed-i64 elements;
 get uses a lazy fallback for every out-of-range index, while assoc traps.
-Generated Web values are frozen arrays and updates are persistent. Existing
-legacy vector literals are not silently reinterpreted until type-directed
-literal/destructuring lowering is complete.
+Generated Web values are frozen arrays and updates are persistent. Ordinary
+`[1 2 3]` literals now lower to this profile. Flat `[a b & rest]`
+destructuring uses trapping required positions and a bounded frozen suffix;
+missing positions fail closed instead of silently becoming zero or nil.
+Destructured function parameters must declare `:vector-i64` explicitly.
+The explicit `(list ...)` surface retains the legacy pair-chain representation.
 
 Release-oriented target identities explicitly bind execution format, ISA, OS,
 ABI, and runtime profile. Current explicit names are `wasm32-browser`, `wasm32-wasi`,
