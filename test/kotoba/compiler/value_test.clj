@@ -108,6 +108,30 @@
                         (value/validate-value-type!
                          [:vector (vec (repeat 33 :i64))]))))
 
+(deftest typed-set-values-are-unique-canonically-ordered-and-bounded
+  (let [type [:set :i64]
+        option-type [:option :string]
+        nested-type [:set option-type]]
+    (is (= [type [1 2 3]]
+           (value/bounded-typed-value! type [type [3 1 2]])))
+    (is (= [nested-type [[option-type false]
+                         [option-type true "a"]
+                         [option-type true "b"]]]
+           (value/bounded-typed-value!
+            nested-type
+            [nested-type [[option-type true "b"] [option-type false]
+                          [option-type true "a"]]])))
+    (is (neg? (value/compare-typed-values [:vector [:i64 :string]]
+                                          [[:vector [:i64 :string]] 1 "a"]
+                                          [[:vector [:i64 :string]] 1 "b"])))
+    (doseq [invalid [[type [1 1]]
+                     [type (vec (range 33))]
+                     [[:set :string] ["1"]]
+                     [type [1 "2"]]
+                     nil]]
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (value/bounded-typed-value! type invalid))))))
+
 (deftest vector-i64-is-bounded-and-homogeneous
   (is (= [1 2 3] (value/bounded-vector-i64! [1 2 3])))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a vector-i64"

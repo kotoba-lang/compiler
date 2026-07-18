@@ -386,6 +386,57 @@
                            "(defn main [] [:vector [:i64 :string]] (hetero-vector [:vector [:i64 :string]] 1 \"x\"))"
                            target-name)))))
 
+(deftest typed-sets-are-unique-canonically-ordered-and-persistent
+  (let [type [:set :i64]
+        source "(ns set.typed (:export [make duplicate contains? add remove count-items same?]))
+                (defn make [] [:set :i64] (typed-set [:set :i64] 3 1 2))
+                (defn duplicate [] [:set :i64] (typed-set [:set :i64] 1 1))
+                (defn contains? [value [:set :i64] item :i64] :bool
+                  (typed-set-contains [:set :i64] value item))
+                (defn add [value [:set :i64] item :i64] [:set :i64]
+                  (typed-set-conj [:set :i64] value item))
+                (defn remove [value [:set :i64] item :i64] [:set :i64]
+                  (typed-set-disj [:set :i64] value item))
+                (defn count-items [value [:set :i64]]
+                  (typed-set-count [:set :i64] value))
+                (defn same? [left [:set :i64] right [:set :i64]]
+                  (typed-set-equal [:set :i64] left right))"
+        compiled (compiler/compile-source source :js-kotoba-v1)
+        kir (:kir compiled)
+        encoded (.encodeToString (java.util.Base64/getEncoder)
+                                 (.getBytes ^String (:source compiled) "UTF-8"))
+        probe (str "import('data:text/javascript;base64," encoded
+                   "').then(m=>{const x=m.instantiateKotoba({}),t=Object.freeze(['set','i64']);"
+                   "const a=x.make(),b=x.add(a,4n),c=x.remove(b,2n);"
+                   "if(a[1].join(',')!=='1,2,3'||!x['contains?'](a,2n)||x['contains?'](a,9n)||x['count-items'](a)!==3n)process.exit(2);"
+                   "if(a[1].length!==3||b[1].join(',')!=='1,2,3,4'||c[1].join(',')!=='1,3,4'||!Object.isFrozen(c[1]))process.exit(3);"
+                   "if(x['same?'](a,[t,[3n,2n,1n]])!==1n||x['same?'](a,b)!==0n)process.exit(4);"
+                   "try{x.duplicate();process.exit(5)}catch(e){if(e.message!=='duplicate-set-item')process.exit(6)}"
+                   "try{x['contains?']([Object.freeze(['set','string']),['1']],1n);process.exit(7)}"
+                   "catch(e){if(e.message!=='invalid-typed-set')process.exit(8)}})")
+        node-result (shell/sh "node" "--input-type=module" "-e" probe)]
+    (is (= [type [1 2 3]] (ir/execute kir 'make [])))
+    (is (true? (ir/execute kir 'contains? [[type [3 1 2]] 2])))
+    (is (false? (ir/execute kir 'contains? [[type [3 1 2]] 9])))
+    (is (= [type [1 2 3 4]] (ir/execute kir 'add [[type [3 1 2]] 4])))
+    (is (= [type [1 3]] (ir/execute kir 'remove [[type [3 1 2]] 2])))
+    (is (= 1 (ir/execute kir 'same? [[type [3 1 2]] [type [1 2 3]]])))
+    (is (thrown? clojure.lang.ExceptionInfo (ir/execute kir 'duplicate [])))
+    (is (= 32 (get-in compiled [:manifest :kotoba.artifact/limits :typed-set-items])))
+    (is (zero? (:exit node-result)) (:err node-result)))
+  (doseq [source
+          ["(defn bad [] [:set :i64] (typed-set [:set :i64] \"wrong\"))"
+           "(defn bad [v [:set :i64]] :bool (typed-set-contains [:set :i64] v \"wrong\"))"
+           "(defn bad [] [:set :i64] (typed-set [:set :i64] 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32))"]]
+    (is (some? (rejection-message source))))
+  (doseq [target-name (remove #(= :js-kotoba-v1 (target/backend %))
+                              compiler/supported-targets)]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"require the kotoba-script web target"
+                          (compiler/compile-source
+                           "(defn main [] [:set :i64] (typed-set [:set :i64] 1 2))"
+                           target-name)))))
+
 (deftest bounded-map-host-abi-runs-through-compiler-and-kotoba-script
   (let [source "(ns pilot.map (:export [lookup update]))
                 (defn lookup [value :map] (get value :a 0))

@@ -105,6 +105,9 @@
 (def heterogeneous-vector-operations
   '#{hetero-vector-new hetero-vector-count hetero-vector-at
      hetero-vector-assoc hetero-vector-equal})
+(def typed-set-operations
+  '#{typed-set-new typed-set-count typed-set-contains typed-set-conj
+     typed-set-disj typed-set-equal})
 (def typed-vector-operations
   '{vector-count 1 vector-get 3 vector-at 2 vector-drop 2 vector-assoc 3 vector-conj 2})
 (def sequencing-operations '#{do})
@@ -119,10 +122,11 @@
              variant-operations
              generic-option-operations
              heterogeneous-vector-operations
+             typed-set-operations
              (set (keys typed-vector-operations))
              (set (keys string-operations))
              '#{let if cap-call ns defn defn- some some? nil? vector-i64 vector-new
-                hetero-vector match-result match-variant match-option}))
+                hetero-vector typed-set match-result match-variant match-option}))
 (def max-functions 1024)
 (def max-expression-nodes 50000)
 (def max-lowered-nodes 100000)
@@ -136,6 +140,7 @@
 (def max-type-nodes 64)
 (def max-variant-cases 32)
 (def max-heterogeneous-vector-items 32)
+(def max-typed-set-items 32)
 ;; ADR-2607182410: bounds an optional `ns` `:capabilities` declaration set.
 ;; 256, not max-functions -- matches cap-call's own [0,255] id space (at
 ;; most 256 distinct capabilities can ever exist), not the unrelated
@@ -157,9 +162,12 @@
 (defn- heterogeneous-vector-type? [type]
   (and (vector? type) (= 2 (count type)) (= :vector (first type))))
 
+(defn- typed-set-type? [type]
+  (and (vector? type) (= 2 (count type)) (= :set (first type))))
+
 (defn- structured-type? [type]
   (or (parametric-result-type? type) (variant-type? type) (generic-option-type? type)
-      (heterogeneous-vector-type? type)))
+      (heterogeneous-vector-type? type) (typed-set-type? type)))
 
 (defn- validate-value-type!
   ([type] (validate-value-type! type 0 (volatile! 0)))
@@ -189,6 +197,9 @@
        (doseq [item-type item-types]
          (validate-value-type! item-type (inc depth) nodes))
        type)
+     (typed-set-type? type)
+     (do (validate-value-type! (second type) (inc depth) nodes)
+         type)
      (variant-type? type)
      (let [[_ type-id cases] type]
        (when-not (and (keyword? type-id) (namespace type-id))
@@ -841,6 +852,34 @@
               (reject! "hetero-vector-equal requires type and two values" form))
             (list 'hetero-vector-equal (first args) (desugar-expr (second args))
                   (desugar-expr (nth args 2))))
+        typed-set
+        (do (when (empty? args)
+              (reject! "typed-set requires a type descriptor" form))
+            (list* 'typed-set-new (first args) (map desugar-expr (rest args))))
+        typed-set-count
+        (do (when-not (= 2 (count args))
+              (reject! "typed-set-count requires type and value" form))
+            (list 'typed-set-count (first args) (desugar-expr (second args))))
+        typed-set-contains
+        (do (when-not (= 3 (count args))
+              (reject! "typed-set-contains requires type, value, and item" form))
+            (list 'typed-set-contains (first args) (desugar-expr (second args))
+                  (desugar-expr (nth args 2))))
+        typed-set-conj
+        (do (when-not (= 3 (count args))
+              (reject! "typed-set-conj requires type, value, and item" form))
+            (list 'typed-set-conj (first args) (desugar-expr (second args))
+                  (desugar-expr (nth args 2))))
+        typed-set-disj
+        (do (when-not (= 3 (count args))
+              (reject! "typed-set-disj requires type, value, and item" form))
+            (list 'typed-set-disj (first args) (desugar-expr (second args))
+                  (desugar-expr (nth args 2))))
+        typed-set-equal
+        (do (when-not (= 3 (count args))
+              (reject! "typed-set-equal requires type and two values" form))
+            (list 'typed-set-equal (first args) (desugar-expr (second args))
+                  (desugar-expr (nth args 2))))
         result-ok-of (do (when-not (= 2 (count args)) (reject! "result-ok-of requires type and payload" form))
                          (list 'result-ok-of (first args) (desugar-expr (second args))))
         result-err-of (do (when-not (= 2 (count args)) (reject! "result-err-of requires type and payload" form))
@@ -985,6 +1024,42 @@
         (do (when-not (= (get typed-safe-value-operations op) (count args))
               (reject! "typed safe-value operation arity mismatch" form))
             (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
+        (= op 'typed-set-new)
+        (let [[type & items] args]
+          (validate-value-type! type)
+          (when-not (typed-set-type? type)
+            (reject! "typed set constructor requires [:set item-type]" form))
+          (when (> (count items) max-typed-set-items)
+            (reject! "typed set constructor exceeds item limit" form))
+          (doseq [item items]
+            (validate-expr item locals functions (inc depth) budget)))
+
+        (= op 'typed-set-count)
+        (let [[type value] args]
+          (when-not (= 2 (count args)) (reject! "typed set count shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (typed-set-type? type)
+            (reject! "typed set count requires [:set item-type]" form))
+          (validate-expr value locals functions (inc depth) budget))
+
+        (contains? '#{typed-set-contains typed-set-conj typed-set-disj} op)
+        (let [[type value item] args]
+          (when-not (= 3 (count args)) (reject! "typed set operation shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (typed-set-type? type)
+            (reject! "typed set operation requires [:set item-type]" form))
+          (validate-expr value locals functions (inc depth) budget)
+          (validate-expr item locals functions (inc depth) budget))
+
+        (= op 'typed-set-equal)
+        (let [[type left right] args]
+          (when-not (= 3 (count args)) (reject! "typed set equality shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (typed-set-type? type)
+            (reject! "typed set equality requires [:set item-type]" form))
+          (validate-expr left locals functions (inc depth) budget)
+          (validate-expr right locals functions (inc depth) budget))
 
         (= op 'hetero-vector-new)
         (let [[type & items] args
@@ -1439,6 +1514,45 @@
           (require-expression-type! (infer-expression-type left locals signatures) type left)
           (require-expression-type! (infer-expression-type right locals signatures) type right)
           :i64)
+        typed-set-new
+        (let [[type & items] args]
+          (validate-value-type! type)
+          (doseq [item items]
+            (require-expression-type! (infer-expression-type item locals signatures)
+                                      (second type) item))
+          type)
+        typed-set-count
+        (let [[type value] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          :i64)
+        typed-set-contains
+        (let [[type value item] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          (require-expression-type! (infer-expression-type item locals signatures)
+                                    (second type) item)
+          :bool)
+        typed-set-conj
+        (let [[type value item] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          (require-expression-type! (infer-expression-type item locals signatures)
+                                    (second type) item)
+          type)
+        typed-set-disj
+        (let [[type value item] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          (require-expression-type! (infer-expression-type item locals signatures)
+                                    (second type) item)
+          type)
+        typed-set-equal
+        (let [[type left right] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type left locals signatures) type left)
+          (require-expression-type! (infer-expression-type right locals signatures) type right)
+          :i64)
         (infer-call-type op args locals signatures)))
     :else (reject! "value has no admitted type" form)))
 
@@ -1821,6 +1935,7 @@
                                                          (contains? variant-operations (first %))
                                                          (contains? generic-option-operations (first %))
                                                          (contains? heterogeneous-vector-operations (first %))
+                                                         (contains? typed-set-operations (first %))
                                                          (= 'vector-new (first %))
                                                          (contains? typed-vector-operations (first %)))))
                                            (tree-seq coll? seq body))))

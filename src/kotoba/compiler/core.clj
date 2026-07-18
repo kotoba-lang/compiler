@@ -85,6 +85,7 @@
                                           :variant-cases 32
                                           :generic-option-max-slots 3
                                           :heterogeneous-vector-items 32
+                                          :typed-set-items 32
                                           :vector-i64-items 128))
             js-source (script/emit kir (merge {:source-digest source-digest
                                                :kir-digest kir-digest
