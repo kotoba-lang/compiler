@@ -34,7 +34,8 @@
 
 (defn compile-source
   ([source target] (compile-source source target {}))
-  ([source target policy]
+  ([source target policy] (compile-source source target policy {}))
+  ([source target policy emit-metadata]
    (when-not (contains? supported-targets target)
      (throw (ex-info "unsupported target" {:target target :supported supported-targets})))
    (let [profile (target-profile/profile target)
@@ -75,9 +76,10 @@
                      typed-values? (assoc :string-literal-bytes 4096
                                           :string-module-literal-bytes 65536
                                           :string-value-bytes 65536))
-            js-source (script/emit kir {:source-digest source-digest
-                                        :kir-digest kir-digest
-                                        :compiler-version compiler-version})
+            js-source (script/emit kir (merge {:source-digest source-digest
+                                               :kir-digest kir-digest
+                                               :compiler-version compiler-version}
+                                              emit-metadata))
             output-digest (text-sha256 js-source)]
         {:format :javascript/v1 :target target :target-profile profile
          :hir hir :kir kir :admission admission
@@ -148,7 +150,9 @@
                 :kotoba.module/order (:module-order linked)
                 :kotoba.module/source-digests module-digests}
          graph-digest (artifact/sha256 graph)
-         compiled (compile-source (:source linked) target policy)]
+         compiled (compile-source (:source linked) target policy
+                                  {:module-graph-digest graph-digest
+                                   :module-source-digests module-digests})]
      (cond-> (assoc compiled :project graph :project-digest graph-digest)
        (:manifest compiled)
        (update :manifest assoc

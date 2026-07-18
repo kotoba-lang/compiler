@@ -39,7 +39,10 @@
   (let [sources {'example.app app-source 'example.text text-source}
         a (compiler/compile-project sources 'example.app :js-kotoba-v1)
         b (compiler/compile-project (into (array-map) (reverse sources))
-                                    'example.app :js-kotoba-v1)]
+                                    'example.app :js-kotoba-v1)
+        changed (compiler/compile-project
+                 (assoc sources 'example.text (str/replace text-source "こんにちは" "こんばんは"))
+                 'example.app :js-kotoba-v1)]
     (is (= (:project-digest a) (:project-digest b)))
     (is (= (:project-digest a)
            (get-in a [:manifest :kotoba.artifact/module-graph-digest])))
@@ -47,11 +50,15 @@
            (get-in a [:project :kotoba.module/order])))
     (is (= #{'example.text 'example.app}
            (set (keys (get-in a [:manifest :kotoba.artifact/module-source-digests])))))
+    (is (str/includes? (:source a)
+                       (str "moduleGraphDigest:\"" (:project-digest a) "\"")))
+    (is (str/includes? (:source a) "moduleSourceDigests:Object.freeze"))
+    (is (str/includes? (:source a) "\"example.app\""))
+    (is (str/includes? (:source a) "\"example.text\""))
     (is (not= (:project-digest a)
-              (:project-digest
-               (compiler/compile-project
-                (assoc sources 'example.text (str/replace text-source "こんにちは" "こんばんは"))
-                'example.app :js-kotoba-v1))))))
+              (:project-digest changed)))
+    (is (not= (get-in a [:manifest :kotoba.artifact/output-digest])
+              (get-in changed [:manifest :kotoba.artifact/output-digest])))))
 
 (deftest project-imports-fail-closed
   (testing "missing source"
