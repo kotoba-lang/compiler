@@ -5,8 +5,8 @@
             ["node:path" :as path]))
 
 (def usage
-  ["usage: kotoba -M compile <file.kotoba> --target wasm32-browser|wasm32-wasi|x86_64-linux|x86_64-macos|x86_64-windows|aarch64-linux|aarch64-macos|aarch64-windows|aarch64-android|aarch64-ios [--policy policy.edn] --output <file>"
-   "       kotoba -M check <file.kotoba> [--policy policy.edn]"
+  ["usage: kotoba -M compile <file.kotoba|file.cljk|file.cljc> --target wasm32-browser|wasm32-wasi|x86_64-linux|x86_64-macos|x86_64-windows|aarch64-linux|aarch64-macos|aarch64-windows|aarch64-android|aarch64-ios|js|js-browser [--policy policy.edn] --output <file>"
+   "       kotoba -M check <file.kotoba|file.cljk|file.cljc> [--policy policy.edn]"
    "       kotoba -M package-ios program.kexe [--entry main] --output program.S [--manifest-output program.edn]"
    "       kotoba -M sbom <artifact> --output artifact.spdx"
    "       kotoba -M attest-release <artifact> --sbom artifact.spdx --target <target> --key key.edn --not-before <epoch> --expires <epoch> --output release.edn"

@@ -24,6 +24,7 @@
             [kotoba.compiler.release-test]
             [kotoba.compiler.security-fuzz-test]
             [kotoba.compiler.signing-test]
+            [kotoba.compiler.source-path-test]
             [kotoba.compiler.typed-value-conformance-test]
             [kotoba.compiler.wasm-typed-test]
             [kotoba.compiler.value-test]
@@ -48,6 +49,7 @@
                                           'kotoba.compiler.admission-test
                                           'kotoba.compiler.guest-grammar-conformance-test
                                           'kotoba.compiler.signing-test
+                                          'kotoba.compiler.source-path-test
                                           'kotoba.compiler.typed-value-conformance-test
                                           'kotoba.compiler.wasm-typed-test
                                           'kotoba.compiler.native-executor-test

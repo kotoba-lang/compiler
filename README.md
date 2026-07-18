@@ -69,7 +69,10 @@ WGSL, CUDA C or Metal Shading Language. Sealed GPU artifacts bind KIR/code hashe
 re-lowered during verification, including against attacker-resealed code. This
 is the shared GPU compiler contract consumed by `kotoba-lang/num`; see
 ADR-0002.
-`.kotoba` is the sole admitted source-file format.
+`.kotoba`, `.cljk` (CLJ-shaped Kotoba), and `.cljc` (portable common source)
+are admitted source-discovery extensions. All three enter the exact same closed
+Kotoba reader, type/effect admission and selected backend; none enables the JVM,
+the full Clojure/ClojureScript reader, reader conditionals, or ambient host APIs.
 
 ```text
 source -> inert reader -> typed/effect HIR -> SSA-like KIR
