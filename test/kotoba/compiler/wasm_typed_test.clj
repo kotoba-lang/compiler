@@ -40,7 +40,27 @@
     (testing "custom section identity is present in typed modules"
       (is (some #(= marker %) (partition (count marker) 1 typed-bytes))))
     (testing "legacy i64 modules do not acquire a typed ABI claim"
-      (is (not-any? #(= marker %) (partition (count marker) 1 i64-bytes))))))
+    (is (not-any? #(= marker %) (partition (count marker) 1 i64-bytes))))))
+
+(deftest compatibility-is-sealed-and-host-admitted-before-instantiation
+  (let [compiled (compiler/compile-source "(defn main [] 42)" :wasm32-browser-kotoba-v1)
+        encoded (.encodeToString (java.util.Base64/getEncoder) ^bytes (:bytes compiled))
+        probe (shell/sh
+               "node" "--input-type=module" "-e"
+               (str "import('./runtime/browser-host.mjs').then(async m=>{"
+                    "const b=Buffer.from(process.argv[1],'base64');"
+                    "const h=await m.instantiateKotoba(b);"
+                    "if(h.compatibility.compiler!=='kotoba-compiler/1'||"
+                    "h.compatibility.language!=='kotoba.language/safe-v1'||"
+                    "h.compatibility.target!=='wasm32-browser-kotoba-v1')process.exit(2);"
+                    "const marker=Buffer.from('kotoba-compiler/1');const at=b.indexOf(marker);"
+                    "if(at<0)process.exit(3);b[at+marker.length-1]=50;"
+                    "try{await m.instantiateKotoba(b);process.exit(4)}catch(e){"
+                    "if(e.code!=='compatibility-mismatch')process.exit(5)}})"
+                    ".catch(e=>{console.error(e);process.exit(70)})")
+               encoded)]
+    (is (= :kotoba.compatibility/v1 (get-in compiled [:compatibility :format])))
+    (is (zero? (:exit probe)) (:err probe))))
 
 (deftest externref-boundaries-reject-forgery-and-cross-schema-substitution
   (let [source "(ns typed.boundary (:export [main make-i64 make-string read-i64]))

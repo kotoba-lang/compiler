@@ -19,6 +19,20 @@
     (is (= 1 (count (set (map :kir results)))))
     (is (every? #(= #{} (get-in % [:kir :effects])) results))))
 
+(deftest compatibility-metadata-is-target-specific-and-sealed
+  (let [wasm (compiler/compile-source source :wasm32-browser-kotoba-v1)
+        js (compiler/compile-source source :js-browser-kotoba-v1)
+        native (compiler/compile-source source :x86_64-linux-kotoba-v1)]
+    (doseq [compiled [wasm js native]]
+      (is (= :kotoba.compatibility/v1 (get-in compiled [:compatibility :format]))))
+    (is (= (:compatibility js)
+           (get-in js [:manifest :kotoba.artifact/compatibility])))
+    (is (= (:compatibility native)
+           (get-in native [:artifact :compatibility])))
+    (is (artifact/valid-seal? (:artifact native)))
+    (is (not= (get-in wasm [:compatibility :runtime])
+              (get-in js [:compatibility :runtime])))))
+
 (deftest explicit-platform-targets-bind-os-abi-and-runtime-profile
   (let [linux (:artifact (compiler/compile-source source :x86_64-linux-kotoba-v1))
         macos (:artifact (compiler/compile-source source :x86_64-macos-kotoba-v1))

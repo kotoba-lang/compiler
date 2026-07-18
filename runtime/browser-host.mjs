@@ -2,6 +2,8 @@ const MAX_MODULE_BYTES = 1024 * 1024;
 const PAIR_CAPACITY = 4096;
 const TYPED_SECTION = "kotoba.typed";
 const TYPED_ABI_VERSION = 1;
+const COMPATIBILITY_SECTION = "kotoba.compatibility";
+const COMPATIBILITY_VERSION = 1;
 const MAX_TYPED_DESCRIPTORS = 64;
 const ALLOWED_IMPORTS = new Set([
   "kotoba:cap/call/function",
@@ -171,6 +173,51 @@ function parseTypedMetadata(module) {
   });
 }
 
+function parseCompatibility(module) {
+  const sections = WebAssembly.Module.customSections(module, COMPATIBILITY_SECTION);
+  if (sections.length === 0) return null; // legacy hand-authored fixtures only
+  if (sections.length !== 1)
+    reject("invalid-compatibility", "compatibility section must be unique");
+  const bytes = new Uint8Array(sections[0]);
+  let offset = 0;
+  const byte = () => {
+    if (offset >= bytes.length) reject("invalid-compatibility", "truncated compatibility section");
+    return bytes[offset++];
+  };
+  const uleb = () => {
+    let value = 0;
+    for (let shift = 0; shift <= 28; shift += 7) {
+      const part = byte();
+      value |= (part & 0x7f) << shift;
+      if ((part & 0x80) === 0) return value;
+    }
+    reject("invalid-compatibility", "oversized compatibility length");
+  };
+  const text = () => {
+    const length = uleb();
+    if (length === 0 || length > 256 || offset + length > bytes.length)
+      reject("invalid-compatibility", "invalid compatibility text length");
+    let value;
+    try { value = new TextDecoder("utf-8", { fatal: true }).decode(bytes.slice(offset, offset + length)); }
+    catch (error) { reject("invalid-compatibility", "compatibility text is not UTF-8", error); }
+    offset += length;
+    return value;
+  };
+  if (byte() !== COMPATIBILITY_VERSION)
+    reject("unsupported-compatibility", "unsupported compatibility version");
+  const names = ["compiler", "language", "kir", "target", "runtime", "valueAbi", "tenderRole", "tenderContract"];
+  const result = Object.fromEntries(names.map(name => [name, text()]));
+  if (offset !== bytes.length)
+    reject("invalid-compatibility", "trailing compatibility metadata rejected");
+  if (result.compiler !== "kotoba-compiler/1" || result.language !== "kotoba.language/safe-v1" ||
+      result.tenderRole !== "kototama/component-tender-v1" ||
+      result.tenderContract !== "kotoba.capability-host/v1")
+    reject("compatibility-mismatch", "compiler, language, or tender contract is unsupported");
+  if (!["kotoba-capability-host-v1", "kotoba-browser-host-v1", "kotoba-wasi-host-v1"].includes(result.runtime))
+    reject("compatibility-mismatch", "runtime compatibility identity is unsupported");
+  return Object.freeze({ version: COMPATIBILITY_VERSION, ...result });
+}
+
 function validateModule(module) {
   for (const entry of WebAssembly.Module.imports(module)) {
     const identity = `${entry.module}/${entry.name}/${entry.kind}`;
@@ -182,7 +229,7 @@ function validateModule(module) {
     reject("invalid-module", "Kotoba browser module must export a main function");
   if (exports.some(entry => entry.kind === "memory" || entry.kind === "table" || entry.kind === "global"))
     reject("forbidden-export", "Kotoba browser module may export functions only");
-  return parseTypedMetadata(module);
+  return Object.freeze({ typedAbi: parseTypedMetadata(module), compatibility: parseCompatibility(module) });
 }
 
 function createHeap() {
@@ -505,7 +552,9 @@ export async function instantiateKotoba(source, rawOptions) {
   let module;
   try { module = await WebAssembly.compile(bytes); }
   catch (error) { reject("invalid-module", "Wasm compilation failed", error); }
-  const typedAbi = validateModule(module);
+  const admission = validateModule(module);
+  const typedAbi = admission.typedAbi;
+  const compatibility = admission.compatibility;
   const typed = createTypedRuntime(typedAbi);
   const heap = createHeap();
   const cap = Object.freeze({
@@ -536,6 +585,7 @@ export async function instantiateKotoba(source, rawOptions) {
     instance,
     sha256: digest,
     typedAbi,
+    compatibility,
     report: () => Object.freeze({ heap: heap.report() })
   });
 }
@@ -545,5 +595,6 @@ export const browserProfile = Object.freeze({
   maxModuleBytes: MAX_MODULE_BYTES,
   pairCapacity: PAIR_CAPACITY,
   typedAbiVersion: TYPED_ABI_VERSION,
+  compatibilityVersion: COMPATIBILITY_VERSION,
   imports: Object.freeze(Array.from(ALLOWED_IMPORTS).sort())
 });
