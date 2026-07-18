@@ -92,10 +92,19 @@
                               [:KEXE_NETWORK_PROBE "network-denied"]
                               [:KEXE_NETWORK_LISTEN_PROBE "network-listen-denied"]]]
         (let [result (run-external loader [raw main-offset main-arity isa "-"]
-                                   {probe "1"} true)]
-          (lib/ensure! (= 77 (.-status result)) (str "windows-profile: " reason " exit mismatch"))
-          (lib/ensure! (.includes (.-stderr result) (str ":reason :" reason))
-                       (str "windows-profile: " reason " report mismatch"))))
+                                   {probe "1"} true)
+              status (.-status result)
+              stderr (or (.-stderr result) "")]
+          ;; Include the actual exit status and the loader's own stderr
+          ;; diagnostics in the failure message -- previously this reported
+          ;; only the generic "exit mismatch"/"report mismatch" text, which
+          ;; discarded the child process's own diagnostic output and made a
+          ;; CI failure here undiagnosable from the log alone (see the
+          ;; 2026-07 windows-network-denial PR #67 CI failure).
+          (lib/ensure! (= 77 status)
+                       (str "windows-profile: " reason " exit mismatch (status=" status "): " stderr))
+          (lib/ensure! (.includes stderr (str ":reason :" reason))
+                       (str "windows-profile: " reason " report mismatch (status=" status "): " stderr))))
       (run-k! ["compile" (.join path lib/root "examples/heap.kotoba")
                "--target" target "--output" (artifact "heap.kexe")])
       (let [[offset arity] (extract! (artifact "heap.kexe") "main" (artifact "heap.bin"))

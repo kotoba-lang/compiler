@@ -204,6 +204,27 @@ static void prohibit_dynamic_code(void) {
  * requiring an administrative caller. This has not been exercised on a real
  * Windows host from this change -- the windows-arm64 CI job is the actual
  * first real execution of this code path (see docs/threat-model.md).
+ *
+ * UPDATE (first real CI run, PR #67): FwpmEngineOpen0/FwpmFilterAdd0 did NOT
+ * fail (the admin-privilege risk above did not materialize -- every
+ * loader invocation in that run, including the plain non-probe ones, got
+ * this far without fail_win() firing). The failure was downstream, at the
+ * KEXE_NETWORK_PROBE assertion in scripts/windows-profile-conformance.cljs:
+ * the probe process exited with a code other than 77, meaning the loopback
+ * connect() in connect_and_require_denial() did not resolve to WSAEACCES as
+ * expected. Root cause is not confirmed. The filter as originally written
+ * requested FWP_EMPTY (auto-assigned) weight, which only ranks this filter
+ * among other auto-weighted filters in FWPM_SUBLAYER_UNIVERSAL -- it does
+ * not guarantee precedence over higher-weighted filters that may already
+ * exist there (from other software, or an OS-default permissive rule for
+ * loopback/local traffic). This revision requests maximum explicit weight
+ * instead, as a defensive hardening; whether that was in fact the cause is
+ * unverified since this code cannot be exercised outside windows-arm64 CI.
+ * connect_and_require_denial() below was also expanded, at the same time,
+ * to print an unambiguous diagnostic line on every resolution path (which
+ * WSA error, synchronous vs. post-select, or a timeout), so a repeat
+ * failure will show the actual cause in the CI log instead of a bare
+ * "exit mismatch".
  */
 static void install_network_denial(void) {
   HANDLE engine = NULL;
@@ -244,7 +265,21 @@ static void install_network_denial(void) {
     filter.subLayerKey = FWPM_SUBLAYER_UNIVERSAL;
     filter.displayData.name = L"kotoba-kexe-network-denial";
     filter.action.type = FWP_ACTION_BLOCK;
-    filter.weight.type = FWP_EMPTY;
+    /*
+     * FWP_EMPTY (auto-assigned weight) was used originally, but auto-weight
+     * only guarantees a rank *among filters that request auto-weight*; it
+     * does not guarantee this filter outranks other, higher-weighted
+     * filters that may already exist in FWPM_SUBLAYER_UNIVERSAL (e.g. from
+     * other software, or OS-default permissive filters for loopback/local
+     * services). Use the maximum explicit weight on the standard 0-15 scale
+     * so this BLOCK filter is evaluated first among same-sublayer filters
+     * regardless of what else is registered. This is a defensive hardening,
+     * not a confirmed fix for the 2026-07 CI "network-denied exit mismatch"
+     * failure (root cause unconfirmed -- see connect_and_require_denial()'s
+     * expanded diagnostics, added at the same time as this change).
+     */
+    filter.weight.type = FWP_UINT8;
+    filter.weight.uint8 = 15;
     filter.numFilterConditions = 1;
     filter.filterCondition = &condition;
     status = FwpmFilterAdd0(engine, &filter, NULL, &filter_id);
@@ -253,6 +288,8 @@ static void install_network_denial(void) {
       SetLastError(status);
       fail_win("FwpmFilterAdd0");
     }
+    fprintf(stderr, "kexe-loader-windows: network denial filter installed: layer=%zu filter_id=%llu\n",
+            i, (unsigned long long)filter_id);
   }
 
   FwpmFreeMemory0((void **)&app_id);
@@ -282,6 +319,7 @@ static int connect_and_require_denial(SOCKET sock, const struct sockaddr_in *add
   struct timeval timeout;
   int error_value = 0;
   int error_length = sizeof(error_value);
+  int select_result;
 
   if (ioctlsocket(sock, FIONBIO, &non_blocking) != 0) {
     fprintf(stderr, "kexe-loader-windows: network probe ioctlsocket failed: wsa=%d\n",
@@ -289,31 +327,64 @@ static int connect_and_require_denial(SOCKET sock, const struct sockaddr_in *add
     return 70;
   }
   if (connect(sock, (const struct sockaddr *)address, sizeof(*address)) == 0) {
-    fprintf(stderr, "kexe-loader-windows: network probe connect() unexpectedly succeeded\n");
+    fprintf(stderr, "kexe-loader-windows: network probe connect() unexpectedly succeeded "
+                    "synchronously (before any wait) -- the block filter did not deny it\n");
     return 70;
   }
   error_value = WSAGetLastError();
-  if (error_value == WSAEWOULDBLOCK) {
-    FD_ZERO(&write_set);
-    FD_ZERO(&except_set);
-    FD_SET(sock, &write_set);
-    FD_SET(sock, &except_set);
-    timeout.tv_sec = 2;
-    timeout.tv_usec = 0;
-    if (select(0, NULL, &write_set, &except_set, &timeout) == 0) {
-      fprintf(stderr, "kexe-loader-windows: network probe timed out waiting for a policy "
-                      "decision instead of being denied at admission\n");
-      return 70;
-    }
-    if (getsockopt(sock, SOL_SOCKET, SO_ERROR, (char *)&error_value, &error_length) != 0) {
-      fprintf(stderr, "kexe-loader-windows: network probe getsockopt(SO_ERROR) failed: wsa=%d\n",
-              WSAGetLastError());
-      return 70;
-    }
+  if (error_value == WSAEACCES) {
+    fprintf(stderr, "kexe-loader-windows: network probe denied synchronously by connect(): "
+                    "wsa=WSAEACCES(%d)\n", error_value);
+    return 0;
   }
-  if (error_value == WSAEACCES) return 0;
-  fprintf(stderr, "kexe-loader-windows: network probe resolved with unexpected code: wsa=%d\n",
-          error_value);
+  if (error_value != WSAEWOULDBLOCK) {
+    /* Diagnostic note: on an un-filtered loopback connect to a closed port
+       (nothing listening), Windows normally returns WSAECONNREFUSED here,
+       fast and synchronously -- that is the expected symptom if the WFP
+       block filter is not actually being applied to this connection. */
+    fprintf(stderr, "kexe-loader-windows: network probe connect() failed synchronously with "
+                    "unexpected code (expected WSAEACCES): wsa=%d\n", error_value);
+    return 70;
+  }
+  fprintf(stderr, "kexe-loader-windows: network probe connect() returned WSAEWOULDBLOCK, "
+                  "waiting up to 2s for async completion\n");
+  FD_ZERO(&write_set);
+  FD_ZERO(&except_set);
+  FD_SET(sock, &write_set);
+  FD_SET(sock, &except_set);
+  timeout.tv_sec = 2;
+  timeout.tv_usec = 0;
+  select_result = select(0, NULL, &write_set, &except_set, &timeout);
+  if (select_result == SOCKET_ERROR) {
+    fprintf(stderr, "kexe-loader-windows: network probe select() itself failed: wsa=%d\n",
+            WSAGetLastError());
+    return 70;
+  }
+  if (select_result == 0) {
+    fprintf(stderr, "kexe-loader-windows: network probe timed out after 2s waiting for a policy "
+                    "decision instead of being denied at admission -- neither success nor a "
+                    "socket error was observed, which most likely means the WFP block filter is "
+                    "not being evaluated/applied for this connection at all (rather than the "
+                    "connection actually being blocked)\n");
+    return 70;
+  }
+  if (getsockopt(sock, SOL_SOCKET, SO_ERROR, (char *)&error_value, &error_length) != 0) {
+    fprintf(stderr, "kexe-loader-windows: network probe getsockopt(SO_ERROR) failed: wsa=%d\n",
+            WSAGetLastError());
+    return 70;
+  }
+  if (error_value == WSAEACCES) {
+    fprintf(stderr, "kexe-loader-windows: network probe denied asynchronously after select(): "
+                    "wsa=WSAEACCES(%d)\n", error_value);
+    return 0;
+  }
+  if (error_value == 0) {
+    fprintf(stderr, "kexe-loader-windows: network probe connect() unexpectedly succeeded "
+                    "asynchronously (SO_ERROR=0 after select) -- the block filter did not deny it\n");
+    return 70;
+  }
+  fprintf(stderr, "kexe-loader-windows: network probe resolved asynchronously with unexpected "
+                  "code (expected WSAEACCES): wsa=%d\n", error_value);
   return 70;
 }
 

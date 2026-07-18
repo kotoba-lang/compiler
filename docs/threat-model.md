@@ -359,6 +359,23 @@ of this change, so whether the hosted Windows Arm64 CI runner's process is
 privileged enough for these calls to succeed is unverified until that CI job
 actually runs it.
 
+UPDATE (first real CI run, PR #67): the hosted Windows Arm64 CI runner's
+process was privileged enough -- `FwpmEngineOpen0`/`FwpmFilterAdd0` did not
+fail. The failure was downstream, at the outbound (`KEXE_NETWORK_PROBE`)
+assertion: the probe's loopback `connect()` did not resolve to the expected
+denial within the bounded deadline. Root cause is unconfirmed. The filters
+originally requested `FWP_EMPTY` (auto-assigned) weight, which only orders a
+filter among other auto-weighted filters in `FWPM_SUBLAYER_UNIVERSAL` and
+does not guarantee it outranks a higher-weighted filter that may already
+exist there (from other software, or an OS-default permissive rule for
+loopback/local traffic); the filters now request maximum explicit weight
+instead, as a defensive hardening whose effect is unverified pending the
+next CI run. `connect_and_require_denial()`'s diagnostics were also expanded
+so a repeat failure identifies, from the CI log alone, which of "connect
+succeeded", "resolved with an unexpected WSA error", or "timed out
+mid-flight" occurred, and whether that happened synchronously or after the
+non-blocking `select()` wait.
+
 This boundary is not yet sufficient for release admission. The product command
 now admits the signed KEXE, verifies its regenerated code, binds the reviewed
 Windows source plus compiler/linker/resource/header closure into runtime trust,
