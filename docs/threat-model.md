@@ -376,6 +376,48 @@ succeeded", "resolved with an unexpected WSA error", or "timed out
 mid-flight" occurred, and whether that happened synchronously or after the
 non-blocking `select()` wait.
 
+UPDATE (second real CI run, PR #67, confirmed root cause): the weight change
+above did not fix it -- the expanded diagnostics showed the probe's loopback
+`connect()` returning `WSAEWOULDBLOCK` then timing out in `select()` with
+neither a socket error nor a success, which the diagnostic explicitly reads
+as "the WFP block filter is not being evaluated/applied for this connection
+at all". This is a documented Windows Filtering Platform behavior, not a
+weight/ordering bug: per Microsoft's Filtering condition flags reference,
+loopback traffic is a distinct classification at the `ALE_AUTH_CONNECT`/
+`ALE_AUTH_RECV_ACCEPT` layers, tested via the `FWP_CONDITION_FLAG_IS_LOOPBACK`
+flag (`FWPM_CONDITION_FLAGS` field key, `Fwptypes.h`) -- a filter that omits
+this condition is not guaranteed to be evaluated against loopback
+connections/accepts at all. The loader's filters had no such condition, so
+this app's own loopback probes (the only probes this codebase has) were
+never actually admitted to the filter this function installs; the timeout
+is the observable consequence of falling through to some other,
+un-instrumented path instead of hitting `FWP_ACTION_BLOCK`.
+
+Fix: `install_network_denial()` now adds a **second** filter per layer,
+identical to the first except it additionally requires
+`FWP_CONDITION_FLAG_IS_LOOPBACK` (AND-combined with the same ALE app-id
+condition, `FWP_MATCH_FLAGS_ALL_SET`). The original app-id-only filter is
+kept unchanged alongside it -- deliberately not merged into one filter,
+since WFP filter conditions are AND-combined and adding the loopback flag
+to the *existing* filter would have narrowed it to loopback-only, silently
+stopping it from denying genuine (non-loopback) outbound/inbound traffic,
+which is the actual guest-network-egress property this boundary exists for.
+
+Honest residual gap: neither `network_outbound_probe_denied()` nor
+`network_listen_probe_denied()` has ever exercised a genuine non-loopback
+destination -- both probes target `127.0.0.1`. That both filters (general
+and loopback-inclusive) share the same `ALE_APP_ID` condition and action is
+a code-review argument that non-loopback denial works the same way, but it
+is inferred from source, not independently measured by any CI run to date.
+This has also not been exercised on a real Windows host outside CI (no
+Windows SDK available on the machines used for this change); the fix is
+based on Microsoft's own condition-flag documentation and the exact match
+between the documented mechanism and the observed CI symptom, not on local
+reproduction. If a third CI run still fails, the next investigation should
+capture `netsh wfp show filters` and/or a packet trace on the actual
+Windows Arm64 runner (or an equivalent real Windows host) rather than
+iterating blindly again.
+
 This boundary is not yet sufficient for release admission. The product command
 now admits the signed KEXE, verifies its regenerated code, binds the reviewed
 Windows source plus compiler/linker/resource/header closure into runtime trust,

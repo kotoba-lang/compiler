@@ -225,13 +225,49 @@ static void prohibit_dynamic_code(void) {
  * WSA error, synchronous vs. post-select, or a timeout), so a repeat
  * failure will show the actual cause in the CI log instead of a bare
  * "exit mismatch".
+ *
+ * UPDATE (second real CI run, PR #67, confirmed root cause): the maximum-
+ * weight hardening above did not change the outcome -- the probe's loopback
+ * connect() still timed out waiting for a policy decision (see the expanded
+ * diagnostics added above; the exact line was "network probe timed out
+ * after 2s ... most likely means the WFP block filter is not being
+ * evaluated/applied for this connection at all"). This is a documented WFP
+ * behavior, not a weight/ordering problem: per Microsoft's Filtering
+ * condition flags reference (FWP_CONDITION_FLAG_IS_LOOPBACK, Fwptypes.h),
+ * loopback traffic is a distinct classification at the ALE_AUTH_CONNECT and
+ * ALE_AUTH_RECV_ACCEPT layers, and a filter that does not explicitly test
+ * for it is not guaranteed to be evaluated against loopback connections at
+ * all -- it is scoped to "real" (non-loopback) traffic by default. That
+ * matches the observed symptom exactly: an unfiltered loopback connect() to
+ * a closed port normally gets a fast, synchronous WSAECONNREFUSED (see the
+ * comment in connect_and_require_denial()), but this probe instead hung
+ * until the bounded `select()` timeout, i.e. it fell through to some
+ * un-denied path rather than either succeeding or hitting this filter's
+ * BLOCK action.
+ *
+ * The fix: install a SECOND, dedicated filter per layer that ANDs the same
+ * ALE_APP_ID condition with an additional FWPM_CONDITION_FLAGS condition
+ * (FWP_MATCH_FLAGS_ALL_SET, value FWP_CONDITION_FLAG_IS_LOOPBACK), so WFP
+ * actually classifies and evaluates this app's loopback connections/accepts
+ * against a BLOCK filter. The original app-id-only filter is kept unchanged
+ * alongside it (not merged into one filter) precisely because a single
+ * filter's conditions are AND-combined: adding an IS_LOOPBACK condition to
+ * the *existing* filter would narrow it to loopback-only and stop it from
+ * matching genuine (non-loopback) outbound/inbound traffic, which is the
+ * actual guest-network-egress threat this boundary exists for. Two filters
+ * per layer -- one general, one loopback-inclusive -- are required to deny
+ * both without narrowing either. This has not been exercised on a real
+ * Windows host from this change (see docs/threat-model.md for the honest
+ * disclosure of what remains unverified, including that no probe in this
+ * file exercises a genuine non-loopback destination).
  */
 static void install_network_denial(void) {
   HANDLE engine = NULL;
   FWPM_SESSION0 session;
   wchar_t module_path[MAX_PATH];
   FWP_BYTE_BLOB *app_id = NULL;
-  FWPM_FILTER_CONDITION0 condition;
+  FWPM_FILTER_CONDITION0 app_id_condition;
+  FWPM_FILTER_CONDITION0 loopback_conditions[2];
   FWPM_FILTER0 filter;
   static const GUID *layers[] = {
     &FWPM_LAYER_ALE_AUTH_CONNECT_V4,
@@ -252,44 +288,65 @@ static void install_network_denial(void) {
   status = FwpmGetAppIdFromFileName0(module_path, &app_id);
   if (status != ERROR_SUCCESS) { SetLastError(status); fail_win("FwpmGetAppIdFromFileName0"); }
 
-  ZeroMemory(&condition, sizeof(condition));
-  condition.fieldKey = FWPM_CONDITION_ALE_APP_ID;
-  condition.matchType = FWP_MATCH_EQUAL;
-  condition.conditionValue.type = FWP_BYTE_BLOB_TYPE;
-  condition.conditionValue.byteBlob = app_id;
+  ZeroMemory(&app_id_condition, sizeof(app_id_condition));
+  app_id_condition.fieldKey = FWPM_CONDITION_ALE_APP_ID;
+  app_id_condition.matchType = FWP_MATCH_EQUAL;
+  app_id_condition.conditionValue.type = FWP_BYTE_BLOB_TYPE;
+  app_id_condition.conditionValue.byteBlob = app_id;
+
+  ZeroMemory(&loopback_conditions, sizeof(loopback_conditions));
+  loopback_conditions[0] = app_id_condition;
+  loopback_conditions[1].fieldKey = FWPM_CONDITION_FLAGS;
+  loopback_conditions[1].matchType = FWP_MATCH_FLAGS_ALL_SET;
+  loopback_conditions[1].conditionValue.type = FWP_UINT32;
+  loopback_conditions[1].conditionValue.uint32 = FWP_CONDITION_FLAG_IS_LOOPBACK;
 
   for (i = 0; i < sizeof(layers) / sizeof(layers[0]); i++) {
     UINT64 filter_id = 0;
+
+    /* Filter A: general block, app id only. Per the function-comment
+       update above, this is not proven (and, per the documented WFP
+       loopback classification, should not be assumed) to cover loopback
+       connections -- treat it as covering non-loopback traffic. */
     ZeroMemory(&filter, sizeof(filter));
     filter.layerKey = *layers[i];
     filter.subLayerKey = FWPM_SUBLAYER_UNIVERSAL;
     filter.displayData.name = L"kotoba-kexe-network-denial";
     filter.action.type = FWP_ACTION_BLOCK;
-    /*
-     * FWP_EMPTY (auto-assigned weight) was used originally, but auto-weight
-     * only guarantees a rank *among filters that request auto-weight*; it
-     * does not guarantee this filter outranks other, higher-weighted
-     * filters that may already exist in FWPM_SUBLAYER_UNIVERSAL (e.g. from
-     * other software, or OS-default permissive filters for loopback/local
-     * services). Use the maximum explicit weight on the standard 0-15 scale
-     * so this BLOCK filter is evaluated first among same-sublayer filters
-     * regardless of what else is registered. This is a defensive hardening,
-     * not a confirmed fix for the 2026-07 CI "network-denied exit mismatch"
-     * failure (root cause unconfirmed -- see connect_and_require_denial()'s
-     * expanded diagnostics, added at the same time as this change).
-     */
     filter.weight.type = FWP_UINT8;
     filter.weight.uint8 = 15;
     filter.numFilterConditions = 1;
-    filter.filterCondition = &condition;
+    filter.filterCondition = &app_id_condition;
     status = FwpmFilterAdd0(engine, &filter, NULL, &filter_id);
     if (status != ERROR_SUCCESS) {
       FwpmFreeMemory0((void **)&app_id);
       SetLastError(status);
-      fail_win("FwpmFilterAdd0");
+      fail_win("FwpmFilterAdd0 general");
     }
-    fprintf(stderr, "kexe-loader-windows: network denial filter installed: layer=%zu filter_id=%llu\n",
-            i, (unsigned long long)filter_id);
+    fprintf(stderr, "kexe-loader-windows: network denial filter installed: layer=%zu filter_id=%llu "
+                    "kind=general\n", i, (unsigned long long)filter_id);
+
+    /* Filter B: loopback-inclusive block, app id AND FWP_CONDITION_FLAG_IS_LOOPBACK.
+       This is the filter this app's own loopback probes below actually
+       exercise; without it, the confirmed CI failure recurs. */
+    filter_id = 0;
+    ZeroMemory(&filter, sizeof(filter));
+    filter.layerKey = *layers[i];
+    filter.subLayerKey = FWPM_SUBLAYER_UNIVERSAL;
+    filter.displayData.name = L"kotoba-kexe-network-denial-loopback";
+    filter.action.type = FWP_ACTION_BLOCK;
+    filter.weight.type = FWP_UINT8;
+    filter.weight.uint8 = 15;
+    filter.numFilterConditions = 2;
+    filter.filterCondition = loopback_conditions;
+    status = FwpmFilterAdd0(engine, &filter, NULL, &filter_id);
+    if (status != ERROR_SUCCESS) {
+      FwpmFreeMemory0((void **)&app_id);
+      SetLastError(status);
+      fail_win("FwpmFilterAdd0 loopback");
+    }
+    fprintf(stderr, "kexe-loader-windows: network denial filter installed: layer=%zu filter_id=%llu "
+                    "kind=loopback\n", i, (unsigned long long)filter_id);
   }
 
   FwpmFreeMemory0((void **)&app_id);
