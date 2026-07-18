@@ -83,3 +83,37 @@
                                                       "[example.text :refer [greet]]")
                             'example.text text-source}
                            'example.app)))))
+
+(defn- dependency-project [count all-previous?]
+  (into {}
+        (map (fn [index]
+               (let [module (symbol (str "bounds.m" index))
+                     dependencies (if all-previous?
+                                    (range index)
+                                    (when (pos? index) [(dec index)]))
+                     specs (mapv (fn [dependency]
+                                   [(symbol (str "bounds.m" dependency))
+                                    :as (symbol (str "m" dependency))])
+                                 dependencies)]
+                 [module
+                  (str (pr-str (list 'ns module
+                                     (list* :require specs)
+                                     (list :export ['value])))
+                       "\n(defn value [] 0)")]))
+        (range count))))
+
+(deftest project-wide-resource-bounds-fail-before-linking
+  (testing "aggregate source bytes"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"source bytes exceed"
+                          (project/link-source
+                           {'large.module
+                            (apply str (repeat (inc project/max-project-source-bytes) "x"))}
+                           'large.module))))
+  (testing "dependency depth"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"dependency depth exceeds"
+                          (project/link-source (dependency-project 66 false)
+                                               'bounds.m65))))
+  (testing "dependency edge count"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"dependency edges exceed"
+                          (project/link-source (dependency-project 24 true)
+                                               'bounds.m23)))))

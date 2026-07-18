@@ -1,9 +1,15 @@
 (ns kotoba.compiler.project
   (:require [clojure.string :as str]
-            [kotoba.compiler.frontend :as frontend]))
+            [kotoba.compiler.frontend :as frontend]
+            [kotoba.compiler.value :as value]))
 
 (def max-project-modules 256)
 (def max-project-functions 1024)
+(def max-project-source-bytes (* 8 1024 1024))
+(def max-linked-source-bytes (* 1024 1024))
+(def max-project-dependency-edges 256)
+(def max-project-depth 64)
+(def max-project-exports 1024)
 
 (defn- reject! [message data]
   (throw (ex-info message (assoc data :phase :project-link))))
@@ -152,7 +158,14 @@
                  (<= (count sources) max-project-modules))
     (reject! "project source map is empty or exceeds module limit"
              {:count (when (map? sources) (count sources))}))
-  (let [parsed (into {}
+  (let [source-bytes (reduce (fn [total source]
+                               (when-not (string? source)
+                                 (reject! "project source must be text" {}))
+                               (+ total (value/utf8-byte-count! source)))
+                             0 (vals sources))
+        _ (when (> source-bytes max-project-source-bytes)
+            (reject! "project source bytes exceed limit" {:bytes source-bytes}))
+        parsed (into {}
                      (map (fn [[declared source]]
                             (let [forms (frontend/read-forms source)
                                   info (ns-info forms)]
@@ -161,8 +174,12 @@
                                          {:key declared :declared (:namespace info)}))
                               [declared {:forms forms :info info}])))
                      sources)
-        visiting (volatile! #{}) linked (volatile! {}) order (volatile! [])]
-    (letfn [(visit [name]
+        visiting (volatile! #{}) linked (volatile! {}) order (volatile! [])
+        edge-count (volatile! 0)]
+    (letfn [(visit [name depth]
+              (when (> depth max-project-depth)
+                (reject! "project dependency depth exceeds limit"
+                         {:module name :depth depth}))
               (when-not (contains? parsed name)
                 (reject! "required module is outside the closed project" {:module name}))
               (when (contains? @visiting name)
@@ -170,27 +187,38 @@
               (when-not (contains? @linked name)
                 (vswap! visiting conj name)
                 (doseq [{dependency :namespace} (get-in parsed [name :info :requires])]
-                  (visit dependency))
+                  (when (> (vswap! edge-count inc) max-project-dependency-edges)
+                    (reject! "project dependency edges exceed limit"
+                             {:edges @edge-count}))
+                  (visit dependency (inc depth)))
                 (let [module (analyze-module (get-in parsed [name :forms])
                                              (get-in parsed [name :info])
                                              @linked (count @order))]
                   (vswap! linked assoc name module)
                   (vswap! order conj name))
                 (vswap! visiting disj name)))]
-      (visit root))
+      (visit root 1))
     (let [root-module (get @linked root)
           functions (vec (mapcat #(get-in @linked [% :functions]) @order))
+          export-count (reduce + (map #(count (get-in @linked [% :interface])) @order))
           exports (sort-by (comp str key) (:interface root-module))
           wrappers (mapv wrapper-form exports)
-          function-count (+ (count functions) (count wrappers))]
+          function-count (+ (count functions) (count wrappers))
+          linked-source
+          (source-text
+           (into [(list 'ns root (list :export (vec (map first exports))))]
+                 (concat
+                  (map (fn [{:keys [name params param-types result body]}]
+                         (list 'defn- name (typed-params params param-types) result body))
+                       functions)
+                  wrappers)))
+          linked-bytes (value/utf8-byte-count! linked-source)]
       (when (> function-count max-project-functions)
         (reject! "linked project exceeds function limit" {:count function-count}))
+      (when (> export-count max-project-exports)
+        (reject! "linked project exports exceed limit" {:count export-count}))
+      (when (> linked-bytes max-linked-source-bytes)
+        (reject! "linked project source exceeds byte limit" {:bytes linked-bytes}))
       {:source
-       (source-text
-        (into [(list 'ns root (list :export (vec (map first exports))))]
-              (concat
-               (map (fn [{:keys [name params param-types result body]}]
-                      (list 'defn- name (typed-params params param-types) result body))
-                    functions)
-               wrappers)))
+       linked-source
        :root root :module-order @order :modules (set @order)})))

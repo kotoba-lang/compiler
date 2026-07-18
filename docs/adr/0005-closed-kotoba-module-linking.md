@@ -26,6 +26,11 @@ source units, namespace/key mismatches, duplicate aliases or dependencies,
 unknown qualified calls, cycles, and projects above 256 modules or 1,024 linked
 functions.
 
+Project admission also caps the supplied source corpus at 8 MiB UTF-8, the
+linked source at 1 MiB UTF-8, reachable dependency edges at 256, dependency
+depth at 64, and aggregate exported interfaces at 1,024. These checks occur
+while resolving the closed graph, before backend emission.
+
 Dependencies are visited before consumers and linked into one compiler-private
 call graph. Only the root module's exports receive host-visible wrappers. The
 ordinary frontend then re-analyzes that complete graph, so type checking,
