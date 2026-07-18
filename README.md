@@ -229,6 +229,16 @@ descriptor ...)`, count, membership, idempotent insertion, removal, and
 structural equality preserve this representation without observing host
 insertion order or object identity.
 
+Nominal bounded records use
+`[:record :qualified/type [[:field field-type] ...]]`, with 1–32 unique
+keyword fields in declaration order under the shared descriptor budget. Their
+canonical ABI is `[descriptor, field-value ...]`. `(record descriptor ...)`
+must supply every field exactly once; `record-get` and `record-assoc` require a
+declared keyword literal, so field types remain static and updates are
+persistent. Exact nominal descriptor, arity, and recursive field validation
+exclude cross-schema substitution, unknown/dynamic fields, sparse host objects,
+prototype behavior, and host identity from record semantics.
+
 The first bounded sequential collection is `:vector-i64`, constructed
 explicitly with `(vector-i64 ...)` and capped at 128 items. `vector-count`,
 `vector-get`, `vector-assoc`, and `vector-conj` preserve signed-i64 elements;

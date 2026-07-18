@@ -336,6 +336,12 @@ items. A language-owned total order canonicalizes the item vector independently
 of construction order. Boundaries reject duplicate, oversized, malformed and
 cross-descriptor values; membership and persistent insert/remove operate only
 on the canonical representation.
+Nominal bounded records use
+`[:record :qualified/type [[:field field-type] ...]]`. The complete nominal
+descriptor precedes the declaration-ordered field values in the runtime ABI;
+boundaries validate exact schema, arity, and every field recursively. Static
+keyword projection, persistent replacement, and structural equality never
+delegate to host object keys, prototypes, mutation, or identity.
 The first sequential collection profile is an explicitly constructed,
 128-item `vector<i64>` with signed-i64 element checks, frozen Web host values,
 lazy out-of-range lookup fallback, and persistent assoc/conj updates.

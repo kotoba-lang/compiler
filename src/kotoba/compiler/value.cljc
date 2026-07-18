@@ -11,6 +11,7 @@
 (def variant-case-limit 32)
 (def heterogeneous-vector-item-limit 32)
 (def typed-set-item-limit 32)
+(def record-field-limit 32)
 
 (defn utf8-byte-count!
   "Return the exact UTF-8 byte count without normalizing or replacing malformed
@@ -163,6 +164,20 @@
      (and (vector? type) (= 2 (count type)) (= :set (first type)))
      (do (validate-value-type! (second type) (inc depth) nodes)
          type)
+     (and (vector? type) (= 3 (count type)) (= :record (first type)))
+     (let [[_ type-id fields] type]
+       (when-not (and (keyword? type-id) (namespace type-id))
+         (throw (ex-info "record type id must be a qualified keyword" {:phase :value})))
+       (when-not (and (vector? fields) (seq fields) (<= (count fields) record-field-limit)
+                      (every? #(and (vector? %) (= 2 (count %)) (keyword? (first %))) fields)
+                      (= (count fields) (count (distinct (map first fields)))))
+         (throw (ex-info "record fields are invalid" {:phase :value})))
+       (vswap! nodes + (+ 2 (* 2 (count fields))))
+       (when (> @nodes adt-node-limit)
+         (throw (ex-info "value type exceeds node limit" {:phase :value :limit adt-node-limit})))
+       (doseq [[_ field-type] fields]
+         (validate-value-type! field-type (inc depth) nodes))
+       type)
      (and (vector? type) (= 3 (count type)) (= :variant (first type)))
      (let [[_ type-id cases] type]
        (when-not (and (keyword? type-id) (namespace type-id))
@@ -244,6 +259,9 @@
       (compare-sequences (repeat (max (count (second left)) (count (second right)))
                                  (second type))
                          (second left) (second right))
+
+      (= :record (first type))
+      (compare-sequences (map second (nth type 2)) (rest left) (rest right))
 
       :else (throw (ex-info "value type has no canonical order"
                             {:phase :value :type type})))))
@@ -329,5 +347,15 @@
                        (partition 2 1 sorted-items))
              (throw (ex-info "typed set contains a duplicate item" {:phase :value})))
            [type sorted-items]))
+
+       (= :record (first type))
+       (let [fields (nth type 2)]
+         (when-not (and (vector? value) (= type (first value))
+                        (= (count value) (inc (count fields))))
+           (throw (ex-info "value is not the declared record type" {:phase :value})))
+         (into [type]
+               (map (fn [[_ field-type] field-value]
+                      (bounded-typed-value! field-type field-value (inc depth) nodes))
+                    fields (rest value))))
 
        :else (throw (ex-info "value type is outside the safe profile" {:phase :value}))))))

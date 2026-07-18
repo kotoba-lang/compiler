@@ -132,6 +132,30 @@
       (is (thrown? clojure.lang.ExceptionInfo
                    (value/bounded-typed-value! type invalid))))))
 
+(deftest bounded-record-values-seal-nominal-schema-and-field-types
+  (let [type [:record :demo/person [[:name :string] [:age :i64]
+                                     [:nickname [:option :string]]]]
+        other-type [:record :demo/account [[:name :string] [:age :i64]
+                                            [:nickname [:option :string]]]]
+        canonical [type "Kotoba" 7 [[:option :string] false]]]
+    (is (= canonical (value/bounded-typed-value! type canonical)))
+    (is (neg? (value/compare-typed-values type canonical
+                                          [type "Kotoba" 8 [[:option :string] false]])))
+    (doseq [invalid [[type "Kotoba" 7]
+                     [type "Kotoba" 7 [[:option :string] false] :extra]
+                     [type "Kotoba" "7" [[:option :string] false]]
+                     [other-type "Kotoba" 7 [[:option :string] false]]
+                     nil]]
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (value/bounded-typed-value! type invalid)))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"record fields are invalid"
+                        (value/validate-value-type!
+                         [:record :demo/bad [[:x :i64] [:x :string]]])))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"record fields are invalid"
+                        (value/validate-value-type!
+                         [:record :demo/large
+                          (mapv (fn [i] [(keyword (str "f" i)) :i64]) (range 33))]))))
+
 (deftest vector-i64-is-bounded-and-homogeneous
   (is (= [1 2 3] (value/bounded-vector-i64! [1 2 3])))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a vector-i64"
