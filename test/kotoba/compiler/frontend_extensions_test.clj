@@ -542,6 +542,15 @@
   (is (= 9 (oracle "(defn main [] (get (assoc {:a 1} :b 2 :c 9) :c))"))
       "variadic assoc with multiple key/value pairs in one call"))
 
+(deftest cond-thread-applies-bounded-persistent-map-updates-in-order
+  (is (= 7 (oracle "(defn main []
+                      (get (cond-> {:a 1} true (assoc :b 2) false (assoc :b 9)
+                                           true (assoc :c 7)) :c))")))
+  (is (= 2 (oracle "(defn main []
+                      (get (cond-> {:a 1} true (assoc :b 2) false (assoc :b 9)) :b))")))
+  (is (= "cond-> update must be a non-empty call form"
+         (rejection-message "(defn main [] (cond-> {:a 1} true :not-a-call))"))))
+
 (deftest assoc-replaces-without-mutating-or-duplicating
   (is (= 5 (oracle "(defn main [] (get (assoc (assoc (assoc {:a 1 :b 2} :a 3) :a 4) :a 5) :a))")))
   (is (= 2 (oracle "(defn main [] (get (assoc (assoc {:a 1 :b 2} :a 3) :a 4) :b))"))))
@@ -595,6 +604,21 @@
     (is (= 43 (oracle source)))
     (is (= 43 (ir/execute (:kir (compiler/compile-source source :js-kotoba-v1))
                           'main [])))))
+
+(deftest string-constant-is-a-value-not-an-implicit-docstring
+  (is (= "@context"
+         (oracle "(def context-key \"@context\") (defn main [] :string context-key)")))
+  (is (= "@context"
+         (oracle "(def context-key \"JSON-LD key\" \"@context\")
+                  (defn main [] :string context-key)"))))
+
+(deftest literal-keyword-constructor-is-closed-at-compile-time
+  (is (= (keyword "@context")
+         (oracle "(def context-key (keyword \"@context\"))
+                  (defn main [] :keyword context-key)")))
+  (is (= "constant value must be closed bounded integer/string/keyword/boolean/nil/vector/map data"
+         (rejection-message "(def context-key (keyword (host-value)))
+                             (defn main [] context-key)"))))
 
 (deftest top-level-constants-never-execute-code-or-shadow-locals
   (is (= "constant value must be closed bounded integer/string/keyword/boolean/nil/vector/map data"

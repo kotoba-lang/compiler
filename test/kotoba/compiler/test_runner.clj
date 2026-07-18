@@ -64,4 +64,4 @@
                                           'kotoba.compiler.verifier-profile-test
                                           'kotoba.compiler.project-test
                                           'kotoba.compiler.property-test)]
-    (when (pos? (+ fail error)) (System/exit 1))))
+    (System/exit (if (pos? (+ fail error)) 1 0))))

@@ -479,6 +479,21 @@
             (list 'let [tmp (desugar-expr (first args))]
                   (list 'if tmp tmp (desugar-or (rest args)))))))
 
+(defn- desugar-cond-thread [args form]
+  (when (or (empty? args) (odd? (count (rest args))))
+    (reject! "cond-> requires an initial value followed by test/form pairs" form))
+  (reduce (fn [value [test step]]
+            (when-not (and (seq? step) (symbol? (first step)))
+              (reject! "cond-> update must be a non-empty call form" step))
+            (let [tmp (gensym "cond-thread__")
+                  threaded (list* (first step) tmp (rest step))]
+              (list 'let [tmp value]
+                    (list 'if (desugar-expr test)
+                          (desugar-expr threaded)
+                          tmp))))
+          (desugar-expr (first args))
+          (partition 2 (rest args))))
+
 
 (defn- desugar-do
   "ADR-2607180900 L2: `(do a b c)` -> nested `let` returning last expression."
@@ -780,6 +795,7 @@
                  (list '< (desugar-expr (first args)) 0))
         and (desugar-and args)
         or (desugar-or args)
+        cond-> (desugar-cond-thread args form)
         when (do (when (empty? args)
                    (reject! "when requires a test expression" form))
                  (let [[test & body] args
@@ -1867,14 +1883,21 @@
 
 (defn- def-parts [form]
   (let [[_ name & declaration] form
-        [docstring declaration] (if (string? (first declaration))
+        [docstring declaration] (if (and (= 2 (count declaration))
+                                         (string? (first declaration)))
                                   [(first declaration) (rest declaration)]
                                   [nil declaration])]
     (when (and docstring (> (count docstring) max-function-docstring-chars))
       (reject! "constant docstring exceeds admission limit" docstring))
     (when-not (= 1 (count declaration))
       (reject! "constant must contain exactly one literal value" form))
-    (let [value (first declaration)]
+    (let [value-form (first declaration)
+          value (if (and (seq? value-form)
+                         (= 'keyword (first value-form))
+                         (= 2 (count value-form))
+                         (string? (second value-form)))
+                  (keyword (second value-form))
+                  value-form)]
       (when-not (constant-literal? value)
         (reject! "constant value must be closed bounded integer/string/keyword/boolean/nil/vector/map data" value))
       {:name name :value value})))
