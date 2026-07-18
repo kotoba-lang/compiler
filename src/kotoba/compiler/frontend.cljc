@@ -863,6 +863,20 @@
         (do (when-not (= 3 (count args)) (reject! "option-value-of requires type, value, and fallback" form))
             (list 'option-value-of (first args) (desugar-expr (second args))
                   (desugar-expr (nth args 2))))
+        ;; `match-option` lowers to this internal form. Nested matches cause
+        ;; the enclosing match's recursive desugaring to visit that lowered
+        ;; form again, so it must preserve the type descriptor and binder.
+        ;; Falling through to generic call desugaring turns descriptor vectors
+        ;; into runtime `vector-new` values and makes project linking
+        ;; non-idempotent.
+        option-match
+        (do (when-not (= 5 (count args))
+              (reject! "option-match requires type, value, none body, binder, and some body" form))
+            (let [[type value none-body binder some-body] args]
+              (when-not (symbol? binder)
+                (reject! "option-match requires a symbol binder" form))
+              (list 'option-match type (desugar-expr value)
+                    (desugar-expr none-body) binder (desugar-expr some-body))))
         match-option
         (do (when-not (= 4 (count args))
               (reject! "match-option requires value, type, none branch, and some branch" form))

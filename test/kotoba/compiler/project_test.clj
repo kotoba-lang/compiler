@@ -60,6 +60,34 @@
                   'example.age :js-kotoba-v1)]
     (is (= 7 (ir/execute (:kir compiled) 'age [])))))
 
+(deftest project-linking-keeps-nested-option-match-type-descriptors-idempotent
+  (let [person "[:record :example/person [[:name :string] [:age :i64]]]"
+        option (str "[:option " person "]")
+        provider (str "(ns example.provider (:export [none-person]))"
+                      "(defn none-person [] " option
+                      " (option-none-of " option "))")
+        consumer (str
+                  "(ns example.consumer (:require [example.provider :as provider])"
+                  " (:export [main]))"
+                  "(defn choose [left " option " right " option "] " option
+                  " (match-option left " option
+                  "  (none right)"
+                  "  (some left-person"
+                  "   (match-option right " option
+                  "    (none left)"
+                  "    (some right-person right)))))"
+                  "(defn main [] :i64"
+                  " (record-get " person
+                  "  (option-value-of " option
+                  "   (choose (provider/none-person)"
+                  "    (option-some-of " option
+                  "     (record " person " \"Kotoba\" 42)))"
+                  "   (record " person " \"fallback\" 0)) :age))")
+        compiled (compiler/compile-project
+                  {'example.provider provider 'example.consumer consumer}
+                  'example.consumer :js-kotoba-v1)]
+    (is (= 42 (ir/execute (:kir compiled) 'main [])))))
+
 (deftest project-modules-admit-the-same-bounded-namespace-docstrings
   (let [dependency (str/replace text-source "(ns example.text"
                                 "(ns example.text \"bounded project documentation\"")
