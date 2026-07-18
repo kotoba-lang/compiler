@@ -8,6 +8,7 @@
 (def vector-item-limit 128)
 (def adt-depth-limit 8)
 (def adt-node-limit 64)
+(def variant-case-limit 32)
 
 (defn utf8-byte-count!
   "Return the exact UTF-8 byte count without normalizing or replacing malformed
@@ -141,6 +142,20 @@
      (do (validate-value-type! (second type) (inc depth) nodes)
          (validate-value-type! (nth type 2) (inc depth) nodes)
          type)
+     (and (vector? type) (= 3 (count type)) (= :variant (first type)))
+     (let [[_ type-id cases] type]
+       (when-not (and (keyword? type-id) (namespace type-id))
+         (throw (ex-info "variant type id must be a qualified keyword" {:phase :value})))
+       (when-not (and (vector? cases) (seq cases) (<= (count cases) variant-case-limit)
+                      (every? #(and (vector? %) (= 2 (count %)) (keyword? (first %))) cases)
+                      (= (count cases) (count (distinct (map first cases)))))
+         (throw (ex-info "variant cases are invalid" {:phase :value})))
+       (vswap! nodes + (+ 2 (* 2 (count cases))))
+       (when (> @nodes adt-node-limit)
+         (throw (ex-info "value type exceeds node limit" {:phase :value :limit adt-node-limit})))
+       (doseq [[_ payload-type] cases]
+         (validate-value-type! payload-type (inc depth) nodes))
+       type)
      :else (throw (ex-info "value type is outside the safe profile"
                            {:phase :value :type type})))))
 
@@ -168,8 +183,25 @@
      :option-i64 (bounded-option-i64! value)
      :result-i64 (bounded-result-i64! value)
      :vector-i64 (bounded-vector-i64! value)
-     (do
-       (when-not (and (vector? value) (= 2 (count value)) (boolean? (first value)))
-         (throw (ex-info "value is not a parametric result" {:phase :value})))
-       (let [payload-type (if (first value) (second type) (nth type 2))]
-         [(first value) (bounded-typed-value! payload-type (second value) (inc depth) nodes)])))))
+     (cond
+       (= :result (first type))
+       (do
+         (when-not (and (vector? value) (= 2 (count value)) (boolean? (first value)))
+           (throw (ex-info "value is not a parametric result" {:phase :value})))
+         (let [payload-type (if (first value) (second type) (nth type 2))]
+           [(first value) (bounded-typed-value! payload-type (second value) (inc depth) nodes)]))
+
+       (= :variant (first type))
+       (do
+         (when-not (and (vector? value) (= 3 (count value)) (= type (first value))
+                        (keyword? (second value)))
+           (throw (ex-info "value is not the declared variant type" {:phase :value})))
+         (let [tag (second value)
+               payload-type (some (fn [[case-tag case-type]]
+                                    (when (= case-tag tag) case-type))
+                                  (nth type 2))]
+           (when-not payload-type
+             (throw (ex-info "variant case is not declared" {:phase :value :tag tag})))
+           [type tag (bounded-typed-value! payload-type (nth value 2) (inc depth) nodes)]))
+
+       :else (throw (ex-info "value type is outside the safe profile" {:phase :value}))))))

@@ -195,6 +195,13 @@ from host shapes. Descriptors and nested runtime payloads are capped at depth
 result types must agree, and only the selected branch is evaluated; omitted,
 duplicated, reordered, or ill-typed branches fail during checking.
 
+Closed user variants use
+`[:variant :qualified/type [[:case payload-type] ...]]` with 1--32 unique
+cases inside the same depth/node budgets. Runtime values carry the complete
+descriptor, case keyword, and payload; a same-named case from a different
+descriptor cannot cross a boundary. `match-variant` requires every case once,
+in declaration order, and admits no wildcard that could hide schema growth.
+
 The first bounded sequential collection is `:vector-i64`, constructed
 explicitly with `(vector-i64 ...)` and capped at 128 items. `vector-count`,
 `vector-get`, `vector-assoc`, and `vector-conj` preserve signed-i64 elements;

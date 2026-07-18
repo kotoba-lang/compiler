@@ -316,6 +316,10 @@ Result elimination is owned by the exhaustive `match-result` form: source
 requires one canonical ok branch and one canonical err branch, KIR preserves
 their typed binders, and both reference and Web evaluate only the selected
 branch after validating the tagged value.
+User-defined finite variants extend the descriptor graph with
+`[:variant :qualified/type [[:case payload-type] ...]]`. The full descriptor
+is part of runtime identity, case counts are capped at 32, and generalized
+matching requires exact declaration-order coverage with typed payload binders.
 The first sequential collection profile is an explicitly constructed,
 128-item `vector<i64>` with signed-i64 element checks, frozen Web host values,
 lazy out-of-range lookup fallback, and persistent assoc/conj updates.

@@ -99,6 +99,7 @@
 (def parametric-result-operations
   '{result-ok-of 2 result-err-of 2 result-ok?-of 2 result-value-of 3 result-error-of 3
     result-match-of 6})
+(def variant-operations '#{variant-new variant-match})
 (def typed-vector-operations
   '{vector-count 1 vector-get 3 vector-at 2 vector-drop 2 vector-assoc 3 vector-conj 2})
 (def sequencing-operations '#{do})
@@ -110,9 +111,11 @@
              list-operations predicate-operations logical-operations map-operations typed-map-operations
              (set (keys typed-safe-value-operations))
              (set (keys parametric-result-operations))
+             variant-operations
              (set (keys typed-vector-operations))
              (set (keys string-operations))
-             '#{let if cap-call ns defn defn- some some? nil? vector-i64 vector-new match-result}))
+             '#{let if cap-call ns defn defn- some some? nil? vector-i64 vector-new
+                match-result match-variant}))
 (def max-functions 1024)
 (def max-expression-nodes 50000)
 (def max-lowered-nodes 100000)
@@ -124,6 +127,7 @@
 (def max-function-docstring-chars 4096)
 (def max-type-depth 8)
 (def max-type-nodes 64)
+(def max-variant-cases 32)
 ;; ADR-2607182410: bounds an optional `ns` `:capabilities` declaration set.
 ;; 256, not max-functions -- matches cap-call's own [0,255] id space (at
 ;; most 256 distinct capabilities can ever exist), not the unrelated
@@ -135,6 +139,12 @@
 
 (defn- parametric-result-type? [type]
   (and (vector? type) (= 3 (count type)) (= :result (first type))))
+
+(defn- variant-type? [type]
+  (and (vector? type) (= 3 (count type)) (= :variant (first type))))
+
+(defn- structured-type? [type]
+  (or (parametric-result-type? type) (variant-type? type)))
 
 (defn- validate-value-type!
   ([type] (validate-value-type! type 0 (volatile! 0)))
@@ -150,6 +160,20 @@
      (do (validate-value-type! (second type) (inc depth) nodes)
          (validate-value-type! (nth type 2) (inc depth) nodes)
          type)
+     (variant-type? type)
+     (let [[_ type-id cases] type]
+       (when-not (and (keyword? type-id) (namespace type-id))
+         (reject! "variant type id must be a qualified keyword" type))
+       (when-not (and (vector? cases) (seq cases) (<= (count cases) max-variant-cases)
+                      (every? #(and (vector? %) (= 2 (count %)) (keyword? (first %))) cases)
+                      (= (count cases) (count (distinct (map first cases)))))
+         (reject! "variant cases must be a non-empty unique bounded vector" type))
+       (vswap! nodes + (+ 2 (* 2 (count cases))))
+       (when (> @nodes max-type-nodes)
+         (reject! "value type exceeds node limit" type))
+       (doseq [[_ payload-type] cases]
+         (validate-value-type! payload-type (inc depth) nodes))
+       type)
      :else (reject! "value type is outside the safe profile" type))))
 
 (defn- kotoba-integer?
@@ -716,6 +740,19 @@
             (list 'result-match-of type (desugar-expr result)
                   (second ok-branch) (desugar-expr (nth ok-branch 2))
                   (second err-branch) (desugar-expr (nth err-branch 2)))))
+        variant-new
+        (do (when-not (= 3 (count args))
+              (reject! "variant-new requires type, case tag, and payload" form))
+            (list 'variant-new (first args) (second args) (desugar-expr (nth args 2))))
+        match-variant
+        (do (when (< (count args) 3)
+              (reject! "match-variant requires value, type, and exhaustive branches" form))
+            (let [[value type & branches] args]
+              (when-not (every? #(and (seq? %) (= 3 (count %))
+                                      (keyword? (first %)) (symbol? (second %))) branches)
+                (reject! "match-variant branches require (:case binder body)" form))
+              (list 'variant-match type (desugar-expr value)
+                    (mapv (fn [[tag binder body]] [tag binder (desugar-expr body)]) branches))))
         result-ok-of (do (when-not (= 2 (count args)) (reject! "result-ok-of requires type and payload" form))
                          (list 'result-ok-of (first args) (desugar-expr (second args))))
         result-err-of (do (when-not (= 2 (count args)) (reject! "result-err-of requires type and payload" form))
@@ -860,6 +897,28 @@
         (do (when-not (= (get typed-safe-value-operations op) (count args))
               (reject! "typed safe-value operation arity mismatch" form))
             (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
+        (= op 'variant-new)
+        (let [[type tag payload] args]
+          (when-not (= 3 (count args)) (reject! "variant-new shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (and (variant-type? type) (keyword? tag))
+            (reject! "variant-new requires variant descriptor and keyword tag" form))
+          (validate-expr payload locals functions (inc depth) budget))
+
+        (= op 'variant-match)
+        (let [[type value branches] args
+              cases (when (variant-type? type) (nth type 2))]
+          (when-not (= 3 (count args)) (reject! "variant-match shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (and (variant-type? type) (vector? branches)
+                         (= (mapv first cases) (mapv first branches))
+                         (every? #(and (vector? %) (= 3 (count %))
+                                       (symbol? (second %)) (nil? (namespace (second %)))) branches))
+            (reject! "variant match must exactly cover declared cases in order" form))
+          (validate-expr value locals functions (inc depth) budget)
+          (doseq [[_ binder body] branches]
+            (validate-expr body (conj locals binder) functions (inc depth) budget)))
 
         (= op 'result-match-of)
         (let [[type result ok-name ok-body err-name err-body] args]
@@ -1127,6 +1186,28 @@
             (when-not (= ok-type err-type)
               (reject! "result match branches must have the same value type" form))
             ok-type))
+        variant-new
+        (let [[type tag payload] args
+              payload-type (some (fn [[case-tag case-type]]
+                                   (when (= case-tag tag) case-type))
+                                 (nth type 2))]
+          (validate-value-type! type)
+          (when-not payload-type (reject! "variant constructor tag is not declared" form))
+          (require-expression-type! (infer-expression-type payload locals signatures)
+                                    payload-type payload)
+          type)
+        variant-match
+        (let [[type value branches] args
+              cases (nth type 2)]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          (let [branch-types
+                (mapv (fn [[[tag payload-type] [_ binder body]]]
+                        (infer-expression-type body (assoc locals binder payload-type) signatures))
+                      (map vector cases branches))]
+            (when-not (apply = branch-types)
+              (reject! "variant match branches must have the same value type" form))
+            (first branch-types)))
         (infer-call-type op args locals signatures)))
     :else (reject! "value has no admitted type" form)))
 
@@ -1257,7 +1338,7 @@
         raw-params (first declaration)
         tail (rest declaration)
         [result body] (if (or (keyword? (first tail))
-                              (parametric-result-type? (first tail)))
+                              (structured-type? (first tail)))
                         [(first tail) (rest tail)]
                         [:i64 tail])]
     (when (and docstring (> (count docstring) max-function-docstring-chars))
@@ -1272,14 +1353,14 @@
   [raw-params]
   (if (or (some keyword? raw-params)
           (and (even? (count raw-params))
-               (some parametric-result-type? (map second (partition 2 raw-params)))))
+               (some structured-type? (map second (partition 2 raw-params)))))
     (do
       (when-not (even? (count raw-params))
         (reject! "typed parameters require alternating name/type pairs" raw-params))
       (mapv (fn [[pattern type]]
               (validate-value-type! type)
               (when (and (or (contains? #{:string :keyword :map :bool :option-i64 :result-i64 :vector-i64} type)
-                             (parametric-result-type? type))
+                             (structured-type? type))
                          (not (or (symbol? pattern)
                                   (and (= type :map) (map? pattern))
                                   (and (= type :vector-i64) (vector? pattern)))))
@@ -1498,14 +1579,15 @@
     (let [typed-values? (boolean
                          (some (fn [{:keys [param-types result body]}]
                                  (or (some #(or (contains? #{:string :keyword :map :bool :option-i64 :result-i64 :vector-i64} %)
-                                                (parametric-result-type? %)) param-types)
+                                                (structured-type? %)) param-types)
                                      (or (contains? #{:string :keyword :map :bool :option-i64 :result-i64 :vector-i64} result)
-                                         (parametric-result-type? result))
+                                         (structured-type? result))
                                      (some #(or (string? %) (keyword? %) (boolean? %)
                                                 (and (seq? %)
                                                      (or (contains? typed-map-operations (first %))
                                                          (contains? typed-safe-value-operations (first %))
                                                          (contains? parametric-result-operations (first %))
+                                                         (contains? variant-operations (first %))
                                                          (= 'vector-new (first %))
                                                          (contains? typed-vector-operations (first %)))))
                                            (tree-seq coll? seq body))))
