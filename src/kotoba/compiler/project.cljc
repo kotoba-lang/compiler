@@ -10,6 +10,9 @@
 (def max-project-dependency-edges 256)
 (def max-project-depth 64)
 (def max-project-exports 1024)
+(def max-project-expression-nodes 200000)
+(def max-project-literals 65536)
+(def max-project-string-literal-bytes (* 1024 1024))
 
 (defn- reject! [message data]
   (throw (ex-info message (assoc data :phase :project-link))))
@@ -102,6 +105,37 @@
 (defn- source-text [forms]
   (str (str/join "\n" (map pr-str forms)) "\n"))
 
+(defn- admit-project-forms!
+  [forms counters]
+  (loop [pending (seq forms)]
+    (when-let [node (first pending)]
+      (let [rest-pending (next pending)]
+        (cond
+          (coll? node)
+          (do
+            (when (and (seq? node)
+                       (> (vswap! (:expressions counters) inc)
+                          max-project-expression-nodes))
+              (reject! "project expression nodes exceed limit"
+                       {:count @(:expressions counters)
+                        :limit max-project-expression-nodes}))
+            (recur (concat (seq node) rest-pending)))
+
+          (not (symbol? node))
+          (do
+            (when (> (vswap! (:literals counters) inc) max-project-literals)
+              (reject! "project literals exceed limit"
+                       {:count @(:literals counters) :limit max-project-literals}))
+            (when (string? node)
+              (let [bytes (vswap! (:literal-bytes counters)
+                                  + (value/utf8-byte-count! node))]
+                (when (> bytes max-project-string-literal-bytes)
+                  (reject! "project string literal bytes exceed limit"
+                           {:bytes bytes :limit max-project-string-literal-bytes}))))
+            (recur rest-pending))
+
+          :else (recur rest-pending))))))
+
 (defn- analyze-module [forms info dependencies module-index]
   (let [available
         (into {}
@@ -165,9 +199,13 @@
                              0 (vals sources))
         _ (when (> source-bytes max-project-source-bytes)
             (reject! "project source bytes exceed limit" {:bytes source-bytes}))
+        counters {:expressions (volatile! 0)
+                  :literals (volatile! 0)
+                  :literal-bytes (volatile! 0)}
         parsed (into {}
                      (map (fn [[declared source]]
                             (let [forms (frontend/read-forms source)
+                                  _ (admit-project-forms! forms counters)
                                   info (ns-info forms)]
                               (when-not (= declared (:namespace info))
                                 (reject! "source-map key does not match declared namespace"
