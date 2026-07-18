@@ -16,6 +16,7 @@
             [kotoba.compiler.ios-aot-test]
             [kotoba.compiler.native-executor-test]
             [kotoba.compiler.admission-test]
+            [kotoba.compiler.guest-grammar-conformance-test]
             [kotoba.compiler.property-test]
             [kotoba.compiler.project-test]
             [kotoba.compiler.receipt-test]
@@ -41,6 +42,7 @@
                                           'kotoba.compiler.backend-cljs-test
                                           'kotoba.compiler.ios-aot-test
                                           'kotoba.compiler.admission-test
+                                          'kotoba.compiler.guest-grammar-conformance-test
                                           'kotoba.compiler.signing-test
                                           'kotoba.compiler.native-executor-test
                                           'kotoba.compiler.receipt-test
