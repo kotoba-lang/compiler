@@ -87,7 +87,7 @@
   (let [source
         "(ns typed.operations (:export [main check-option read-option check-result read-result
                                         update-vector compare-vector set-has set-add set-remove compare-set
-                                        update-record compare-record]))
+                                        update-record compare-record nested-set-count]))
          (defn main [] 0)
          (defn check-option [] :bool (option-some?-of [:option :i64] (option-some-of [:option :i64] 7)))
          (defn read-option [] :i64 (option-value-of [:option :i64] (option-some-of [:option :i64] 7) (quot 1 0)))
@@ -119,14 +119,21 @@
          (defn compare-record [] :i64
            (record-equal [:record :demo/person [[:name :string] [:age :i64]]]
              (record [:record :demo/person [[:name :string] [:age :i64]]] \"A\" 1)
-             (record [:record :demo/person [[:name :string] [:age :i64]]] \"A\" 1)))"
+             (record [:record :demo/person [[:name :string] [:age :i64]]] \"A\" 1)))
+         (defn nested-set-count [] :i64
+           (typed-set-count [:set :keyword]
+             (record-get [:record :demo/report [[:covered [:set :keyword]]]]
+               (record [:record :demo/report [[:covered [:set :keyword]]]]
+                 (typed-set [:set :keyword] :ready :reviewed))
+               :covered)))"
         compiled (compiler/compile-source source :wasm32-kotoba-v1)
         probe (node-probe
                compiled
                (str "const x=h.instance.exports;"
                     "const expected={'check-option':true,'read-option':7n,'check-result':true,'read-result':8n,"
                     "'update-vector':'after','compare-vector':1n,'set-has':true,'set-add':2n,"
-                    "'set-remove':1n,'compare-set':1n,'update-record':2n,'compare-record':1n};"
+                    "'set-remove':1n,'compare-set':1n,'update-record':2n,'compare-record':1n,"
+                    "'nested-set-count':2n};"
                     "for(const [name,value] of Object.entries(expected))"
                     "if(x[name]()!=value){console.error(name,x[name](),value);process.exit(2)}"))]
     (is (zero? (:exit probe)) (:err probe))))
