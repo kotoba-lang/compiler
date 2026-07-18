@@ -1,0 +1,38 @@
+;; kotoba-lang/compiler's capability-name registry (ADR-2607182410).
+;;
+;; Maps a namespaced-keyword capability NAME (as written in `.kotoba` source,
+;; e.g. `(cap-call :identity/sign msg)`) to the small integer capability id
+;; `cap-call`'s existing [0,255] wire format already uses. This lets a
+;; `.kotoba` program name a capability instead of writing a magic number,
+;; while the compiler still lowers to the EXACT SAME `[:cap-call <int>]`
+;; KIR node / `[:cap/call <id>]` effect the integer form has always produced
+;; -- name resolution happens once, at parse/desugar time, strictly inside
+;; `kotoba.compiler.frontend`, before HIR/KIR construction. Nothing
+;; downstream (`admission.cljc`, `verifier.clj`, any backend) is aware a
+;; keyword was ever written.
+;;
+;; This id space is COMPILER-LOCAL and intentionally NOT shared with any
+;; other repo's capability table -- in particular, it is deliberately NOT
+;; the same registry as `kotoba-core-contracts`'
+;; `resources/kotoba/runtime/capability_contract.edn` (that file names a
+;; different host ABI, owned by a different codebase, with its own id
+;; space starting at 201; reusing/aliasing it here was considered and
+;; explicitly rejected by the design ADR -- this compiler's own [0,255]
+;; `cap-call` ids and that runtime's ids are independent numbering systems
+;; that happen to share some human-readable names). Do not attempt to keep
+;; the two files' ids in sync; only the NAMES are allowed to coincide, and
+;; only because both happen to describe similar real-world capabilities.
+;;
+;; Ids are unique small integers in [1, 255] (0 is left unassigned so a
+;; missing/zeroed id can never silently resolve to a real capability).
+;; Adding a new capability name: append an entry with the next unused id;
+;; never renumber or reuse a retired id (a retired name should be deleted
+;; outright, not reassigned, since existing compiled artifacts may still
+;; reference its numeric id directly via the pre-existing literal-int form).
+{:identity/sign 1
+ :identity/verify 2
+ :hash/sha256 3
+ :http/post 4
+ :log/read 5
+ :log/append 6
+ :clock/now 7}

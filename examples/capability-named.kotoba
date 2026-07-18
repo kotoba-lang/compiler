@@ -1,0 +1,11 @@
+(ns examples.capability-named
+  (:capabilities #{:identity/sign}))
+
+(defn audit [value]
+  (cap-call :identity/sign value))
+
+(defn helper [value]
+  (audit value))
+
+(defn main []
+  42)
