@@ -326,6 +326,10 @@
                     (= op 'typed-set-new)
                     (let [[type & items] args]
                       (emit-builder type -1 items (repeat (count items) (second type)) env))
+                    (= op 'typed-map-new)
+                    (let [[type & items] args]
+                      (emit-builder type -1 items
+                                    (take (count items) (cycle [(second type) (nth type 2)])) env))
                     (= op 'record-new)
                     (let [[type & items] args]
                       (emit-builder type -1 items (map second (nth type 2)) env))
@@ -404,7 +408,7 @@
                           index (first (keep-indexed #(when (= field (first %2)) %1) (nth type 2)))
                           replacement-type (second (nth (nth type 2) index))]
                       (emit-assoc type value index replacement replacement-type env))
-                    (contains? '#{hetero-vector-equal typed-set-equal record-equal} op)
+                    (contains? '#{hetero-vector-equal typed-set-equal typed-map-equal record-equal} op)
                     (let [[type left right] args] (emit-equal type left right env))
                     (contains? '#{typed-set-contains typed-set-conj typed-set-disj} op)
                     (let [[type value item] args
@@ -424,6 +428,34 @@
                     (let [[type value] args]
                       (concat (i32-const (descriptor-id type)) (emit* value env)
                               [0x10 (get intrinsic-indices 'typed-count)]))
+                    (= op 'typed-map-count)
+                    (let [[type value] args]
+                      (concat (i32-const (descriptor-id type)) (emit* value env)
+                              [0x10 (get intrinsic-indices 'typed-count)]))
+                    (contains? '#{typed-map-contains typed-map-get typed-map-dissoc} op)
+                    (let [[type value key] args
+                          key-type (second type)
+                          prefix (case op
+                                   typed-map-contains "typed-map-contains-"
+                                   typed-map-get "typed-map-get-"
+                                   typed-map-dissoc "typed-map-dissoc-")
+                          intrinsic (symbol (str prefix (if (= key-type :i64) "i64" "ref")))
+                          code (concat (i32-const (descriptor-id type)) (emit* value env)
+                                       (emit* key env) [0x10 (get intrinsic-indices intrinsic)])]
+                      (if (= op 'typed-map-contains) (emit-bool code) code))
+                    (= op 'typed-map-entry-at)
+                    (let [[type value index] args]
+                      (concat (i32-const (descriptor-id type)) (emit* value env)
+                              (emit* index env)
+                              [0x10 (get intrinsic-indices 'typed-map-entry-at)]))
+                    (= op 'typed-map-assoc)
+                    (let [[type value key item] args
+                          key-code (if (= (second type) :i64) "i" "r")
+                          item-code (if (= (nth type 2) :i64) "i" "r")
+                          intrinsic (symbol (str "typed-map-assoc-" key-code item-code))]
+                      (concat (i32-const (descriptor-id type)) (emit* value env)
+                              (emit* key env) (emit* item env)
+                              [0x10 (get intrinsic-indices intrinsic)]))
                     :else
                     (if-let [function-index (get function-indices op)]
                       (concat (mapcat #(emit* % env) args) [0x10 function-index])
@@ -503,7 +535,18 @@
                          ['typed-set-op-i64 "kotoba:typed" "set-op-i64" [0x60 4 0x7f 0x6f 0x7f 0x7e 1 0x6f]]
                          ['typed-set-op-ref "kotoba:typed" "set-op-ref" [0x60 4 0x7f 0x6f 0x7f 0x6f 1 0x6f]]
                          ['typed-set-contains-i64 "kotoba:typed" "set-contains-i64" [0x60 3 0x7f 0x6f 0x7e 1 0x7f]]
-                         ['typed-set-contains-ref "kotoba:typed" "set-contains-ref" [0x60 3 0x7f 0x6f 0x6f 1 0x7f]]])
+                         ['typed-set-contains-ref "kotoba:typed" "set-contains-ref" [0x60 3 0x7f 0x6f 0x6f 1 0x7f]]
+                         ['typed-map-contains-i64 "kotoba:typed" "map-contains-i64" [0x60 3 0x7f 0x6f 0x7e 1 0x7f]]
+                         ['typed-map-contains-ref "kotoba:typed" "map-contains-ref" [0x60 3 0x7f 0x6f 0x6f 1 0x7f]]
+                         ['typed-map-get-i64 "kotoba:typed" "map-get-i64" [0x60 3 0x7f 0x6f 0x7e 1 0x6f]]
+                         ['typed-map-get-ref "kotoba:typed" "map-get-ref" [0x60 3 0x7f 0x6f 0x6f 1 0x6f]]
+                         ['typed-map-entry-at "kotoba:typed" "map-entry-at" [0x60 3 0x7f 0x6f 0x7e 1 0x6f]]
+                         ['typed-map-assoc-ii "kotoba:typed" "map-assoc-ii" [0x60 4 0x7f 0x6f 0x7e 0x7e 1 0x6f]]
+                         ['typed-map-assoc-ir "kotoba:typed" "map-assoc-ir" [0x60 4 0x7f 0x6f 0x7e 0x6f 1 0x6f]]
+                         ['typed-map-assoc-ri "kotoba:typed" "map-assoc-ri" [0x60 4 0x7f 0x6f 0x6f 0x7e 1 0x6f]]
+                         ['typed-map-assoc-rr "kotoba:typed" "map-assoc-rr" [0x60 4 0x7f 0x6f 0x6f 0x6f 1 0x6f]]
+                         ['typed-map-dissoc-i64 "kotoba:typed" "map-dissoc-i64" [0x60 3 0x7f 0x6f 0x7e 1 0x6f]]
+                         ['typed-map-dissoc-ref "kotoba:typed" "map-dissoc-ref" [0x60 3 0x7f 0x6f 0x6f 1 0x6f]]])
         imports (vec (concat typed-imports
                       (when has-cap? [['cap-call "kotoba:cap" "call"
                                        [0x60 2 0x7e 0x7e 1 0x7e]]])

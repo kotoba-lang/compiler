@@ -102,6 +102,8 @@
     (list* 'hetero-vector type (map stub-value (second type)))
     (and (vector? type) (= :set (first type)))
     (list 'typed-set type)
+    (and (vector? type) (= :map (first type)))
+    (list 'typed-map-new type)
     (and (vector? type) (= :record (first type)))
     (list* 'record type (map (comp stub-value second) (nth type 2)))
     :else (reject! "project import result type has no closed stub value"

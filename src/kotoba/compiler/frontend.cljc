@@ -108,6 +108,9 @@
 (def typed-set-operations
   '#{typed-set-new typed-set-count typed-set-contains typed-set-conj
      typed-set-disj typed-set-equal})
+(def canonical-typed-map-operations
+  '#{typed-map-new typed-map-count typed-map-contains typed-map-get
+     typed-map-entry-at typed-map-assoc typed-map-dissoc typed-map-equal})
 (def record-operations '#{record-new record-get record-assoc record-equal})
 (def typed-vector-operations
   '{vector-count 1 vector-get 3 vector-at 2 vector-drop 2 vector-assoc 3 vector-conj 2})
@@ -124,6 +127,7 @@
              generic-option-operations
              heterogeneous-vector-operations
              typed-set-operations
+             canonical-typed-map-operations
              record-operations
              (set (keys typed-vector-operations))
              (set (keys string-operations))
@@ -143,6 +147,7 @@
 (def max-variant-cases 32)
 (def max-heterogeneous-vector-items 32)
 (def max-typed-set-items 32)
+(def max-typed-map-entries 31)
 (def max-record-fields 32)
 ;; ADR-2607182410: bounds an optional `ns` `:capabilities` declaration set.
 ;; 256, not max-functions -- matches cap-call's own [0,255] id space (at
@@ -168,12 +173,16 @@
 (defn- typed-set-type? [type]
   (and (vector? type) (= 2 (count type)) (= :set (first type))))
 
+(defn- canonical-typed-map-type? [type]
+  (and (vector? type) (= 3 (count type)) (= :map (first type))))
+
 (defn- record-type? [type]
   (and (vector? type) (= 3 (count type)) (= :record (first type))))
 
 (defn- structured-type? [type]
   (or (parametric-result-type? type) (variant-type? type) (generic-option-type? type)
-      (heterogeneous-vector-type? type) (typed-set-type? type) (record-type? type)))
+      (heterogeneous-vector-type? type) (typed-set-type? type)
+      (canonical-typed-map-type? type) (record-type? type)))
 
 (defn- validate-value-type!
   ([type] (validate-value-type! type 0 (volatile! 0)))
@@ -205,6 +214,10 @@
        type)
      (typed-set-type? type)
      (do (validate-value-type! (second type) (inc depth) nodes)
+         type)
+     (canonical-typed-map-type? type)
+     (do (validate-value-type! (second type) (inc depth) nodes)
+         (validate-value-type! (nth type 2) (inc depth) nodes)
          type)
      (record-type? type)
      (let [[_ type-id fields] type]
@@ -837,6 +850,15 @@
             (list 'result-match-of type (desugar-expr result)
                   (second ok-branch) (desugar-expr (nth ok-branch 2))
                   (second err-branch) (desugar-expr (nth err-branch 2)))))
+        result-match-of
+        (do (when-not (= 6 (count args))
+              (reject! "result-match-of requires type, value, and two bound branches" form))
+            (let [[type value ok-binder ok-body err-binder err-body] args]
+              (when-not (and (symbol? ok-binder) (symbol? err-binder))
+                (reject! "result-match-of requires symbol binders" form))
+              (list 'result-match-of type (desugar-expr value)
+                    ok-binder (desugar-expr ok-body)
+                    err-binder (desugar-expr err-body))))
         variant-new
         (do (when-not (= 3 (count args))
               (reject! "variant-new requires type, case tag, and payload" form))
@@ -848,6 +870,17 @@
               (when-not (every? #(and (seq? %) (= 3 (count %))
                                       (keyword? (first %)) (symbol? (second %))) branches)
                 (reject! "match-variant branches require (:case binder body)" form))
+              (list 'variant-match type (desugar-expr value)
+                    (mapv (fn [[tag binder body]] [tag binder (desugar-expr body)]) branches))))
+        variant-match
+        (do (when-not (= 3 (count args))
+              (reject! "variant-match requires type, value, and lowered branches" form))
+            (let [[type value branches] args]
+              (when-not (and (vector? branches)
+                             (every? #(and (vector? %) (= 3 (count %))
+                                           (keyword? (first %)) (symbol? (second %)))
+                                     branches))
+                (reject! "variant-match lowered branches are invalid" form))
               (list 'variant-match type (desugar-expr value)
                     (mapv (fn [[tag binder body]] [tag binder (desugar-expr body)]) branches))))
         option-some-of
@@ -947,6 +980,44 @@
         (do (when-not (= 3 (count args))
               (reject! "typed-set-equal requires type and two values" form))
             (list 'typed-set-equal (first args) (desugar-expr (second args))
+                  (desugar-expr (nth args 2))))
+        typed-map-new
+        (do (when-not (and (seq args) (odd? (count args)))
+              (reject! "typed-map-new requires type and key/value pairs" form))
+            (list* 'typed-map-new (first args) (map desugar-expr (rest args))))
+        typed-map-count
+        (do (when-not (= 2 (count args))
+              (reject! "typed-map-count requires type and value" form))
+            (list 'typed-map-count (first args) (desugar-expr (second args))))
+        typed-map-contains
+        (do (when-not (= 3 (count args))
+              (reject! "typed-map-contains requires type, value, and key" form))
+            (list 'typed-map-contains (first args) (desugar-expr (second args))
+                  (desugar-expr (nth args 2))))
+        typed-map-get
+        (do (when-not (= 3 (count args))
+              (reject! "typed-map-get requires type, value, and key" form))
+            (list 'typed-map-get (first args) (desugar-expr (second args))
+                  (desugar-expr (nth args 2))))
+        typed-map-entry-at
+        (do (when-not (= 3 (count args))
+              (reject! "typed-map-entry-at requires type, value, and index" form))
+            (list 'typed-map-entry-at (first args) (desugar-expr (second args))
+                  (desugar-expr (nth args 2))))
+        typed-map-assoc
+        (do (when-not (= 4 (count args))
+              (reject! "typed-map-assoc requires type, value, key, and item" form))
+            (list 'typed-map-assoc (first args) (desugar-expr (second args))
+                  (desugar-expr (nth args 2)) (desugar-expr (nth args 3))))
+        typed-map-dissoc
+        (do (when-not (= 3 (count args))
+              (reject! "typed-map-dissoc requires type, value, and key" form))
+            (list 'typed-map-dissoc (first args) (desugar-expr (second args))
+                  (desugar-expr (nth args 2))))
+        typed-map-equal
+        (do (when-not (= 3 (count args))
+              (reject! "typed-map-equal requires type and two values" form))
+            (list 'typed-map-equal (first args) (desugar-expr (second args))
                   (desugar-expr (nth args 2))))
         record
         (do (when (empty? args)
@@ -1156,6 +1227,60 @@
           (validate-value-type! type)
           (when-not (typed-set-type? type)
             (reject! "typed set equality requires [:set item-type]" form))
+          (validate-expr left locals functions (inc depth) budget)
+          (validate-expr right locals functions (inc depth) budget))
+
+        (= op 'typed-map-new)
+        (let [[type & entries] args]
+          (validate-value-type! type)
+          (when-not (and (canonical-typed-map-type? type)
+                         (even? (count entries))
+                         (<= (/ (count entries) 2) max-typed-map-entries))
+            (reject! "typed map constructor shape or entry limit is invalid" form))
+          (doseq [entry entries]
+            (validate-expr entry locals functions (inc depth) budget)))
+
+        (= op 'typed-map-count)
+        (let [[type value] args]
+          (when-not (= 2 (count args)) (reject! "typed map count shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (canonical-typed-map-type? type)
+            (reject! "typed map count requires [:map key-type value-type]" form))
+          (validate-expr value locals functions (inc depth) budget))
+
+        (contains? '#{typed-map-contains typed-map-get typed-map-dissoc} op)
+        (let [[type value key] args]
+          (when-not (= 3 (count args)) (reject! "typed map operation shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (canonical-typed-map-type? type)
+            (reject! "typed map operation requires [:map key-type value-type]" form))
+          (validate-expr value locals functions (inc depth) budget)
+          (validate-expr key locals functions (inc depth) budget))
+
+        (= op 'typed-map-entry-at)
+        (let [[type value index] args]
+          (when-not (= 3 (count args)) (reject! "typed map entry projection shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (canonical-typed-map-type? type)
+            (reject! "typed map entry projection requires [:map key-type value-type]" form))
+          (validate-expr value locals functions (inc depth) budget)
+          (validate-expr index locals functions (inc depth) budget))
+
+        (= op 'typed-map-assoc)
+        (let [[type map-value key item] args]
+          (when-not (= 4 (count args)) (reject! "typed map assoc shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (canonical-typed-map-type? type)
+            (reject! "typed map assoc requires [:map key-type value-type]" form))
+          (doseq [item-form [map-value key item]]
+            (validate-expr item-form locals functions (inc depth) budget)))
+
+        (= op 'typed-map-equal)
+        (let [[type left right] args]
+          (when-not (= 3 (count args)) (reject! "typed map equality shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (canonical-typed-map-type? type)
+            (reject! "typed map equality requires [:map key-type value-type]" form))
           (validate-expr left locals functions (inc depth) budget)
           (validate-expr right locals functions (inc depth) budget))
 
@@ -1688,6 +1813,63 @@
           (require-expression-type! (infer-expression-type left locals signatures) type left)
           (require-expression-type! (infer-expression-type right locals signatures) type right)
           :i64)
+        typed-map-new
+        (let [[type & entries] args
+              [key-type value-type] (rest type)]
+          (validate-value-type! type)
+          (doseq [[key item] (partition 2 entries)]
+            (require-expression-type! (infer-expression-type key locals signatures)
+                                      key-type key)
+            (require-expression-type! (infer-expression-type item locals signatures)
+                                      value-type item))
+          type)
+        typed-map-count
+        (let [[type value] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          :i64)
+        typed-map-contains
+        (let [[type value key] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          (require-expression-type! (infer-expression-type key locals signatures)
+                                    (second type) key)
+          :bool)
+        typed-map-get
+        (let [[type value key] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          (require-expression-type! (infer-expression-type key locals signatures)
+                                    (second type) key)
+          [:option (nth type 2)])
+        typed-map-entry-at
+        (let [[type value index] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          (require-expression-type! (infer-expression-type index locals signatures) :i64 index)
+          [:option [:vector [(second type) (nth type 2)]]])
+        typed-map-assoc
+        (let [[type value key item] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          (require-expression-type! (infer-expression-type key locals signatures)
+                                    (second type) key)
+          (require-expression-type! (infer-expression-type item locals signatures)
+                                    (nth type 2) item)
+          type)
+        typed-map-dissoc
+        (let [[type value key] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          (require-expression-type! (infer-expression-type key locals signatures)
+                                    (second type) key)
+          type)
+        typed-map-equal
+        (let [[type left right] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type left locals signatures) type left)
+          (require-expression-type! (infer-expression-type right locals signatures) type right)
+          :i64)
         record-new
         (let [[type & values] args
               fields (nth type 2)]
@@ -1837,12 +2019,26 @@
     (let [tmp (gensym "param-destr__")]
       [tmp (fn [body] (list 'let [param tmp] body))])))
 
+(defn- type-alias-form? [value]
+  (and (vector? value) (= 2 (count value)) (= :alias (first value))
+       (symbol? (second value))))
+
+(defn- resolve-type-alias! [type constants]
+  (if (type-alias-form? type)
+    (let [name (second type)]
+      (when-not (contains? constants name)
+        (reject! "type alias must name a declared constant" type))
+      (let [resolved (get constants name)]
+        (validate-value-type! resolved)
+        resolved))
+    type))
+
 (defn- defn-parts
   "Parse Kotoba's bounded function declaration shape. A docstring is inert
   metadata and is deliberately discarded before lowering. An optional result
   keyword follows the parameter vector: `(defn f [s :string] :string s)`.
   Attributes, pre/post maps, and multiple arities remain outside the profile."
-  [form]
+  [form constants]
   (let [[_ name & declaration] form
         [docstring declaration] (if (string? (first declaration))
                                   [(first declaration) (rest declaration)]
@@ -1850,8 +2046,9 @@
         raw-params (first declaration)
         tail (rest declaration)
         [result body] (if (or (keyword? (first tail))
-                              (structured-type? (first tail)))
-                        [(first tail) (rest tail)]
+                              (structured-type? (first tail))
+                              (type-alias-form? (first tail)))
+                        [(resolve-type-alias! (first tail) constants) (rest tail)]
                         [:i64 tail])]
     (when (and docstring (> (count docstring) max-function-docstring-chars))
       (reject! "function docstring exceeds admission limit" docstring))
@@ -1862,7 +2059,12 @@
   "Legacy `[x y]` remains two i64 parameters. Once any type keyword appears,
   the whole vector must be alternating `[name :type ...]`; this keeps the
   source grammar deterministic and makes every non-i64 host boundary explicit."
-  [raw-params]
+  [raw-params constants]
+  (let [raw-params (mapv (fn [index item]
+                           (if (and (odd? index) (type-alias-form? item))
+                             (resolve-type-alias! item constants)
+                             item))
+                         (range) raw-params)]
   (if (or (some keyword? raw-params)
           (and (even? (count raw-params))
                (some structured-type? (map second (partition 2 raw-params)))))
@@ -1879,7 +2081,7 @@
                 (reject! "typed values require plain-symbol bindings" pattern))
               {:pattern pattern :type type})
             (partition 2 raw-params)))
-    (mapv (fn [pattern] {:pattern pattern :type :i64}) raw-params)))
+    (mapv (fn [pattern] {:pattern pattern :type :i64}) raw-params))))
 
 (defn- binding-symbols [pattern]
   (->> (tree-seq coll? seq pattern)
@@ -1901,8 +2103,9 @@
     (keyword? value) true
     (boolean? value) true
     (nil? value) true
-    (vector? value) (and (<= (count value) max-list-items)
-                         (every? constant-literal? value))
+    (vector? value) (or (type-alias-form? value)
+                        (and (<= (count value) max-list-items)
+                             (every? constant-literal? value)))
     (map? value) (and (<= (count value) max-list-items)
                       (every? constant-literal? (mapcat identity value)))
     :else false))
@@ -1927,6 +2130,25 @@
       (when-not (constant-literal? value)
         (reject! "constant value must be closed bounded integer/string/keyword/boolean/nil/vector/map data" value))
       {:name name :value value})))
+
+(defn- resolve-constant-aliases!
+  ([value constants] (resolve-constant-aliases! value constants #{}))
+  ([value constants resolving]
+   (cond
+     (type-alias-form? value)
+     (let [name (second value)]
+       (when-not (contains? constants name)
+         (reject! "constant alias must name a declared constant" value))
+       (when (contains? resolving name)
+         (reject! "constant aliases must be acyclic" value))
+       (resolve-constant-aliases! (get constants name) constants (conj resolving name)))
+     (vector? value) (mapv #(resolve-constant-aliases! % constants resolving) value)
+     (map? value) (into (empty value)
+                        (map (fn [[key item]]
+                               [(resolve-constant-aliases! key constants resolving)
+                                (resolve-constant-aliases! item constants resolving)]))
+                        value)
+     :else value)))
 
 (declare substitute-constants)
 
@@ -1984,7 +2206,7 @@
             (reject! "at most one namespace form is admitted" namespaces))
         namespace-info (when-let [namespace-form (first namespaces)]
                          (namespace-parts namespace-form))
-        constants (into {}
+        raw-constants (into {}
                         (map (fn [form]
                                (let [{:keys [name value]} (def-parts form)]
                                  (when-not (valid-name? name)
@@ -1993,8 +2215,12 @@
                                    (reject! "reserved constant name" name))
                                  [name value])))
                         constant-forms)
-        _ (when-not (= (count constants) (count constant-forms))
+        _ (when-not (= (count raw-constants) (count constant-forms))
             (reject! "duplicate constant name" constant-forms))
+        constants (into {}
+                        (map (fn [[name value]]
+                               [name (resolve-constant-aliases! value raw-constants #{name})]))
+                        raw-constants)
         ;; ADR-2607150000: mapcat, not mapv -- a defn using `loop` may
         ;; expand into itself PLUS one or more synthesized loop-helper
         ;; functions (collected via *pending-loop-helpers*, bound fresh
@@ -2024,7 +2250,7 @@
                (vec
                      (mapcat
                      (fn [form]
-                       (let [{:keys [name raw-params result body]} (defn-parts form)]
+                       (let [{:keys [name raw-params result body]} (defn-parts form constants)]
                          (when-not (valid-name? name) (reject! "invalid function name" name))
                          (when (contains? reserved-function-names name)
                            (reject! "reserved function name" name))
@@ -2032,7 +2258,7 @@
                            (reject! "function parameters must be a vector" raw-params))
                          (when-not (= 1 (count body))
                            (reject! "function must contain one result expression" body))
-                         (let [param-parts (typed-param-parts raw-params)
+                         (let [param-parts (typed-param-parts raw-params constants)
                                _ (when (> (count param-parts) max-parameters)
                                    (reject! "function parameters exceed ABI-supported arity" raw-params))
                                name+wraps (mapv #(param-name+wrap (:pattern %)) param-parts)
@@ -2111,6 +2337,7 @@
                                                          (contains? generic-option-operations (first %))
                                                          (contains? heterogeneous-vector-operations (first %))
                                                          (contains? typed-set-operations (first %))
+                                                         (contains? canonical-typed-map-operations (first %))
                                                          (contains? record-operations (first %))
                                                          (= 'vector-new (first %))
                                                          (contains? typed-vector-operations (first %)))))

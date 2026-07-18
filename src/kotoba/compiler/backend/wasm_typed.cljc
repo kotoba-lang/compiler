@@ -9,7 +9,7 @@
 (defn descriptor? [value]
   (or (contains? primitive-tags value)
       (and (vector? value)
-           (contains? #{:option :result :variant :vector :set :record}
+           (contains? #{:option :result :variant :vector :set :map :record}
                       (first value)))))
 
 (defn- uleb [n]
@@ -52,6 +52,8 @@
       :vector (into [7] (concat (uleb (count (second descriptor)))
                                 (mapcat encode-descriptor (second descriptor))))
       :set (into [8] (encode-descriptor (second descriptor)))
+      :map (into [10] (concat (encode-descriptor (second descriptor))
+                              (encode-descriptor (nth descriptor 2))))
       :record (into [9] (concat (text-bytes (keyword-text (second descriptor)))
                                 (encode-named-members (nth descriptor 2))))
       (throw (ex-info "unsupported Wasm typed descriptor"
@@ -69,6 +71,7 @@
           :variant (reduce (fn [result [_ type]] (walk type result)) found (nth value 2))
           :vector (reduce (fn [result type] (walk type result)) found (second value))
           :set (walk (second value) found)
+          :map (->> found (walk (second value)) (walk (nth value 2)))
           :record (reduce (fn [result [_ type]] (walk type result)) found (nth value 2))
           found)))
 
@@ -154,14 +157,17 @@
         (= op 'do) (infer-type (last args) env signatures)
         (contains? '#{+ - * quot cap-call pair pair-first pair-second
                       string-byte-length map-get vector-count vector-get
-                      vector-at vector-slice hetero-vector-count typed-set-count} op) :i64
-        (contains? '#{= < > <= >= hetero-vector-equal typed-set-equal record-equal} op) :i64
+                      vector-at vector-slice hetero-vector-count typed-set-count
+                      typed-map-count} op) :i64
+        (contains? '#{= < > <= >= hetero-vector-equal typed-set-equal
+                      typed-map-equal record-equal} op) :i64
         (contains? '#{string=? bool-not option-some? result-ok?
-                      result-ok?-of option-some?-of typed-set-contains} op) :bool
+                      result-ok?-of option-some?-of typed-set-contains
+                      typed-map-contains} op) :bool
         (= op 'string-concat) :string
         (= op 'variant-new) (first args)
         (contains? '#{option-some-of option-none-of result-ok-of result-err-of
-                      hetero-vector-new typed-set-new record-new} op) (first args)
+                      hetero-vector-new typed-set-new typed-map-new record-new} op) (first args)
         (= op 'result-match-of)
         (let [[type _ ok-name ok-body] args]
           (infer-type ok-body (assoc env ok-name (second type)) signatures))
@@ -176,11 +182,15 @@
         (contains? '#{result-value-of result-error-of} op)
         (if (= op 'result-value-of) (second (first args)) (nth (first args) 2))
         (= op 'option-value-of) (second (first args))
+        (= op 'typed-map-get) [:option (nth (first args) 2)]
+        (= op 'typed-map-entry-at)
+        [:option [:vector [(second (first args)) (nth (first args) 2)]]]
         (= op 'hetero-vector-at) (nth (second (first args)) (nth args 2))
         (= op 'record-get)
         (let [[type _ field] args]
           (second (some #(when (= field (first %)) %) (nth type 2))))
-        (contains? '#{hetero-vector-assoc typed-set-conj typed-set-disj record-assoc} op)
+        (contains? '#{hetero-vector-assoc typed-set-conj typed-set-disj
+                      typed-map-assoc typed-map-dissoc record-assoc} op)
         (first args)
         :else (or (:result (get signatures op))
                   (throw (ex-info "unsupported typed Wasm expression"

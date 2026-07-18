@@ -471,6 +471,83 @@
           #?(:clj (if (= left right) 1 0)
              :cljs (if (= left right) i64/one i64/zero)))
 
+        (= op 'typed-map-new)
+        (let [[type & entry-forms] args
+              evaluated (mapv #(eval-expr % env functions fuel heap call-stack cap-call)
+                              entry-forms)
+              entries (mapv vec (partition 2 evaluated))]
+          (value/bounded-typed-value! type [type entries]))
+
+        (= op 'typed-map-count)
+        (let [[type value-form] args
+              map-value (value/bounded-typed-value!
+                         type (eval-expr value-form env functions fuel heap call-stack cap-call))]
+          #?(:clj (long (count (second map-value)))
+             :cljs (i64/->bigint (count (second map-value)))))
+
+        (contains? '#{typed-map-contains typed-map-get typed-map-dissoc} op)
+        (let [[type value-form key-form] args
+              map-value (value/bounded-typed-value!
+                         type (eval-expr value-form env functions fuel heap call-stack cap-call))
+              key (value/bounded-typed-value!
+                   (second type)
+                   (eval-expr key-form env functions fuel heap call-stack cap-call))
+              match (some (fn [[candidate item]]
+                            (when (zero? (value/compare-typed-values
+                                          (second type) candidate key))
+                              [candidate item]))
+                          (second map-value))]
+          (case op
+            typed-map-contains (boolean match)
+            typed-map-get (let [option-type [:option (nth type 2)]]
+                            (if match [option-type true (second match)]
+                                [option-type false]))
+            typed-map-dissoc
+            (value/bounded-typed-value!
+             type [type (filterv (fn [[candidate _]]
+                                   (not (zero? (value/compare-typed-values
+                                                (second type) candidate key))))
+                                 (second map-value))])))
+
+        (= op 'typed-map-entry-at)
+        (let [[type value-form index-form] args
+              map-value (value/bounded-typed-value!
+                         type (eval-expr value-form env functions fuel heap call-stack cap-call))
+              raw-index (eval-expr index-form env functions fuel heap call-stack cap-call)
+              index #?(:clj (long raw-index) :cljs (js/Number raw-index))
+              entry-type [:vector [(second type) (nth type 2)]]
+              option-type [:option entry-type]]
+          (if (or (neg? index) (>= index (count (second map-value))))
+            [option-type false]
+            (let [[key item] (nth (second map-value) index)]
+              [option-type true [entry-type key item]])))
+
+        (= op 'typed-map-assoc)
+        (let [[type value-form key-form item-form] args
+              map-value (value/bounded-typed-value!
+                         type (eval-expr value-form env functions fuel heap call-stack cap-call))
+              key (value/bounded-typed-value!
+                   (second type) (eval-expr key-form env functions fuel heap call-stack cap-call))
+              item (value/bounded-typed-value!
+                    (nth type 2) (eval-expr item-form env functions fuel heap call-stack cap-call))
+              remaining (filterv (fn [[candidate _]]
+                                   (not (zero? (value/compare-typed-values
+                                                (second type) candidate key))))
+                                 (second map-value))]
+          (when (and (= (count remaining) (count (second map-value)))
+                     (>= (count remaining) value/typed-map-entry-limit))
+            (trap! :map-too-large {:limit value/typed-map-entry-limit}))
+          (value/bounded-typed-value! type [type (conj remaining [key item])]))
+
+        (= op 'typed-map-equal)
+        (let [[type left-form right-form] args
+              left (value/bounded-typed-value!
+                    type (eval-expr left-form env functions fuel heap call-stack cap-call))
+              right (value/bounded-typed-value!
+                     type (eval-expr right-form env functions fuel heap call-stack cap-call))]
+          #?(:clj (if (= left right) 1 0)
+             :cljs (if (= left right) i64/one i64/zero)))
+
         (= op 'record-new)
         (let [[type & value-forms] args
               values (mapv #(eval-expr % env functions fuel heap call-stack cap-call)
