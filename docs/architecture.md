@@ -356,6 +356,14 @@ and restricted Web execute that same data today. Future Wasm qualification must
 consume it directly and produce the same values or trap classes. `.cljk`
 changes source discovery only; it does not introduce a JVM runtime or a second
 typed-value ABI.
+Wasm typed-value qualification uses a distinct, versioned `kotoba.typed`
+custom section. Version 1 encodes bounded descriptors and literals as canonical
+binary data rather than executable host text. The browser/Kototama host rejects
+duplicate sections, unknown versions or tags, malformed UTF-8, trailing bytes,
+and descriptors outside the same depth/node/member budgets before
+instantiation. This metadata foundation does not itself qualify typed Wasm
+execution: KIR v4 remains target-rejected until externref operations and exact
+boundary validation consume the sealed table.
 The first sequential collection profile is an explicitly constructed,
 128-item `vector<i64>` with signed-i64 element checks, frozen Web host values,
 lazy out-of-range lookup fallback, and persistent assoc/conj updates.

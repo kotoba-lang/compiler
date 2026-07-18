@@ -1,5 +1,8 @@
 const MAX_MODULE_BYTES = 1024 * 1024;
 const PAIR_CAPACITY = 4096;
+const TYPED_SECTION = "kotoba.typed";
+const TYPED_ABI_VERSION = 1;
+const MAX_TYPED_DESCRIPTORS = 64;
 const ALLOWED_IMPORTS = new Set([
   "kotoba:cap/call/function",
   "kotoba:heap/pair/function",
@@ -62,6 +65,94 @@ function validateDigest(value) {
     reject("invalid-digest", "expectedSha256 must be a lowercase SHA-256 digest");
 }
 
+function parseTypedMetadata(module) {
+  const sections = WebAssembly.Module.customSections(module, TYPED_SECTION);
+  if (sections.length === 0) return null;
+  if (sections.length !== 1) reject("invalid-typed-metadata", "typed ABI section must be unique");
+  const bytes = new Uint8Array(sections[0]);
+  let offset = 0;
+  let nodes = 0;
+  const byte = () => {
+    if (offset >= bytes.length) reject("invalid-typed-metadata", "truncated typed ABI section");
+    return bytes[offset++];
+  };
+  const uleb = () => {
+    let value = 0;
+    let shift = 0;
+    for (let index = 0; index < 5; index += 1) {
+      const current = byte();
+      value += (current & 0x7f) * (2 ** shift);
+      if ((current & 0x80) === 0) return value;
+      shift += 7;
+    }
+    reject("invalid-typed-metadata", "oversized typed ABI integer");
+  };
+  const text = () => {
+    const length = uleb();
+    if (length > 4096 || offset + length > bytes.length)
+      reject("invalid-typed-metadata", "invalid typed ABI text length");
+    let decoded;
+    try { decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(offset, offset + length)); }
+    catch (error) { reject("invalid-typed-metadata", "typed ABI text is not UTF-8", error); }
+    offset += length;
+    if (decoded.length === 0) reject("invalid-typed-metadata", "typed ABI names must be non-empty");
+    return decoded;
+  };
+  const descriptor = depth => {
+    nodes += 1;
+    if (depth > 8 || nodes > 64)
+      reject("invalid-typed-metadata", "typed ABI descriptor budget exceeded");
+    const tag = byte();
+    if (tag <= 3) return Object.freeze(["i64", "string", "keyword", "bool"][tag]);
+    if (tag === 4) return Object.freeze(["option", descriptor(depth + 1)]);
+    if (tag === 5) return Object.freeze(["result", descriptor(depth + 1), descriptor(depth + 1)]);
+    if (tag === 7) {
+      const count = uleb();
+      if (count > 32) reject("invalid-typed-metadata", "typed vector descriptor is oversized");
+      return Object.freeze(["vector", Object.freeze(Array.from({ length: count }, () => descriptor(depth + 1)))]);
+    }
+    if (tag === 8) return Object.freeze(["set", descriptor(depth + 1)]);
+    if (tag === 6 || tag === 9) {
+      const name = text();
+      const count = uleb();
+      if (count < 1 || count > 32)
+        reject("invalid-typed-metadata", "named typed descriptor member count is invalid");
+      const seen = new Set();
+      const members = [];
+      for (let index = 0; index < count; index += 1) {
+        const member = text();
+        if (seen.has(member)) reject("invalid-typed-metadata", "typed descriptor members must be unique");
+        seen.add(member);
+        members.push(Object.freeze([member, descriptor(depth + 1)]));
+      }
+      return Object.freeze([tag === 6 ? "variant" : "record", name, Object.freeze(members)]);
+    }
+    reject("invalid-typed-metadata", "unknown typed ABI descriptor tag");
+  };
+  if (byte() !== TYPED_ABI_VERSION)
+    reject("unsupported-typed-abi", "unsupported Wasm typed ABI version");
+  const count = uleb();
+  if (count > MAX_TYPED_DESCRIPTORS)
+    reject("invalid-typed-metadata", "too many typed ABI descriptors");
+  const descriptors = Array.from({ length: count }, () => descriptor(1));
+  const literalCount = uleb();
+  if (literalCount > 256) reject("invalid-typed-metadata", "too many typed ABI literals");
+  const literals = [];
+  for (let index = 0; index < literalCount; index += 1) {
+    const tag = byte();
+    if (tag === 0) literals.push(Object.freeze(["string", text()]));
+    else if (tag === 1) literals.push(Object.freeze(["keyword", text()]));
+    else if (tag === 2 || tag === 3) literals.push(Object.freeze(["bool", tag === 3]));
+    else reject("invalid-typed-metadata", "unknown typed ABI literal tag");
+  }
+  if (offset !== bytes.length) reject("invalid-typed-metadata", "trailing typed ABI metadata rejected");
+  return Object.freeze({
+    version: TYPED_ABI_VERSION,
+    descriptors: Object.freeze(descriptors),
+    literals: Object.freeze(literals)
+  });
+}
+
 function validateModule(module) {
   for (const entry of WebAssembly.Module.imports(module)) {
     const identity = `${entry.module}/${entry.name}/${entry.kind}`;
@@ -73,6 +164,7 @@ function validateModule(module) {
     reject("invalid-module", "Kotoba browser module must export a main function");
   if (exports.some(entry => entry.kind === "memory" || entry.kind === "table" || entry.kind === "global"))
     reject("forbidden-export", "Kotoba browser module may export functions only");
+  return parseTypedMetadata(module);
 }
 
 function createHeap() {
@@ -117,7 +209,7 @@ export async function instantiateKotoba(source, rawOptions) {
   let module;
   try { module = await WebAssembly.compile(bytes); }
   catch (error) { reject("invalid-module", "Wasm compilation failed", error); }
-  validateModule(module);
+  const typedAbi = validateModule(module);
   const heap = createHeap();
   const cap = Object.freeze({
     call(id, value) {
@@ -145,6 +237,7 @@ export async function instantiateKotoba(source, rawOptions) {
     module,
     instance,
     sha256: digest,
+    typedAbi,
     report: () => Object.freeze({ heap: heap.report() })
   });
 }
@@ -153,5 +246,6 @@ export const browserProfile = Object.freeze({
   format: "kotoba.browser-host/v1",
   maxModuleBytes: MAX_MODULE_BYTES,
   pairCapacity: PAIR_CAPACITY,
+  typedAbiVersion: TYPED_ABI_VERSION,
   imports: Object.freeze(Array.from(ALLOWED_IMPORTS).sort())
 });
