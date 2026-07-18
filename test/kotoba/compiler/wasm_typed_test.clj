@@ -130,3 +130,21 @@
                     "for(const [name,value] of Object.entries(expected))"
                     "if(x[name]()!=value){console.error(name,x[name](),value);process.exit(2)}"))]
     (is (zero? (:exit probe)) (:err probe))))
+
+(deftest typed-control-flow-preserves-bool-and-reference-comparisons
+  (let [source
+        "(ns typed.control (:export [main strings-match keyword-match]))
+         (defn main [] :i64
+           (if (string=? \"Kotoba\" \"Kotoba\")
+             (if (= :ready :ready) 42 1)
+             0))
+         (defn strings-match [] :bool
+           (if (string=? \"same\" \"same\") true false))
+         (defn keyword-match [] :i64 (= :ready :ready))"
+        compiled (compiler/compile-source source :wasm32-kotoba-v1)
+        probe (node-probe
+               compiled
+               (str "const x=h.instance.exports;"
+                    "if(x.main()!==42n||x['strings-match']()!==true||"
+                    "x['keyword-match']()!==1n)process.exit(2);"))]
+    (is (zero? (:exit probe)) (:err probe))))

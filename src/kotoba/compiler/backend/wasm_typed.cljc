@@ -74,6 +74,9 @@
 
     (map? value) (reduce (fn [result item] (walk item result)) found (vals value))
     (coll? value) (reduce (fn [result item] (walk item result)) found value)
+    (string? value) (conj found :string)
+    (keyword? value) (conj found :keyword)
+    (boolean? value) (conj found :bool)
     :else found))
 
 (defn descriptor-table [kir]
