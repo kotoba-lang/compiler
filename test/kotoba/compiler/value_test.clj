@@ -34,3 +34,12 @@
   (doseq [invalid [nil 0 false [] [false 1] [true] [true "7"] [nil 7]]]
     (is (thrown? clojure.lang.ExceptionInfo
                  (value/bounded-option-i64! invalid)))))
+
+(deftest vector-i64-is-bounded-and-homogeneous
+  (is (= [1 2 3] (value/bounded-vector-i64! [1 2 3])))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a vector-i64"
+                        (value/bounded-vector-i64! '(1 2))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a signed i64"
+                        (value/bounded-vector-i64! [1 "2"])))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"exceeds item limit"
+                        (value/bounded-vector-i64! (vec (range 129))))))

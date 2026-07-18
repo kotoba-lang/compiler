@@ -62,6 +62,13 @@
         (trap! :invalid-option-i64-value
                {:position position :message (ex-message error)})))
 
+    :vector-i64
+    (try
+      (value/bounded-vector-i64! runtime-value)
+      (catch #?(:clj Exception :cljs :default) error
+        (trap! :invalid-vector-i64-value
+               {:position position :message (ex-message error)})))
+
     (trap! :unsupported-value-type {:type type :position position}))
   runtime-value)
 
@@ -254,6 +261,45 @@
             (second option)
             (eval-expr fallback-form env functions fuel heap call-stack cap-call)))
 
+        (= op 'vector-new)
+        (value/bounded-vector-i64!
+         (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args))
+
+        (= op 'vector-count)
+        (let [items (value/bounded-vector-i64!
+                     (eval-expr (first args) env functions fuel heap call-stack cap-call))]
+          #?(:clj (long (count items)) :cljs (i64/->bigint (count items))))
+
+        (= op 'vector-get)
+        (let [[items-form index-form fallback-form] args
+              items (value/bounded-vector-i64!
+                     (eval-expr items-form env functions fuel heap call-stack cap-call))
+              index (eval-expr index-form env functions fuel heap call-stack cap-call)]
+          (if (and #?(:clj (integer? index) :cljs (i64/bigint-value? index))
+                   (not (neg? index)) (< index (count items)))
+            (nth items #?(:clj index :cljs (js/Number index)))
+            (eval-expr fallback-form env functions fuel heap call-stack cap-call)))
+
+        (= op 'vector-assoc)
+        (let [[items-form index-form item-form] args
+              items (value/bounded-vector-i64!
+                     (eval-expr items-form env functions fuel heap call-stack cap-call))
+              index (eval-expr index-form env functions fuel heap call-stack cap-call)
+              item (eval-expr item-form env functions fuel heap call-stack cap-call)]
+          (when-not (and (not (neg? index)) (< index (count items)))
+            (trap! :vector-index-out-of-range {:index index}))
+          (value/bounded-vector-i64!
+           (assoc items #?(:clj index :cljs (js/Number index)) item)))
+
+        (= op 'vector-conj)
+        (let [[items-form item-form] args
+              items (value/bounded-vector-i64!
+                     (eval-expr items-form env functions fuel heap call-stack cap-call))
+              item (eval-expr item-form env functions fuel heap call-stack cap-call)]
+          (when (>= (count items) value/vector-item-limit)
+            (trap! :vector-too-large {:limit value/vector-item-limit}))
+          (value/bounded-vector-i64! (conj items item)))
+
         (contains? '#{kernel-load-u8 kernel-load-u8-4k kernel-load-u8-16k
                       kernel-store-u8 kernel-store-u8-4k
                       kernel-load-u32 kernel-store-u32} op)
@@ -350,6 +396,7 @@
          :bool (when-not (boolean? arg)
                  (throw (ex-info "argument must be a boolean" {:phase :ir :arg arg})))
          :option-i64 (value/bounded-option-i64! arg)
+         :vector-i64 (value/bounded-vector-i64! arg)
          (throw (ex-info "argument type is unsupported" {:phase :ir :type type}))))
      (invoke-function function
                        (mapv (fn [arg type]

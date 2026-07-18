@@ -78,7 +78,8 @@
                                           :string-value-bytes 65536
                                           :keyword-value-bytes 512
                                           :map-entries 128
-                                          :option-i64-slots 2))
+                                          :option-i64-slots 2
+                                          :vector-i64-items 128))
             js-source (script/emit kir (merge {:source-digest source-digest
                                                :kir-digest kir-digest
                                                :compiler-version compiler-version}

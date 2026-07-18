@@ -304,6 +304,9 @@ limits, plus 512-byte keywords and maps of at most 128 unique keyword-to-i64
 entries. Strict booleans and a fixed one-or-two-slot tagged option-i64 ABI add
 no unbounded allocation; none and some are represented as frozen `[false]`
 and `[true, bigint]` values, never host null/undefined or integer sentinels.
+The first sequential collection profile is an explicitly constructed,
+128-item `vector<i64>` with signed-i64 element checks, frozen Web host values,
+lazy out-of-range lookup fallback, and persistent assoc/conj updates.
 Only the restricted JavaScript target currently admits that profile.
 Other targets fail at target selection, before backend emission, rather than
 type-erasing strings, keywords, maps, booleans, or options into i64 hashes,
