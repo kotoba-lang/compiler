@@ -86,21 +86,20 @@
 ;; ADR-2607150000: and/or/when mirror kotoba-lang/kotoba's already-proven
 ;; desugar-and/desugar-or (runtime.clj) -- ported here rather than reinvented,
 ;; closing the divergence ADR-2607141600/2607150000 identified between the
-;; two independently-evolved grammars. get/assoc are new: map literals and
-;; keyword literals desugar entirely to the EXISTING heap-pair/list
-;; primitives (see desugar-map/keyword->i64 below) -- no backend/codegen
-;; change anywhere, since `pair`/`pair-first`/`pair-second` were already
-;; host-imported capabilities before this change (backend/wasm.clj), not
-;; WASM-linear-memory-managed by the guest itself.
+;; two independently-evolved grammars. Keyword literals are now owned typed
+;; values and are never reduced to probabilistic i64 hashes. The legacy
+;; untagged pair-map lowering therefore fails closed when it encounters a
+;; keyword key until the bounded typed-map ABI is implemented.
 (def logical-operations '#{and or when})
 (def map-operations '#{get assoc})
+(def typed-map-operations '#{map-new map-get map-assoc})
 (def sequencing-operations '#{do})
 (def string-operations '{string-byte-length 1 string=? 2 string-concat 2})
 (def reserved-function-names
   (set/union forbidden-heads arithmetic comparisons (set (keys heap-operations))
              (set (keys kernel-memory-operations))
              (set (keys kernel-privileged-operations))
-             list-operations predicate-operations logical-operations map-operations
+             list-operations predicate-operations logical-operations map-operations typed-map-operations
              (set (keys string-operations))
              '#{let if cap-call ns defn defn-}))
 (def max-functions 1024)
@@ -117,7 +116,7 @@
 ;; most 256 distinct capabilities can ever exist), not the unrelated
 ;; function-count limit.
 (def max-namespace-capabilities 256)
-(def value-types #{:i64 :string})
+(def value-types #{:i64 :string :keyword :map})
 
 (defn- kotoba-integer?
   "True for a value that is (or stands for) a `.kotoba` integer literal --
@@ -352,60 +351,18 @@
             (list 'let [tmp (desugar-expr (first args))]
                   (desugar-do (rest args))))))
 
-(defn- fnv1a-i64
-  "Deterministic 64-bit FNV-1a hash of S's UTF-8 bytes, used to intern
-  keyword literals as distinct i64 constants (ADR-2607150000). Not
-  Clojure's own `hash` -- FNV-1a is a fixed, dependency-free algorithm
-  whose output is reproducible forever, matching this compiler's byte-
-  for-byte reproducibility gates (coverage_evidence.clj/release.clj).
-  Collision probability for the realistically small keyword vocabulary of
-  one .kotoba module is astronomically low but not proven zero -- a known,
-  documented limitation, not eliminated."
-  [s]
-  #?(:clj
-     (let [bs (.getBytes ^String s "UTF-8")
-           offset-basis -3750763034362895579  ; 0xcbf29ce484222325 as signed i64
-           prime 1099511628211]                ; 0x100000001b3
-       (reduce (fn [h b] (unchecked-multiply (bit-xor h (bit-and (long b) 0xff)) prime))
-               offset-basis bs))
-     :cljs
-     ;; Same FNV-1a algorithm, over JS bigint instead of JVM long, so a
-     ;; keyword interned on this path hashes to the IDENTICAL i64 constant
-     ;; the JVM path would emit for the same keyword (this compiler's own
-     ;; reproducible-build gates require byte-for-byte identical output).
-     (let [bs (js/TextEncoder.)
-           bytes (.encode bs s)
-           offset-basis (js/BigInt "-3750763034362895579")
-           prime (js/BigInt "1099511628211")]
-       (reduce (fn [h b]
-                 (i64/wrap-i64 (* (i64/wrap-i64 (bit-xor h (js/BigInt b))) prime)))
-               offset-basis (js/Array.from bytes)))))
-
-(defn- keyword->i64 [kw] (fnv1a-i64 (str kw)))
-
 (defn- desugar-map
-  "`{:k1 v1 :k2 v2 ...}` -> a cons-list of `(pair key value)` pairs, reusing
-  the EXISTING heap-pair/list primitives (`pair`/`pair-first`/`pair-second`)
-  entirely -- no backend/codegen change (ADR-2607150000). Entries are
-  sorted by the SOURCE TEXT of their key (`pr-str`, not the interned i64,
-  which isn't computable for non-literal keys) for deterministic codegen
-  regardless of Clojure's own map-literal iteration order (unspecified for
-  >8 entries) -- required by this compiler's reproducible-build gates."
+  "Lower a bounded literal into the owned typed-map KIR operation. Keys are
+  canonical keywords only; values are checked i64 expressions. Sorting by
+  canonical keyword text makes KIR reproducible without hashing identity."
   [form]
   (when (> (count form) max-list-items)
     (reject! "map entry count exceeds admission limit" form))
-  ;; #?(:cljs ...): a plain `pr-str` on a `bigint` key prints as
-  ;; "#object[BigInt 5]" (confirmed live), not "5" like the JVM path's Long
-  ;; -- diverging sort order between an integer key and e.g. a keyword key
-  ;; in the same map literal. `.toString()` on bigint gives the identical
-  ;; plain-digit form Long's own `pr-str` produces, so entries sort
-  ;; byte-identically to the JVM path regardless of key type mix.
-  (let [entries (sort-by (fn [[k _]]
-                            #?(:clj (pr-str k)
-                               :cljs (if (i64/bigint-value? k) (.toString k) (pr-str k))))
-                          (seq form))
-        pairs (map (fn [[k v]] (list 'pair (desugar-expr k) (desugar-expr v))) entries)]
-    (reduce (fn [tail item] (list 'pair item tail)) 0 (reverse pairs))))
+  (when-not (every? keyword? (keys form))
+    (reject! "map keys must be bounded keywords" form))
+  (apply list 'map-new
+         (mapcat (fn [[k v]] [k (desugar-expr v)])
+                 (sort-by (comp str key) form))))
 
 (def ^:private map-get-helper-name '__kotoba_map_get)
 
@@ -517,7 +474,7 @@
               ;; "operation has no admitted lowering") and a raw keyword key
               ;; (unrepresentable at runtime) were caught live before this
               ;; fix.
-              (map (fn [k] [k (list map-get-helper-name tmp (keyword->i64 (keyword k)) 0)]) keys-vec))))
+              (map (fn [k] [k (list 'map-get tmp (keyword k) 0)]) keys-vec))))
 
     :else (reject! "unsupported destructuring pattern" pattern)))
 
@@ -564,7 +521,7 @@
 
 (defn- desugar-expr [form]
   (cond
-    (keyword? form) (keyword->i64 form)
+    (keyword? form) form
     (map? form) (desugar-map form)
     ;; ADR-2607150000: vector-as-data reuses desugar-list's pair-chain
     ;; encoding verbatim -- a vector and a `(list ...)` call become
@@ -697,30 +654,14 @@
         get (do (when-not (<= 2 (count args) 3)
                   (reject! "get requires a map, a key, and an optional default" form))
                 (let [[m k default] args]
-                  (list map-get-helper-name (desugar-expr m) (desugar-expr k)
+                  (list 'map-get (desugar-expr m) (desugar-expr k)
                         (if (some? default) (desugar-expr default) 0))))
         assoc (do (when-not (and (>= (count args) 3) (odd? (count args)))
                     (reject! "assoc requires a map followed by one or more key/value pairs" form))
                   (let [[m & kvs] args]
-                    (reduce (fn [acc-map [k v]]
-                              ;; ADR-2607150000: remove any existing entry
-                              ;; for this key via __kotoba_map_without
-                              ;; BEFORE prepending the new pair, so re-
-                              ;; assoc-ing an existing key doesn't grow the
-                              ;; map unboundedly. k/v are let-bound once
-                              ;; (gensym'd LET-LOCAL temp names -- safe,
-                              ;; erased to WASM local indices, same
-                              ;; reasoning as and/or's temps) so the key
-                              ;; expression is evaluated exactly once
-                              ;; despite being referenced twice (removal
-                              ;; scan + the new pair itself).
-                              (let [k-sym (gensym "assoc-k__")
-                                    v-sym (gensym "assoc-v__")]
-                                (list 'let [k-sym (desugar-expr k) v-sym (desugar-expr v)]
-                                      (list 'pair (list 'pair k-sym v-sym)
-                                            (list map-without-helper-name acc-map k-sym)))))
-                            (desugar-expr m)
-                            (partition 2 kvs))))
+                    (apply list 'map-assoc (desugar-expr m)
+                           (mapcat (fn [[k v]] [(desugar-expr k) (desugar-expr v)])
+                                   (partition 2 kvs)))))
         ;; ADR-2607182410: `(cap-call :some/name value)` -> `(cap-call <int>
         ;; (desugar-expr value))`, resolving the keyword against
         ;; capability-registry BEFORE validate-expr/direct-facts ever see the
@@ -784,6 +725,12 @@
       form
       (catch #?(:clj Exception :cljs :default) error
         (reject! (ex-message error) form)))
+    (keyword? form)
+    (try
+      (value/bounded-keyword! form value/keyword-value-byte-limit)
+      form
+      (catch #?(:clj Exception :cljs :default) error
+        (reject! (ex-message error) form)))
     (symbol? form) (if (contains? locals form) form
                        (reject! "unbound or dynamic symbol is forbidden" form))
     (seq? form)
@@ -832,6 +779,16 @@
               (reject! "string operation arity mismatch" form))
             (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
 
+        (contains? typed-map-operations op)
+        (do (case op
+              map-new (when (odd? (count args))
+                        (reject! "map-new requires keyword/value pairs" form))
+              map-get (when-not (= 3 (count args))
+                        (reject! "map-get requires map, keyword, and default" form))
+              map-assoc (when-not (and (>= (count args) 3) (odd? (count args)))
+                          (reject! "map-assoc requires map and keyword/value pairs" form)))
+            (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
         (contains? kernel-memory-operations op)
         (do (when-not (= (get kernel-memory-operations op) (count args))
               (reject! "kernel memory operation arity mismatch" form))
@@ -868,7 +825,14 @@
             (require-expression-type! type :i64 arg))
           :i64)
 
-      (contains? comparisons op)
+      (= op '=)
+      (do (when-not (= (first types) (second types))
+            (reject! "equality operands must have the same value type" args))
+          (when-not (contains? #{:i64 :keyword} (first types))
+            (reject! "equality type is outside the safe value profile" args))
+          :i64)
+
+      (contains? (disj comparisons '=) op)
       (do (doseq [[arg type] (map vector args types)]
             (require-expression-type! type :i64 arg))
           :i64)
@@ -900,6 +864,31 @@
             (require-expression-type! type :string arg))
           :string)
 
+      (= op 'map-new)
+      (do (doseq [[key-form value-form key-type value-type]
+                  (map (fn [[key-form value-form] [key-type value-type]]
+                         [key-form value-form key-type value-type])
+                       (partition 2 args) (partition 2 types))]
+            (require-expression-type! key-type :keyword key-form)
+            (require-expression-type! value-type :i64 value-form))
+          :map)
+
+      (= op 'map-get)
+      (do (require-expression-type! (nth types 0) :map (nth args 0))
+          (require-expression-type! (nth types 1) :keyword (nth args 1))
+          (require-expression-type! (nth types 2) :i64 (nth args 2))
+          :i64)
+
+      (= op 'map-assoc)
+      (do (require-expression-type! (first types) :map (first args))
+          (doseq [[key-form value-form key-type value-type]
+                  (map (fn [[key-form value-form] [key-type value-type]]
+                         [key-form value-form key-type value-type])
+                       (partition 2 (rest args)) (partition 2 (rest types)))]
+            (require-expression-type! key-type :keyword key-form)
+            (require-expression-type! value-type :i64 value-form))
+          :map)
+
       (contains? signatures op)
       (let [{expected :param-types result :result} (get signatures op)]
         (doseq [[arg actual wanted] (map vector args types expected)]
@@ -912,6 +901,7 @@
   (cond
     (kotoba-integer? form) :i64
     (string? form) :string
+    (keyword? form) :keyword
     (symbol? form) (or (get locals form)
                        (reject! "unbound symbol has no value type" form))
     (seq? form)
@@ -943,13 +933,19 @@
     (doseq [{:keys [name params param-types result body]} functions]
       (let [actual (infer-expression-type body (zipmap params param-types) signatures)]
         (require-expression-type! actual result name)))
-    (let [literal-bytes
+    (let [nodes (mapcat #(tree-seq coll? seq (:body %)) functions)
+          literal-bytes
           (reduce + 0
                   (map value/utf8-byte-count!
-                       (filter string?
-                               (mapcat #(tree-seq coll? seq (:body %)) functions))))]
+                       (filter string? nodes)))
+          keyword-bytes
+          (reduce + 0
+                  (map (comp value/utf8-byte-count! str)
+                       (filter keyword? nodes)))]
       (when (> literal-bytes value/string-value-byte-limit)
-        (reject! "module string literals exceed UTF-8 byte limit" literal-bytes)))))
+        (reject! "module string literals exceed UTF-8 byte limit" literal-bytes))
+      (when (> keyword-bytes value/string-value-byte-limit)
+        (reject! "module keyword literals exceed UTF-8 byte limit" keyword-bytes)))))
 
 (defn- direct-facts [form function-names]
   (let [effects (volatile! #{}) calls (volatile! #{})]
@@ -989,6 +985,7 @@
   (cond
     (kotoba-integer? form) 1
     (string? form) 1
+    (keyword? form) 1
     (symbol? form) (get env form 1)
     :else
     (let [[op & args] form]
@@ -1073,8 +1070,9 @@
       (mapv (fn [[pattern type]]
               (when-not (contains? value-types type)
                 (reject! "parameter type is outside the safe value profile" type))
-              (when (and (= type :string) (not (symbol? pattern)))
-                (reject! "string parameters require plain-symbol bindings" pattern))
+              (when (and (contains? #{:string :keyword :map} type)
+                         (not (or (symbol? pattern) (and (= type :map) (map? pattern)))))
+                (reject! "typed values require plain-symbol bindings" pattern))
               {:pattern pattern :type type})
             (partition 2 raw-params)))
     (mapv (fn [pattern] {:pattern pattern :type :i64}) raw-params)))
@@ -1286,9 +1284,11 @@
     (check-lowering-budget! parsed)
     (let [typed-values? (boolean
                          (some (fn [{:keys [param-types result body]}]
-                                 (or (some #{:string} param-types)
-                                     (= :string result)
-                                     (some string? (tree-seq coll? seq body))))
+                                 (or (some #{:string :keyword :map} param-types)
+                                     (contains? #{:string :keyword :map} result)
+                                     (some #(or (string? %) (keyword? %)
+                                                (and (seq? %) (contains? typed-map-operations (first %))))
+                                           (tree-seq coll? seq body))))
                                parsed))
           function-effects (infer-effects parsed)
           functions (mapv (fn [function]

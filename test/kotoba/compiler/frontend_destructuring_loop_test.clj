@@ -13,10 +13,12 @@
   global counter)."
   (:require [clojure.test :refer [deftest is testing]]
             [kotoba.compiler.core :as compiler]
-            [kotoba.compiler.frontend :as frontend]))
+            [kotoba.compiler.frontend :as frontend]
+            [kotoba.compiler.ir :as ir]))
 
 (defn- oracle [source]
-  (:oracle-value (:kir (compiler/compile-source source :wasm32-kotoba-v1))))
+  (let [kir (ir/lower (:hir (compiler/check-source source)))]
+    (ir/execute kir 'main [])))
 
 (defn- rejection-message [source]
   (try (compiler/check-source source) nil
@@ -84,12 +86,9 @@
   (is (some? (rejection-message "(defn main [] (let [{:keys [a] :or {a 1}} {}] a))"))
       "map destructuring supports only {:keys [...]}, no :or/:as/:strs"))
 
-(deftest map-destructuring-does-not-recursively-destructure-nested-values
-  ;; One level only: {:keys [a]} on {:a {:b 1}} binds `a` to the whole inner
-  ;; map value (not itself destructured) -- a real, documented scope limit,
-  ;; not silently ignored. `a` here is just an ordinary map value one more
-  ;; `get` away from `:b`.
-  (is (= 1 (oracle "(defn main [] (let [{:keys [a]} {:a {:b 1}}] (get a :b)))"))))
+(deftest first-map-profile-rejects-nested-map-values
+  (is (= "expression type mismatch: expected i64, got map"
+         (rejection-message "(defn main [] (let [{:keys [a]} {:a {:b 1}}] (get a :b)))"))))
 
 ;; ───────────────────────── destructuring: defn params ─────────────────────────
 
@@ -97,7 +96,7 @@
   (is (= 15 (oracle "(ns t) (defn addpair [[a b]] (+ a b)) (defn main [] (addpair [7 8]))"))))
 
 (deftest defn-params-support-map-destructuring
-  (is (= 7 (oracle "(ns t) (defn addkv [{:keys [a b]}] (+ a b)) (defn main [] (addkv {:a 3 :b 4}))"))))
+  (is (= 7 (oracle "(ns t) (defn addkv [{:keys [a b]} :map] (+ a b)) (defn main [] (addkv {:a 3 :b 4}))"))))
 
 (deftest defn-params-mix-plain-symbols-and-destructuring-patterns
   (is (= 16 (oracle "(ns t) (defn f [x [a b]] (+ x (+ a b))) (defn main [] (f 10 [3 3]))"))))
@@ -178,21 +177,5 @@
     (is (= 1 (count (set (map :kir results)))))
     (is (= 10 (:oracle-value (:kir (first results)))))))
 
-(deftest destructuring-produces-consistent-oracle-values-across-all-backends
-  ;; Destructuring's gensym'd let-local temp names (`destr-map__NNN`) are a
-  ;; JVM-process-global counter, NOT reset per `analyze` call -- so calling
-  ;; `analyze` 3 times in a row (once per target/backend) yields the SAME
-  ;; desugared SHAPE but with DIFFERENT literal gensym symbol names baked
-  ;; into the raw :kir data each time. This is harmless for actual compiled
-  ;; behavior (these are LET-LOCAL variables, erased to WASM local indices
-  ;; by codegen -- see the `loop`-only test above and the byte-identity
-  ;; reproducibility tests, neither of which use gensym), but it does mean
-  ;; :kir data equality is NOT expected to hold across separate `analyze`
-  ;; calls when destructuring is involved -- confirmed live (3 distinct
-  ;; :kir values for the same source across the 3 backends). So this test
-  ;; checks the actual invariant that matters: the computed VALUE is
-  ;; consistent across every backend, not raw :kir data identity.
-  (let [source "(defn main [] (let [{:keys [a b]} {:a 1 :b 2}] (+ a b)))"
-        results (map #(compiler/compile-source source %) compiler/targets)]
-    (is (= 1 (count (set (map #(:oracle-value (:kir %)) results)))))
-    (is (= 3 (:oracle-value (:kir (first results)))))))
+(deftest typed-map-destructuring-agrees-with-reference-execution
+  (is (= 3 (oracle "(defn main [] (let [{:keys [a b]} {:a 1 :b 2}] (+ a b)))"))))

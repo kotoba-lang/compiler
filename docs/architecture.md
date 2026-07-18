@@ -296,13 +296,15 @@ targets reject an entryless module. This target gate prevents a library-shaped
 source unit from silently acquiring different execution semantics across
 native, Wasm, or ClojureScript backends.
 
-Typed string source advances HIR to `kotoba.hir/v3` and KIR to
+Typed string, keyword, or bounded-map source advances HIR to `kotoba.hir/v3` and KIR to
 `kotoba.kir/v4`. Function `:param-types` and `:result` are checked before
 lowering and checked again by kotoba-script; the artifact seals the
 `kotoba.value/typed-v1` profile and its 4 KiB literal / 64 KiB module and value
-limits. Only the restricted JavaScript target currently admits that profile.
+limits, plus 512-byte keywords and maps of at most 128 unique keyword-to-i64
+entries. Only the restricted JavaScript target currently admits that profile.
 Other targets fail at target selection, before backend emission, rather than
-type-erasing strings into i64 hashes or pointers with unspecified ownership.
+type-erasing strings, keywords, or maps into i64 hashes or pointers with
+unspecified ownership.
 
 Policy is deny-by-default: `{:allow #{...}}`. Admission reports missing effects,
 the exact minimal policy, and unused grants. This stage deliberately separates

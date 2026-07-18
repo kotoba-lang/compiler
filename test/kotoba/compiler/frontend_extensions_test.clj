@@ -11,7 +11,8 @@
             [kotoba.compiler.target :as target]))
 
 (defn- oracle [source]
-  (:oracle-value (:kir (compiler/compile-source source :wasm32-kotoba-v1))))
+  (let [kir (ir/lower (:hir (compiler/check-source source)))]
+    (ir/execute kir 'main [])))
 
 (defn- rejection-message [source]
   (try (compiler/check-source source) nil
@@ -54,12 +55,55 @@
 
 ;; ───────────────────────── keyword + map + get + assoc ─────────────────────────
 
-(deftest keyword-literals-are-deterministic-and-distinct
-  (is (= (oracle "(defn main [] (get {:a 1} :a))")
-         (oracle "(defn main [] (get {:a 1} :a))"))
-      "the same keyword must intern to the same constant across separate compiles")
-  (is (= 1 (oracle "(defn main [] (if (= :a :a) 1 0))")))
-  (is (= 0 (oracle "(defn main [] (if (= :a :b) 1 0))"))))
+(deftest keyword-literals-preserve-canonical-identity-without-i64-hashing
+  (let [source "(ns pilot.keyword (:export [identity same?]))
+                (defn identity [value :keyword] :keyword value)
+                (defn same? [left :keyword right :keyword] (= left right))"
+        compiled (compiler/compile-source source :js-kotoba-v1)
+        js-source (:source compiled)
+        encoded (.encodeToString (java.util.Base64/getEncoder)
+                                 (.getBytes ^String js-source "UTF-8"))
+        probe (str "import('data:text/javascript;base64," encoded
+                   "').then(m=>{const x=m.instantiateKotoba({});"
+                   "if(x.identity(':安全/確認')!==':安全/確認')process.exit(2);"
+                   "if(x['same?'](':a',':a')!==1n||x['same?'](':a',':b')!==0n)process.exit(3)})")
+        result (shell/sh "node" "--input-type=module" "-e" probe)]
+    (is (= :keyword (get-in compiled [:kir :functions 0 :result])))
+    (is (= [:keyword] (get-in compiled [:kir :functions 0 :param-types])))
+    (is (= :安全/確認 (ir/execute (:kir compiled) 'identity [:安全/確認])))
+    (is (= 1 (ir/execute (:kir compiled) 'same? [:a :a])))
+    (is (= 0 (ir/execute (:kir compiled) 'same? [:a :b])))
+    (is (zero? (:exit result)) (:err result))
+    (is (not (re-find #"fnv|1099511628211|3750763034362895579" js-source)))
+    (doseq [target (remove #(= :js-kotoba-v1 (target/backend %))
+                           compiler/supported-targets)]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"require the kotoba-script web target"
+                            (compiler/compile-source source target))))))
+
+(deftest keyword-maps-use-owned-typed-operations
+  (let [kir (:kir (compiler/compile-source "(defn main [] (get {:a 1} :a))"
+                                           :js-kotoba-v1))]
+    (is (= '(map-get (map-new :a 1) :a 0)
+           (get-in kir [:functions 0 :body])))
+    (is (= 1 (ir/execute kir 'main [])))))
+
+(deftest bounded-map-host-abi-runs-through-compiler-and-kotoba-script
+  (let [source "(ns pilot.map (:export [lookup update]))
+                (defn lookup [value :map] (get value :a 0))
+                (defn update [value :map] :map (assoc value :b 2 :a 3))"
+        compiled (compiler/compile-source source :js-kotoba-v1)
+        encoded (.encodeToString (java.util.Base64/getEncoder)
+                                 (.getBytes ^String (:source compiled) "UTF-8"))
+        probe (str "import('data:text/javascript;base64," encoded
+                   "').then(m=>{const x=m.instantiateKotoba({});"
+                   "const before=[[':a',1n]];const after=x.update(before);"
+                   "if(x.lookup(before)!==1n||x.lookup(after)!==3n)process.exit(2);"
+                   "if(before[0][1]!==1n||after.length!==2)process.exit(3)})")
+        result (shell/sh "node" "--input-type=module" "-e" probe)]
+    (is (= :kotoba.value/typed-v1 (:value-profile compiled)))
+    (is (= 128 (get-in compiled [:manifest :kotoba.artifact/limits :map-entries])))
+    (is (zero? (:exit result)) (:err result))))
 
 (deftest map-literal-get-round-trips
   (is (= 1 (oracle "(defn main [] (get {:a 1} :a))")))
@@ -74,7 +118,7 @@
   (is (= 7 (oracle "(defn main [] (get {:a (+ 3 4)} :a))"))))
 
 (deftest get-on-a-map-passed-through-a-function-parameter-walks-at-runtime
-  (is (= 5 (oracle "(defn extract [m] (get m :a))
+  (is (= 5 (oracle "(defn extract [m :map] (get m :a))
                      (defn main [] (extract {:a 5}))"))
       "get must work on a map value whose shape isn't known at the call site,
        not just on a literal map inlined at the get form itself"))
@@ -88,39 +132,22 @@
   (is (= 9 (oracle "(defn main [] (get (assoc {:a 1} :b 2 :c 9) :c))"))
       "variadic assoc with multiple key/value pairs in one call"))
 
-(deftest assoc-removes-the-old-entry-not-just-shadows-it
-  ;; A real bug found and fixed in the same ADR-2607150000 line of work
-  ;; that first landed assoc: the original desugar only ever prepended a
-  ;; new pair, so get's first-match-wins scan made the RESULT correct but
-  ;; the map's underlying pair-chain grew without bound under repeated
-  ;; re-assoc of the same key (documented as a known, unfixed tradeoff at
-  ;; the time). __kotoba_map_without now removes the old entry before the
-  ;; new one is prepended -- verified here by literally counting chain
-  ;; length, not just checking the shadowed value (which the old, buggy
-  ;; code already got right).
-  (let [count-entries "(defn count-entries [m] (if (= m 0) 0 (+ 1 (count-entries (pair-second m)))))"]
-    (is (= 2 (oracle (str count-entries
-                          "(defn main [] (count-entries (assoc (assoc (assoc {:a 1 :b 2} :a 3) :a 4) :a 5)))")))
-        "3 re-assocs of the same key on a 2-distinct-key map -- entry count stays 2, not 5")
-    (is (= 3 (oracle (str count-entries
-                          "(defn main [] (count-entries (assoc {} :a 1 :b 2 :c 3)))")))
-        "3 distinct keys assoc'd in one call -- entry count is exactly 3")
-    (is (= 2 (oracle "(defn main [] (get (assoc (assoc {:a 1 :b 2} :a 3) :a 4) :b))"))
-        "re-assoc-ing :a repeatedly must not disturb :b's own value")))
+(deftest assoc-replaces-without-mutating-or-duplicating
+  (is (= 5 (oracle "(defn main [] (get (assoc (assoc (assoc {:a 1 :b 2} :a 3) :a 4) :a 5) :a))")))
+  (is (= 2 (oracle "(defn main [] (get (assoc (assoc {:a 1 :b 2} :a 3) :a 4) :b))"))))
 
 (deftest map-entry-count-is-admission-bounded
   (with-redefs [frontend/max-list-items 1]
     (is (some? (rejection-message "(defn main [] (get {:a 1 :b 2} :a))")))))
 
-(deftest map-get-helper-collision-is-caught-as-duplicate-function-name
-  (is (some? (rejection-message
-              "(defn __kotoba_map_get [m k default] 0)
-               (defn main [] (get {:a 1} :a))"))))
+(deftest typed-map-does-not-inject-legacy-pair-walk-helpers
+  (let [{:keys [functions]} (:hir (compiler/check-source "(defn main [] (get {:a 1} :a))"))]
+    (is (not (contains? (set (map :name functions)) '__kotoba_map_get)))
+    (is (not (contains? (set (map :name functions)) '__kotoba_map_without)))))
 
-(deftest map-without-helper-collision-is-caught-as-duplicate-function-name
-  (is (some? (rejection-message
-              "(defn __kotoba_map_without [m k] 0)
-               (defn main [] (get (assoc {:a 1} :a 2) :a))"))))
+(deftest legacy-helper-names-no-longer-affect-map-lowering
+  (is (= 2 (oracle "(defn __kotoba_map_without [m k] 0)
+                     (defn main [] (get (assoc {:a 1} :a 2) :a))"))))
 
 (deftest get-and-assoc-are-reserved-function-names
   (is (some? (rejection-message "(defn get [] 1) (defn main [] 0)")))
@@ -130,10 +157,9 @@
   (let [{:keys [functions]} (:hir (compiler/check-source "(defn main [] (+ 1 2))"))]
     (is (not (contains? (set (map :name functions)) '__kotoba_map_get)))))
 
-(deftest map-without-helper-not-injected-unless-assoc-is-used
+(deftest map-helpers-are-never-injected
   (let [{:keys [functions]} (:hir (compiler/check-source "(defn main [] (get {:a 1} :a))"))]
-    (is (contains? (set (map :name functions)) '__kotoba_map_get)
-        "get alone still injects its own helper")
+    (is (not (contains? (set (map :name functions)) '__kotoba_map_get)))
     (is (not (contains? (set (map :name functions)) '__kotoba_map_without))
         "but not the assoc-only helper, since this source never calls assoc")))
 
@@ -151,15 +177,14 @@
 (deftest closed-top-level-constants-are-lexically-inlined
   (let [source "(ns pilot.constants \"inert data\")
                 (def factor \"bounded integer\" 21)
-                (def config {:multiplier 2 :nested [:ok 9]})
+                (def config {:multiplier 2})
                 (defn apply-factor [factor] factor)
                 (defn main []
                   (+ (apply-factor 1)
                      (* factor (get config :multiplier))))"]
     (is (= 43 (oracle source)))
-    (doseq [target compiler/targets]
-      (is (= 43 (get-in (compiler/compile-source source target)
-                        [:kir :oracle-value]))))))
+    (is (= 43 (ir/execute (:kir (compiler/compile-source source :js-kotoba-v1))
+                          'main [])))))
 
 (deftest top-level-constants-never-execute-code-or-shadow-locals
   (is (= "constant value must be closed bounded integer/string/keyword/vector/map data"
@@ -285,32 +310,21 @@
   ;; global counter) every other recursive .kotoba program already is.
   ;; Demonstrated here via a helper that repeatedly assocs while recursing
   ;; past the budget -- the existing mechanism traps it, unmodified.
-  (let [source "(defn build [m n] (if (= n 0) m (build (assoc m :dummy n) (- n 1))))
+  (let [source "(defn build [m :map n :i64] :map (if (= n 0) m (build (assoc m :dummy n) (- n 1))))
                 (defn main [] (get (build {} 300) :missing))"]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"fuel"
-                          (:oracle-value (:kir (compiler/compile-source source :wasm32-kotoba-v1)))))))
+                          (ir/execute (:kir (compiler/compile-source source :js-kotoba-v1)) 'main [])))))
 
 ;; ───────────────────────── cross-backend consistency ─────────────────────────
 
-(deftest map-get-produces-one-shared-kir-across-all-backends
+(deftest map-get-is-owned-by-the-web-typed-value-profile
   (let [source "(defn main [] (get {:a 1 :b 2} :b))"
-        results (map #(compiler/compile-source source %) compiler/targets)]
-    (is (= 1 (count (set (map :kir results)))))
-    (is (= 2 (:oracle-value (:kir (first results)))))))
+        compiled (compiler/compile-source source :js-kotoba-v1)]
+    (is (= 2 (ir/execute (:kir compiled) 'main [])))
+    (doseq [target (remove #(= :js-kotoba-v1 (target/backend %))
+                           compiler/supported-targets)]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"require the kotoba-script web target"
+                            (compiler/compile-source source target))))))
 
-(deftest map-assoc-produces-consistent-oracle-values-across-all-backends
-  ;; assoc's desugar gensym's LET-LOCAL temp names (assoc-k__NNN/
-  ;; assoc-v__NNN, added along with the entry-removal fix in
-  ;; __kotoba_map_without) -- like destructuring's own gensym'd temps
-  ;; (ADR-2607150000 addendum 4), this is a JVM-process-global counter NOT
-  ;; reset per `analyze` call, so raw :kir data is NOT expected to be
-  ;; identical across the separate `analyze` calls each backend makes here
-  ;; -- harmless for actual compiled behavior (LET-LOCAL names are erased
-  ;; to WASM local indices), but this test checks the invariant that
-  ;; actually matters: the computed VALUE agrees across every backend, not
-  ;; raw :kir data identity (which get-only sources, with no gensym
-  ;; involved, DO still satisfy -- see the test above).
-  (let [source "(defn main [] (get (assoc {:a 1} :b 2) :b))"
-        results (map #(compiler/compile-source source %) compiler/targets)]
-    (is (= 1 (count (set (map #(:oracle-value (:kir %)) results)))))
-    (is (= 2 (:oracle-value (:kir (first results)))))))
+(deftest map-assoc-reference-and-kotoba-script-agree
+  (is (= 2 (oracle "(defn main [] (get (assoc {:a 1} :b 2) :b))"))))

@@ -75,7 +75,9 @@
             limits (cond-> {:fuel 256 :replenishable? false}
                      typed-values? (assoc :string-literal-bytes 4096
                                           :string-module-literal-bytes 65536
-                                          :string-value-bytes 65536))
+                                          :string-value-bytes 65536
+                                          :keyword-value-bytes 512
+                                          :map-entries 128))
             js-source (script/emit kir (merge {:source-digest source-digest
                                                :kir-digest kir-digest
                                                :compiler-version compiler-version}
