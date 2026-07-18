@@ -1,8 +1,10 @@
 (ns kotoba.compiler.backend.wasm
   ;; See `kotoba.compiler.ir`'s ns form for why the whole `:require` clause
   ;; (not just an item inside it) is behind the reader-conditional.
-  #?(:clj (:require [kotoba.compiler.backend.wasm-typed :as typed])
+  #?(:clj (:require [kotoba.compiler.backend.wasm-typed :as typed]
+                    [kotoba.compiler.compatibility :as compatibility])
      :cljs (:require [kotoba.compiler.backend.wasm-typed :as typed]
+                     [kotoba.compiler.compatibility :as compatibility]
                      [kotoba.compiler.cljs-i64 :as i64])))
 
 ;; `uleb` only ever encodes small, non-negative, interpreter-internal counts
@@ -45,6 +47,29 @@
   #?(:clj (mapv #(bit-and (int %) 0xff) (.getBytes ^String s "UTF-8"))
      :cljs (vec (js/Array.from (.encode (js/TextEncoder.) s)))))
 (defn- name-bytes [s] (let [bs (utf8 s)] (into (uleb (count bs)) bs)))
+
+(def compatibility-section-name "kotoba.compatibility")
+
+(defn- wasm-runtime [target]
+  (case target
+    :wasm32-browser-kotoba-v1 :kotoba-browser-host-v1
+    :wasm32-wasi-kotoba-v1 :kotoba-wasi-host-v1
+    :kotoba-capability-host-v1))
+
+(defn- identity-text [value]
+  (if-let [ns (namespace value)] (str ns "/" (name value)) (name value)))
+
+(defn- compatibility-bytes [kir target]
+  (let [fields [compatibility/compiler-version
+                (identity-text compatibility/language-version)
+                (identity-text (:format kir))
+                (identity-text target)
+                (identity-text (wasm-runtime target))
+                (identity-text (if (= :kotoba.kir/v4 (:format kir))
+                        :kotoba.typed/externref-v1 :kotoba.i64/direct-v1))
+                (identity-text compatibility/tender-role)
+                (identity-text :kotoba.capability-host/v1)]]
+    (vec (concat [1] (mapcat name-bytes fields)))))
 
 (defn- local-count [form]
   (if-not (seq? form)
@@ -481,8 +506,11 @@
                            (utf8 (name target)))
         typed-sec (when (= :kotoba.kir/v4 (:format kir))
                     (concat (name-bytes typed/custom-section-name)
-                            (typed/metadata-bytes kir)))]
+                            (typed/metadata-bytes kir)))
+        compatibility-sec (concat (name-bytes compatibility-section-name)
+                                  (compatibility-bytes kir target))]
     (let [bytes (concat [0 0x61 0x73 0x6d 1 0 0 0] (section 0 target-sec)
+                        (section 0 compatibility-sec)
                         (when typed-sec (section 0 typed-sec))
                         (section 1 types) (when (seq imports) (section 2 import-sec))
                         (section 3 function-sec) (section 6 global-sec)

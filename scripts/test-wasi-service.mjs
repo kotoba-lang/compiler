@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { withCompatibility } from "./compatibility-fixture.mjs";
 
 const [structuredPath, capabilityPath] = process.argv.slice(2);
 const servicePath = fileURLToPath(new URL("../runtime/wasi-service.mjs", import.meta.url));
@@ -91,14 +92,14 @@ const name = value => [...uleb(utf8(value).length), ...utf8(value)];
 const section = (id, value) => [id, ...uleb(value.length), ...value];
 const custom = [...name("kotoba.target"), ...utf8("wasm32-wasi-kotoba-v1")];
 const hostilePath = path.join(path.dirname(capabilityPath), "hostile-loop.wasm");
-fs.writeFileSync(hostilePath, Uint8Array.from([
+fs.writeFileSync(hostilePath, withCompatibility(Uint8Array.from([
   0, 0x61, 0x73, 0x6d, 1, 0, 0, 0,
   ...section(0, custom),
   ...section(1, [1, 0x60, 0, 1, 0x7e]),
   ...section(3, [1, 0]),
   ...section(7, [1, ...name("main"), 0, 0]),
   ...section(10, [1, 9, 0, 0x03, 0x40, 0x0c, 0, 0x0b, 0x42, 0, 0x0b])
-]));
+]), { target: "wasm32-wasi-kotoba-v1", runtime: "kotoba-wasi-host-v1" }));
 await withService(hostilePath, 18083, async health => {
   const started = Date.now();
   const cancelled = await post(18083, request("main"));

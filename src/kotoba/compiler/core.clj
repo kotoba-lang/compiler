@@ -1,5 +1,6 @@
 (ns kotoba.compiler.core
   (:require [kotoba.compiler.frontend :as frontend]
+            [kotoba.compiler.compatibility :as compatibility]
             [kotoba.compiler.project :as project]
             [kotoba.compiler.ir :as ir]
             [kotoba.compiler.admission :as admission]
@@ -16,7 +17,7 @@
   (:import [java.nio.charset StandardCharsets]
            [java.security MessageDigest]))
 
-(def compiler-version "kotoba-compiler/1")
+(def compiler-version compatibility/compiler-version)
 (def floating-point-policy :kotoba.floating-point/forbidden-v1)
 
 (defn- text-sha256 [text]
@@ -52,12 +53,18 @@
                             {:phase :target :target target :backend backend})))
         admission (admission/check hir policy)
         kir (ir/lower hir)
-        value (:oracle-value kir)]
+        value (:oracle-value kir)
+        typed-values? (= :kotoba.kir/v4 (:format kir))
+        value-abi (if typed-values? :kotoba.typed/externref-v1 :kotoba.i64/direct-v1)
+        compatibility (compatibility/descriptor
+                       {:hir-format (:format hir) :kir-format (:format kir)
+                        :target target :target-profile profile :value-abi value-abi})]
     (cond
       (= backend :wasm32-kotoba-v1)
       (let [typed-values? (= :kotoba.kir/v4 (:format kir))]
         {:format :wasm/v1 :target target :target-profile profile
          :hir hir :kir kir :admission admission
+         :compatibility compatibility
          :floating-point-policy floating-point-policy
          :value-profile (if typed-values? :kotoba.value/typed-v1 :kotoba.value/i64-v1)
          :value-abi (if typed-values? :kotoba.typed/externref-v1 :kotoba.i64/direct-v1)
@@ -78,6 +85,7 @@
       (= backend :cljs-kotoba-v1)
       {:format :cljs/v1 :target target :target-profile profile
        :hir hir :kir kir :admission admission
+       :compatibility compatibility
        :floating-point-policy floating-point-policy
        :limits {:fuel 256 :replenishable? false} :source (cljs/emit kir)}
 
@@ -109,6 +117,7 @@
             output-digest (text-sha256 js-source)]
         {:format :javascript/v1 :target target :target-profile profile
          :hir hir :kir kir :admission admission
+         :compatibility compatibility
          :floating-point-policy floating-point-policy
          :value-profile value-profile :limits limits :source js-source
          :manifest {:kotoba.artifact/schema "kotoba-js-artifact/v1"
@@ -116,6 +125,7 @@
                     :kotoba.artifact/kir-digest kir-digest
                     :kotoba.artifact/output-digest output-digest
                     :kotoba.artifact/compiler-version compiler-version
+                    :kotoba.artifact/compatibility compatibility
                     :kotoba.artifact/floating-point-policy floating-point-policy
                     :kotoba.artifact/value-profile value-profile
                     :kotoba.artifact/limits limits
@@ -142,7 +152,8 @@
                                      :allow-bitmap-bytes 32 :cap-call-offset 48
                                      :pair-new-offset 56 :pair-first-offset 64
                                      :pair-second-offset 72 :pair-capacity 4096}
-                       :effects (:effects hir)
+                      :effects (:effects hir)
+                       :compatibility compatibility
                        :limits {:memory-bytes 65536
                                 :fuel 256
                                 :stack-bytes 4096}
@@ -151,6 +162,7 @@
         (verifier/verify-artifact! artifact)
         (cond-> {:format :kexe/v1 :target target :hir hir :kir kir
                  :admission admission :artifact artifact
+                 :compatibility compatibility
                  :floating-point-policy floating-point-policy}
           (= target :x86_64-aiueos-uefi-v1)
           (assoc :binary (pe32plus/package-efi artifact))

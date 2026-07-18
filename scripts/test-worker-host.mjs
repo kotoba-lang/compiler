@@ -4,14 +4,15 @@ import {
   installKotobaWorker,
   workerProfile
 } from "../runtime/worker-host.mjs";
+import { withCompatibility } from "./compatibility-fixture.mjs";
 
-const main42 = Uint8Array.from([
+const main42 = withCompatibility(Uint8Array.from([
   0,97,115,109,1,0,0,0,
   1,5,1,96,0,1,126,
   3,2,1,0,
   7,8,1,4,109,97,105,110,0,0,
   10,6,1,4,0,66,42,11
-]);
+]));
 const messages = [];
 const target = { postMessage(message) { messages.push(message); } };
 const request = (id, extra = {}) => ({

@@ -5,23 +5,25 @@ import {
   instantiateKotoba,
   normalizeKotobaTrap
 } from "../runtime/browser-host.mjs";
+import { withCompatibility } from "./compatibility-fixture.mjs";
 
-const main42 = Uint8Array.from([
+const rawMain42 = Uint8Array.from([
   0,97,115,109,1,0,0,0,
   1,5,1,96,0,1,126,
   3,2,1,0,
   7,8,1,4,109,97,105,110,0,0,
   10,6,1,4,0,66,42,11
 ]);
+const main42 = withCompatibility(rawMain42);
 
-const typedMain42 = Uint8Array.from([
+const typedMain42 = withCompatibility(Uint8Array.from([
   0,97,115,109,1,0,0,0,
   0,18,12,107,111,116,111,98,97,46,116,121,112,101,100,1,1,4,0,0,
   1,5,1,96,0,1,126,
   3,2,1,0,
   7,8,1,4,109,97,105,110,0,0,
   10,6,1,4,0,66,42,11
-]);
+]), { kir: "kotoba.kir/v4", valueAbi: "kotoba.typed/externref-v1" });
 
 const hosted = await instantiateKotoba(main42);
 assert.equal(hosted.instance.exports.main(), 42n);
@@ -35,6 +37,11 @@ assert.deepEqual(typedHosted.typedAbi, {
   literals: []
 });
 assert.ok(Object.isFrozen(typedHosted.typedAbi));
+
+await assert.rejects(
+  instantiateKotoba(rawMain42),
+  error => error instanceof KotobaHostError && error.code === "missing-compatibility"
+);
 
 const unsupportedTypedMain42 = typedMain42.slice();
 unsupportedTypedMain42[23] = 2;
