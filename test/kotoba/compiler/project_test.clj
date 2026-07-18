@@ -117,3 +117,27 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"dependency edges exceed"
                           (project/link-source (dependency-project 24 true)
                                                'bounds.m23)))))
+
+(deftest capability-effects-close-across-module-boundaries
+  (let [sources
+        {'effects.leaf
+         "(ns effects.leaf (:export [read]))
+          (defn- hidden-audit [value] (cap-call 9 value))
+          (defn read [value] (cap-call 7 value))"
+         'effects.middle
+         "(ns effects.middle (:require [effects.leaf :as leaf]) (:export [forward]))
+          (defn forward [value] (leaf/read value))"
+         'effects.root
+         "(ns effects.root (:require [effects.middle :as middle]) (:export [run]))
+          (defn run [value] (middle/forward value))"}]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"denies required effects"
+                          (compiler/compile-project sources 'effects.root :js-kotoba-v1)))
+    (let [compiled (compiler/compile-project
+                    sources 'effects.root :js-kotoba-v1
+                    {:allow #{[:cap/call 7] [:cap/call 9] [:cap/call 10]}})]
+      (is (= #{[:cap/call 7] [:cap/call 9]}
+             (get-in compiled [:admission :required])))
+      (is (= #{[:cap/call 10]} (get-in compiled [:admission :unused-grants])))
+      (is (= #{[:cap/call 7] [:cap/call 9]} (get-in compiled [:kir :effects])))
+      (is (str/includes? (:source compiled)
+                         "requiredCapabilities:Object.freeze([7,9])")))))
