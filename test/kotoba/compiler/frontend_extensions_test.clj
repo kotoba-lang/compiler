@@ -218,6 +218,35 @@
                            "(defn main [] [:result :i64 :bool] (result-ok-of [:result :i64 :bool] 1))"
                            target)))))
 
+(deftest match-result-is-exhaustive-scoped-typed-and-lazy
+  (let [type [:result :string :i64]
+        source "(ns result.match (:export [ok-len err-code]))
+                (defn ok-len [r [:result :string :i64]]
+                  (match-result r [:result :string :i64]
+                    (ok text (string-byte-length text))
+                    (err code (quot 1 0))))
+                (defn err-code [r [:result :string :i64]]
+                  (match-result r [:result :string :i64]
+                    (ok text (quot 1 0))
+                    (err code code)))"
+        compiled (compiler/compile-source source :js-kotoba-v1)
+        kir (:kir compiled)
+        encoded (.encodeToString (java.util.Base64/getEncoder)
+                                 (.getBytes ^String (:source compiled) "UTF-8"))
+        probe (str "import('data:text/javascript;base64," encoded
+                   "').then(m=>{const x=m.instantiateKotoba({});"
+                   "if(x['ok-len']([true,'安全'])!==6n||x['err-code']([false,17n])!==17n)process.exit(2)})")
+        node-result (shell/sh "node" "--input-type=module" "-e" probe)]
+    (is (= 6 (ir/execute kir 'ok-len [[true "安全"]])))
+    (is (= 17 (ir/execute kir 'err-code [[false 17]])))
+    (is (zero? (:exit node-result)) (:err node-result))
+    (is (str/includes? (:source compiled) "const parametricResultMatch="))
+    (is (= type (get-in kir [:functions 0 :param-types 0]))))
+  (doseq [source ["(defn bad [r [:result :i64 :bool]] (match-result r [:result :i64 :bool] (ok x x)))"
+                  "(defn bad [r [:result :i64 :bool]] (match-result r [:result :i64 :bool] (err e 1) (ok x x)))"
+                  "(defn bad [r [:result :i64 :bool]] (match-result r [:result :i64 :bool] (ok x x) (err e false)))"]]
+    (is (some? (rejection-message source)))))
+
 (deftest bounded-map-host-abi-runs-through-compiler-and-kotoba-script
   (let [source "(ns pilot.map (:export [lookup update]))
                 (defn lookup [value :map] (get value :a 0))

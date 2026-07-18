@@ -312,6 +312,10 @@ The parametric extension represents a result type canonically as
 `[:result ok-type err-type]`. Type trees and runtime payload validation share
 fixed depth-8/node-64 limits; every generic constructor and projection embeds
 the descriptor in KIR, and the reference/Web runtimes validate it identically.
+Result elimination is owned by the exhaustive `match-result` form: source
+requires one canonical ok branch and one canonical err branch, KIR preserves
+their typed binders, and both reference and Web evaluate only the selected
+branch after validating the tagged value.
 The first sequential collection profile is an explicitly constructed,
 128-item `vector<i64>` with signed-i64 element checks, frozen Web host values,
 lazy out-of-range lookup fallback, and persistent assoc/conj updates.
