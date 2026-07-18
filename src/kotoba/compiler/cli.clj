@@ -302,7 +302,10 @@
                     output (byte-array (map unchecked-byte (:bytes packaged))))
                    (atomic-output/write-edn! output (:artifact result)))
         (atomic-output/write-edn! output (:artifact result)))
-      (println (pr-str {:ok true :target target :output output})))
+      (let [provenance-output (str output ".provenance.edn")]
+        (atomic-output/write-edn! provenance-output (:provenance result))
+        (println (pr-str {:ok true :target target :output output
+                          :provenance-output provenance-output}))))
     "package-ios"
     (let [input (bounded-edn/read-file (second args))
           entry (symbol (or (option args "--entry") "main"))
