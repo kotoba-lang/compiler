@@ -355,15 +355,19 @@ typed sets, nominal records, and the forbidden floating-point policy. Reference
 and restricted Web execute that same data today. Future Wasm qualification must
 consume it directly and produce the same values or trap classes. `.cljk`
 changes source discovery only; it does not introduce a JVM runtime or a second
-typed-value ABI.
+typed-value ABI. The shared corpus now executes on reference, restricted Web,
+and Wasm.
 Wasm typed-value qualification uses a distinct, versioned `kotoba.typed`
 custom section. Version 1 encodes bounded descriptors and literals as canonical
 binary data rather than executable host text. The browser/Kototama host rejects
 duplicate sections, unknown versions or tags, malformed UTF-8, trailing bytes,
 and descriptors outside the same depth/node/member budgets before
-instantiation. This metadata foundation does not itself qualify typed Wasm
-execution: KIR v4 remains target-rejected until externref operations and exact
-boundary validation consume the sealed table.
+instantiation. `kotoba.typed/externref-v1` consumes the table through frozen
+canonical host values. Every reference parameter and result is revalidated;
+forged descriptors and cross-schema substitution trap before the function body
+can observe them. Compilation seals `:reference-types` as a required Wasm
+feature. Operations outside the qualified algebraic corpus remain fail-closed
+at typed Wasm lowering.
 The first sequential collection profile is an explicitly constructed,
 128-item `vector<i64>` with signed-i64 element checks, frozen Web host values,
 lazy out-of-range lookup fallback, and persistent assoc/conj updates.

@@ -7,7 +7,17 @@ const ALLOWED_IMPORTS = new Set([
   "kotoba:cap/call/function",
   "kotoba:heap/pair/function",
   "kotoba:heap/pair-first/function",
-  "kotoba:heap/pair-second/function"
+  "kotoba:heap/pair-second/function",
+  "kotoba:typed/literal/function",
+  "kotoba:typed/new/function",
+  "kotoba:typed/push-i64/function",
+  "kotoba:typed/push-ref/function",
+  "kotoba:typed/seal/function",
+  "kotoba:typed/assert-ref/function",
+  "kotoba:typed/tag/function",
+  "kotoba:typed/get-i64/function",
+  "kotoba:typed/get-ref/function",
+  "kotoba:typed/count/function"
 ]);
 
 export class KotobaHostError extends Error {
@@ -188,6 +198,223 @@ function createHeap() {
   };
 }
 
+function createTypedRuntime(abi) {
+  if (abi === null) return null;
+  const builders = new WeakSet();
+  const descriptorAt = id => {
+    if (!Number.isInteger(id) || id < 0 || id >= abi.descriptors.length)
+      reject("invalid-typed-descriptor", "typed descriptor index is out of range");
+    return abi.descriptors[id];
+  };
+  const literalAt = id => {
+    if (!Number.isInteger(id) || id < 0 || id >= abi.literals.length)
+      reject("invalid-typed-literal", "typed literal index is out of range");
+    return abi.literals[id][1];
+  };
+  const i64 = value => {
+    if (typeof value !== "bigint" || BigInt.asIntN(64, value) !== value)
+      reject("invalid-typed-value", "typed i64 value is invalid");
+    return value;
+  };
+  const utf8Length = value => {
+    if (typeof value !== "string") reject("invalid-typed-value", "typed string is invalid");
+    for (let index = 0; index < value.length; index += 1) {
+      const unit = value.charCodeAt(index);
+      if (unit >= 0xd800 && unit <= 0xdbff) {
+        const next = value.charCodeAt(index + 1);
+        if (!(next >= 0xdc00 && next <= 0xdfff))
+          reject("invalid-typed-value", "typed string has an unpaired high surrogate");
+        index += 1;
+      } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+        reject("invalid-typed-value", "typed string has an unpaired low surrogate");
+      }
+    }
+    return new TextEncoder().encode(value).byteLength;
+  };
+  const compareSequence = (types, left, right) => {
+    const length = Math.min(left.length, right.length);
+    for (let index = 0; index < length; index += 1) {
+      const compared = compareValue(types[index], left[index], right[index]);
+      if (compared !== 0) return compared;
+    }
+    return left.length < right.length ? -1 : left.length > right.length ? 1 : 0;
+  };
+  const compareValue = (descriptor, left, right) => {
+    if (descriptor === "i64" || descriptor === "string" || descriptor === "keyword")
+      return left < right ? -1 : left > right ? 1 : 0;
+    if (descriptor === "bool") return left === right ? 0 : left ? 1 : -1;
+    const kind = descriptor[0];
+    if (kind === "option") {
+      if (left[1] !== right[1]) return left[1] ? 1 : -1;
+      return left[1] ? compareValue(descriptor[1], left[2], right[2]) : 0;
+    }
+    if (kind === "result") {
+      if (left[0] !== right[0]) return left[0] ? 1 : -1;
+      return compareValue(left[0] ? descriptor[1] : descriptor[2], left[1], right[1]);
+    }
+    if (kind === "variant") {
+      const leftIndex = descriptor[2].findIndex(([name]) => name === left[1]);
+      const rightIndex = descriptor[2].findIndex(([name]) => name === right[1]);
+      return leftIndex === rightIndex
+        ? compareValue(descriptor[2][leftIndex][1], left[2], right[2])
+        : leftIndex < rightIndex ? -1 : 1;
+    }
+    if (kind === "vector") return compareSequence(descriptor[1], left.slice(1), right.slice(1));
+    if (kind === "set") {
+      const length = Math.max(left[1].length, right[1].length);
+      return compareSequence(Array.from({ length }, () => descriptor[1]), left[1], right[1]);
+    }
+    if (kind === "record")
+      return compareSequence(descriptor[2].map(([, type]) => type), left.slice(1), right.slice(1));
+    reject("invalid-typed-value", "typed value has no canonical order");
+  };
+  const assertValue = (descriptor, value, state = { depth: 0, nodes: 0 }) => {
+    state.nodes += 1;
+    state.depth += 1;
+    if (state.depth > 8 || state.nodes > 64)
+      reject("invalid-typed-value", "typed runtime value budget exceeded");
+    try {
+      if (descriptor === "i64") return i64(value);
+      if (descriptor === "string") {
+        if (utf8Length(value) > 65536) reject("invalid-typed-value", "typed string is oversized");
+        return value;
+      }
+      if (descriptor === "keyword") {
+        if (typeof value !== "string" || !value.startsWith(":") || utf8Length(value) > 512)
+          reject("invalid-typed-value", "typed keyword is invalid");
+        return value;
+      }
+      if (descriptor === "bool") {
+        if (typeof value !== "boolean") reject("invalid-typed-value", "typed boolean is invalid");
+        return value;
+      }
+      const kind = descriptor[0];
+      if (!Array.isArray(value) || !Object.isFrozen(value))
+        reject("invalid-typed-value", "compound typed value must be a frozen array");
+      if (kind === "option") {
+        if (value[0] !== descriptor || typeof value[1] !== "boolean" ||
+            value.length !== (value[1] ? 3 : 2))
+          reject("invalid-typed-value", "generic option shape or descriptor is invalid");
+        if (value[1]) assertValue(descriptor[1], value[2], state);
+      } else if (kind === "result") {
+        if (typeof value[0] !== "boolean" || value.length !== 2)
+          reject("invalid-typed-value", "parametric result shape is invalid");
+        assertValue(value[0] ? descriptor[1] : descriptor[2], value[1], state);
+      } else if (kind === "variant") {
+        const member = descriptor[2].find(([name]) => name === value[1]);
+        if (value[0] !== descriptor || value.length !== 3 || member === undefined)
+          reject("invalid-typed-value", "variant shape, descriptor, or tag is invalid");
+        assertValue(member[1], value[2], state);
+      } else if (kind === "vector") {
+        if (value[0] !== descriptor || value.length !== descriptor[1].length + 1)
+          reject("invalid-typed-value", "heterogeneous vector shape is invalid");
+        descriptor[1].forEach((item, index) => assertValue(item, value[index + 1], state));
+      } else if (kind === "set") {
+        if (value[0] !== descriptor || value.length !== 2 || !Array.isArray(value[1]) ||
+            !Object.isFrozen(value[1]) || value[1].length > 32)
+          reject("invalid-typed-value", "typed set shape is invalid");
+        value[1].forEach(item => assertValue(descriptor[1], item, state));
+        for (let index = 1; index < value[1].length; index += 1)
+          if (compareValue(descriptor[1], value[1][index - 1], value[1][index]) >= 0)
+            reject("invalid-typed-value", "typed set is duplicated or non-canonical");
+      } else if (kind === "record") {
+        if (value[0] !== descriptor || value.length !== descriptor[2].length + 1)
+          reject("invalid-typed-value", "record shape or nominal descriptor is invalid");
+        descriptor[2].forEach(([, type], index) => assertValue(type, value[index + 1], state));
+      } else reject("invalid-typed-value", "unknown compound typed value");
+      return value;
+    } finally { state.depth -= 1; }
+  };
+  const checkedBuilder = value => {
+    if ((typeof value !== "object" && typeof value !== "function") || value === null ||
+        !builders.has(value)) reject("invalid-typed-builder", "forged typed builder rejected");
+    return value;
+  };
+  const imports = Object.freeze({
+    literal: literalAt,
+    new(descriptorId, tag) {
+      descriptorAt(descriptorId);
+      const builder = Object.freeze({ descriptorId, tag, slots: Object.freeze([]) });
+      builders.add(builder);
+      return builder;
+    },
+    "push-i64"(rawBuilder, item) {
+      const builder = checkedBuilder(rawBuilder);
+      const next = Object.freeze({ ...builder, slots: Object.freeze([...builder.slots, i64(item)]) });
+      builders.add(next);
+      return next;
+    },
+    "push-ref"(rawBuilder, item) {
+      const builder = checkedBuilder(rawBuilder);
+      const next = Object.freeze({ ...builder, slots: Object.freeze([...builder.slots, item]) });
+      builders.add(next);
+      return next;
+    },
+    seal(descriptorId, rawBuilder) {
+      const descriptor = descriptorAt(descriptorId);
+      const builder = checkedBuilder(rawBuilder);
+      if (builder.descriptorId !== descriptorId)
+        reject("invalid-typed-builder", "typed builder descriptor substitution rejected");
+      const kind = Array.isArray(descriptor) ? descriptor[0] : descriptor;
+      let result;
+      if (kind === "option") result = builder.tag === 0
+        ? [descriptor, false] : [descriptor, true, ...builder.slots];
+      else if (kind === "result") result = [builder.tag === 1, ...builder.slots];
+      else if (kind === "variant") {
+        const member = descriptor[2][builder.tag];
+        if (member === undefined) reject("invalid-typed-builder", "variant tag is out of range");
+        result = [descriptor, member[0], ...builder.slots];
+      } else if (kind === "vector" || kind === "record") result = [descriptor, ...builder.slots];
+      else if (kind === "set") {
+        const sorted = [...builder.slots].sort((left, right) => compareValue(descriptor[1], left, right));
+        for (let index = 1; index < sorted.length; index += 1)
+          if (compareValue(descriptor[1], sorted[index - 1], sorted[index]) === 0)
+            reject("invalid-typed-set", "duplicate typed set item rejected");
+        result = [descriptor, Object.freeze(sorted)];
+      } else reject("invalid-typed-builder", "primitive descriptor cannot be constructed");
+      return assertValue(descriptor, Object.freeze(result));
+    },
+    "assert-ref"(descriptorId, value) { return assertValue(descriptorAt(descriptorId), value); },
+    tag(descriptorId, value) {
+      const descriptor = descriptorAt(descriptorId);
+      const checked = assertValue(descriptor, value);
+      if (descriptor === "bool") return checked ? 1 : 0;
+      if (descriptor[0] === "option") return checked[1] ? 1 : 0;
+      if (descriptor[0] === "result") return checked[0] ? 1 : 0;
+      if (descriptor[0] === "variant") return descriptor[2].findIndex(([name]) => name === checked[1]);
+      reject("invalid-typed-operation", "tag is not defined for this descriptor");
+    },
+    "get-i64"(descriptorId, value, index) {
+      const descriptor = descriptorAt(descriptorId);
+      const checked = assertValue(descriptor, value);
+      const kind = descriptor[0];
+      const item = kind === "option" ? checked[2]
+        : kind === "result" ? checked[1]
+        : kind === "variant" ? checked[2]
+        : checked[index + 1];
+      return i64(item);
+    },
+    "get-ref"(descriptorId, value, index) {
+      const descriptor = descriptorAt(descriptorId);
+      const checked = assertValue(descriptor, value);
+      const kind = descriptor[0];
+      return kind === "option" ? checked[2]
+        : kind === "result" ? checked[1]
+        : kind === "variant" ? checked[2]
+        : checked[index + 1];
+    },
+    count(descriptorId, value) {
+      const descriptor = descriptorAt(descriptorId);
+      const checked = assertValue(descriptor, value);
+      if (descriptor === "string") return BigInt(utf8Length(checked));
+      if (descriptor[0] === "vector" || descriptor[0] === "record") return BigInt(checked.length - 1);
+      if (descriptor[0] === "set") return BigInt(checked[1].length);
+      reject("invalid-typed-operation", "count is not defined for this descriptor");
+    }
+  });
+  return Object.freeze({ imports });
+}
+
 export function normalizeKotobaTrap(error) {
   if (error instanceof KotobaHostError)
     return Object.freeze({ kind: "kotoba-host", code: error.code });
@@ -210,6 +437,7 @@ export async function instantiateKotoba(source, rawOptions) {
   try { module = await WebAssembly.compile(bytes); }
   catch (error) { reject("invalid-module", "Wasm compilation failed", error); }
   const typedAbi = validateModule(module);
+  const typed = createTypedRuntime(typedAbi);
   const heap = createHeap();
   const cap = Object.freeze({
     call(id, value) {
@@ -227,7 +455,8 @@ export async function instantiateKotoba(source, rawOptions) {
   try {
     instance = await WebAssembly.instantiate(module, {
       "kotoba:cap": cap,
-      "kotoba:heap": heap.imports
+      "kotoba:heap": heap.imports,
+      "kotoba:typed": typed?.imports ?? Object.freeze({})
     });
   } catch (error) {
     if (error instanceof KotobaHostError) throw error;

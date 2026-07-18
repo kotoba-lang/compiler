@@ -171,9 +171,10 @@ every function signature. The admitted string surface is deliberately small:
 well-formed UTF-16 and at most 4,096 UTF-8 bytes, all module literals together
 are capped at 65,536 bytes, and runtime values are capped at 65,536 bytes.
 Generated ESM revalidates types, Unicode shape, and byte limits at function and
-host boundaries. Native, Wasm, and ClojureScript targets reject KIR v4 until
-they have an equivalent typed ABI; strings are never replaced with hashes or
-silently treated as integer handles.
+host boundaries. The qualified Wasm algebraic subset uses the sealed
+`kotoba.typed/externref-v1` ABI described below. Native and ClojureScript
+targets, and typed operations not yet lowered by Wasm, fail closed; strings are
+never replaced with hashes or silently treated as integer handles.
 
 Keywords preserve canonical Unicode text with a 512-byte bound and never use
 probabilistic integer hashing. The first owned map profile admits at most 128
@@ -251,20 +252,20 @@ prototype behavior, and host identity from record semantics.
 The machine-readable corpus at
 `resources/kotoba/compiler/typed-value-conformance.edn` is the shared
 qualification source for these algebraic value families and the floating-point
-denial policy. It currently executes every positive vector against the
-reference interpreter and restricted Web emitter, and verifies the same
-compile-time or runtime fail-closed boundary for negative vectors. Wasm remains
-unqualified for this typed ABI until it consumes this exact corpus without
-integer handles, host-object identity, or backend-specific coercion. `.cljk` is
+denial policy. Every positive vector now executes against the reference
+interpreter, restricted Web emitter, and Wasm externref runtime, with the same
+compile-time or runtime fail-closed boundary for negative vectors. `.cljk` is
 a Kotoba source extension selecting the compiler; it is not a separate runtime
 ABI and must follow the ABI of the selected target.
 
 The Wasm parity path reserves the versioned `kotoba.typed` custom section for
 canonical binary descriptor and literal tables. Hosts parse it with strict
 UTF-8, uniqueness, EOF, depth, node, member, and table limits before
-instantiation. KIR v4 compilation to Wasm still fails closed until the externref
-runtime operations and exported-boundary validators are implemented; metadata
-presence alone is never treated as typed-value qualification.
+instantiation. `kotoba.typed/externref-v1` consumes that table through frozen
+canonical values, validates every reference parameter and result, and rejects
+forged or cross-schema values. The compiled result seals the required Wasm
+reference-types feature. Unsupported KIR v4 operations still fail during
+lowering; metadata presence alone is never treated as qualification.
 
 The first bounded sequential collection is `:vector-i64`, constructed
 explicitly with `(vector-i64 ...)` and capped at 128 items. `vector-count`,

@@ -61,16 +61,16 @@
   (cond
     (descriptor? value)
     (let [found (conj found value)]
-      (if (vector? value)
-        (reduce (fn [result item]
-                  (cond
-                    (descriptor? item) (walk item result)
-                    (and (vector? item) (= 2 (count item))
-                         (descriptor? (second item)))
-                    (walk (second item) result)
-                    :else result))
-                found value)
-        found))
+      (if-not (vector? value)
+        found
+        (case (first value)
+          :option (walk (second value) found)
+          :result (->> found (walk (second value)) (walk (nth value 2)))
+          :variant (reduce (fn [result [_ type]] (walk type result)) found (nth value 2))
+          :vector (reduce (fn [result type] (walk type result)) found (second value))
+          :set (walk (second value) found)
+          :record (reduce (fn [result [_ type]] (walk type result)) found (nth value 2))
+          found)))
 
     (map? value) (reduce (fn [result item] (walk item result)) found (vals value))
     (coll? value) (reduce (fn [result item] (walk item result)) found value)
@@ -120,3 +120,65 @@
                  (mapcat encode-descriptor descriptors)
                  (uleb (count literals))
                  (mapcat encode-literal literals)))))
+
+(defn reference-type? [type]
+  (not= type :i64))
+
+(defn wasm-type [type]
+  (if (reference-type? type) 0x6f 0x7e))
+
+(declare infer-type)
+
+(defn infer-type [form env signatures]
+  (cond
+    (integer? form) :i64
+    (string? form) :string
+    (keyword? form) :keyword
+    (boolean? form) :bool
+    (symbol? form) (or (get env form)
+                       (throw (ex-info "unbound typed Wasm symbol"
+                                       {:phase :wasm-typed-lowering :symbol form})))
+    :else
+    (let [[op & args] form]
+      (cond
+        (= op 'let)
+        (let [[bindings body] args
+              env' (reduce (fn [current [name value]]
+                             (assoc current name (infer-type value current signatures)))
+                           env (partition 2 bindings))]
+          (infer-type body env' signatures))
+        (= op 'if) (infer-type (second args) env signatures)
+        (= op 'do) (infer-type (last args) env signatures)
+        (contains? '#{+ - * quot cap-call pair pair-first pair-second
+                      string-byte-length map-get vector-count vector-get
+                      vector-at vector-slice hetero-vector-count typed-set-count} op) :i64
+        (contains? '#{= < > <= >= string=? bool-not option-some? result-ok?
+                      result-ok?-of option-some?-of hetero-vector-equal
+                      typed-set-contains typed-set-equal record-equal} op) :bool
+        (= op 'string-concat) :string
+        (= op 'variant-new) (first args)
+        (contains? '#{option-some-of option-none-of result-ok-of result-err-of
+                      hetero-vector-new typed-set-new record-new} op) (first args)
+        (= op 'result-match-of)
+        (let [[type _ ok-name ok-body] args]
+          (infer-type ok-body (assoc env ok-name (second type)) signatures))
+        (= op 'variant-match)
+        (let [[type _ branches] args
+              [[_ binder body]] branches
+              payload-type (second (first (nth type 2)))]
+          (infer-type body (assoc env binder payload-type) signatures))
+        (= op 'option-match)
+        (let [[type _ _ some-name some-body] args]
+          (infer-type some-body (assoc env some-name (second type)) signatures))
+        (contains? '#{result-value-of result-error-of} op)
+        (if (= op 'result-value-of) (second (first args)) (nth (first args) 2))
+        (= op 'option-value-of) (second (first args))
+        (= op 'hetero-vector-at) (nth (second (first args)) (nth args 2))
+        (= op 'record-get)
+        (let [[type _ field] args]
+          (second (some #(when (= field (first %)) %) (nth type 2))))
+        (contains? '#{hetero-vector-assoc typed-set-conj typed-set-disj record-assoc} op)
+        (first args)
+        :else (or (:result (get signatures op))
+                  (throw (ex-info "unsupported typed Wasm expression"
+                                  {:phase :wasm-typed-lowering :operation op :form form})))))))
