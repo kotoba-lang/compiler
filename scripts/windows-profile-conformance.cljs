@@ -75,7 +75,7 @@
           raw (artifact "program.bin")
           _ (run-external "clang" ["-std=c11" "-O2" "-Wall" "-Wextra" "-Werror"
                                     (.join path lib/root "tools/kexe_loader_windows.c")
-                                    "-o" loader "-ladvapi32"])
+                                    "-o" loader "-ladvapi32" "-lws2_32" "-lfwpuclnt" "-lrpcrt4"])
           [main-offset main-arity] (extract! (artifact "first.kexe") "main" raw)
           [score-offset score-arity] (extract! (artifact "first.kexe") "score" raw)
           [calc-offset calc-arity] (extract! (artifact "first.kexe") "calc" raw)]
@@ -88,7 +88,9 @@
                         (.trim (.-stdout structured)))
                      "windows-profile: structured supervisor report mismatch"))
       (doseq [[probe reason] [[:KEXE_FILESYSTEM_PROBE "filesystem-denied"]
-                              [:KEXE_PROCESS_PROBE "process-denied"]]]
+                              [:KEXE_PROCESS_PROBE "process-denied"]
+                              [:KEXE_NETWORK_PROBE "network-denied"]
+                              [:KEXE_NETWORK_LISTEN_PROBE "network-listen-denied"]]]
         (let [result (run-external loader [raw main-offset main-arity isa "-"]
                                    {probe "1"} true)]
           (lib/ensure! (= 77 (.-status result)) (str "windows-profile: " reason " exit mismatch"))

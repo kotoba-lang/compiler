@@ -2,6 +2,10 @@
 #define _WIN32_WINNT 0x0A00
 #define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
+#include <rpc.h>
+#include <fwpmu.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <sddl.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -171,6 +175,91 @@ static void prohibit_dynamic_code(void) {
   }
 }
 
+/*
+ * Windows Filtering Platform (WFP) per-process network denial.
+ *
+ * The restricted/low-integrity token applied by restricted_token() does not
+ * reliably block Winsock: MIC is a write-up denial mechanism for securable
+ * objects and \Device\Afd is not integrity-labeled by default, so a Low-IL
+ * token alone does not stop socket()/connect(). This installs an explicit
+ * block filter, keyed to this executable's own ALE application id, at the
+ * ALE_AUTH_CONNECT layers (outbound) and the ALE_AUTH_RECV_ACCEPT layers
+ * (inbound), so both directions are denied regardless of token integrity.
+ *
+ * This must run while the process still holds its original (non-restricted)
+ * privileges -- i.e. before restricted_token()/SetThreadToken -- mirroring
+ * the "privileged setup, then restrict" ordering already used for the Job
+ * object in install_job_boundary(). Every WFP call is fail-closed: any
+ * failure here aborts the loader via fail_win() before guest entry, rather
+ * than silently proceeding without network denial.
+ *
+ * The engine session is opened with FWPM_SESSION_FLAG_DYNAMIC, so the BFE
+ * (Base Filtering Engine) automatically tears down these filters when the
+ * engine handle closes or this process exits/crashes; the handle is
+ * intentionally retained (never closed) until process exit, the same
+ * pattern install_job_boundary() uses for its Job handle.
+ *
+ * NOTE (verification gap, honestly disclosed): FwpmEngineOpen0/FwpmFilterAdd0
+ * are BFE management operations that Microsoft's own samples document as
+ * requiring an administrative caller. This has not been exercised on a real
+ * Windows host from this change -- the windows-arm64 CI job is the actual
+ * first real execution of this code path (see docs/threat-model.md).
+ */
+static void install_network_denial(void) {
+  HANDLE engine = NULL;
+  FWPM_SESSION0 session;
+  wchar_t module_path[MAX_PATH];
+  FWP_BYTE_BLOB *app_id = NULL;
+  FWPM_FILTER_CONDITION0 condition;
+  FWPM_FILTER0 filter;
+  static const GUID *layers[] = {
+    &FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+    &FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+    &FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4,
+    &FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6,
+  };
+  DWORD status;
+  size_t i;
+
+  if (GetModuleFileNameW(NULL, module_path, MAX_PATH) == 0) fail_win("GetModuleFileNameW");
+
+  ZeroMemory(&session, sizeof(session));
+  session.flags = FWPM_SESSION_FLAG_DYNAMIC;
+  status = FwpmEngineOpen0(NULL, RPC_C_AUTHN_WINNT, NULL, &session, &engine);
+  if (status != ERROR_SUCCESS) { SetLastError(status); fail_win("FwpmEngineOpen0"); }
+
+  status = FwpmGetAppIdFromFileName0(module_path, &app_id);
+  if (status != ERROR_SUCCESS) { SetLastError(status); fail_win("FwpmGetAppIdFromFileName0"); }
+
+  ZeroMemory(&condition, sizeof(condition));
+  condition.fieldKey = FWPM_CONDITION_ALE_APP_ID;
+  condition.matchType = FWP_MATCH_EQUAL;
+  condition.conditionValue.type = FWP_BYTE_BLOB_TYPE;
+  condition.conditionValue.byteBlob = app_id;
+
+  for (i = 0; i < sizeof(layers) / sizeof(layers[0]); i++) {
+    UINT64 filter_id = 0;
+    ZeroMemory(&filter, sizeof(filter));
+    filter.layerKey = *layers[i];
+    filter.subLayerKey = FWPM_SUBLAYER_UNIVERSAL;
+    filter.displayData.name = L"kotoba-kexe-network-denial";
+    filter.action.type = FWP_ACTION_BLOCK;
+    filter.weight.type = FWP_EMPTY;
+    filter.numFilterConditions = 1;
+    filter.filterCondition = &condition;
+    status = FwpmFilterAdd0(engine, &filter, NULL, &filter_id);
+    if (status != ERROR_SUCCESS) {
+      FwpmFreeMemory0((void **)&app_id);
+      SetLastError(status);
+      fail_win("FwpmFilterAdd0");
+    }
+  }
+
+  FwpmFreeMemory0((void **)&app_id);
+  /* Intentionally retain the engine handle (and its dynamic session's
+     filters) until process exit; see the function comment above. */
+}
+
 #if defined(_M_X64)
 typedef int64_t (SYSV *guest_fn)(int64_t, int64_t, int64_t, int64_t, int64_t,
                                  struct kexe_context *);
@@ -178,6 +267,149 @@ typedef int64_t (SYSV *guest_fn)(int64_t, int64_t, int64_t, int64_t, int64_t,
 typedef int64_t (*guest_fn)(int64_t, int64_t, int64_t, int64_t,
                             int64_t, int64_t, int64_t, struct kexe_context *);
 #endif
+
+/*
+ * Performs a non-blocking connect() and requires it to resolve, within a
+ * bounded deadline, to a policy-denial error rather than either succeeding
+ * or hanging. A timeout here is treated as a probe FAILURE (not a pass):
+ * it would mean the connection attempt reached the network stack instead
+ * of being denied synchronously at WFP's ALE admission layer, i.e. that
+ * install_network_denial()'s filter did not actually take effect.
+ */
+static int connect_and_require_denial(SOCKET sock, const struct sockaddr_in *address) {
+  u_long non_blocking = 1;
+  fd_set write_set, except_set;
+  struct timeval timeout;
+  int error_value = 0;
+  int error_length = sizeof(error_value);
+
+  if (ioctlsocket(sock, FIONBIO, &non_blocking) != 0) {
+    fprintf(stderr, "kexe-loader-windows: network probe ioctlsocket failed: wsa=%d\n",
+            WSAGetLastError());
+    return 70;
+  }
+  if (connect(sock, (const struct sockaddr *)address, sizeof(*address)) == 0) {
+    fprintf(stderr, "kexe-loader-windows: network probe connect() unexpectedly succeeded\n");
+    return 70;
+  }
+  error_value = WSAGetLastError();
+  if (error_value == WSAEWOULDBLOCK) {
+    FD_ZERO(&write_set);
+    FD_ZERO(&except_set);
+    FD_SET(sock, &write_set);
+    FD_SET(sock, &except_set);
+    timeout.tv_sec = 2;
+    timeout.tv_usec = 0;
+    if (select(0, NULL, &write_set, &except_set, &timeout) == 0) {
+      fprintf(stderr, "kexe-loader-windows: network probe timed out waiting for a policy "
+                      "decision instead of being denied at admission\n");
+      return 70;
+    }
+    if (getsockopt(sock, SOL_SOCKET, SO_ERROR, (char *)&error_value, &error_length) != 0) {
+      fprintf(stderr, "kexe-loader-windows: network probe getsockopt(SO_ERROR) failed: wsa=%d\n",
+              WSAGetLastError());
+      return 70;
+    }
+  }
+  if (error_value == WSAEACCES) return 0;
+  fprintf(stderr, "kexe-loader-windows: network probe resolved with unexpected code: wsa=%d\n",
+          error_value);
+  return 70;
+}
+
+/* Outbound direction: connect() to loopback must be denied by the
+   ALE_AUTH_CONNECT_V4 filter installed in install_network_denial(). */
+static int network_outbound_probe_denied(void) {
+  WSADATA wsa_data;
+  SOCKET sock;
+  struct sockaddr_in address;
+  int denial;
+
+  if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
+    fprintf(stderr, "kexe-loader-windows: WSAStartup failed\n");
+    return 70;
+  }
+  sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (sock == INVALID_SOCKET) {
+    fprintf(stderr, "kexe-loader-windows: network probe socket() failed: wsa=%d\n",
+            WSAGetLastError());
+    WSACleanup();
+    return 70;
+  }
+  ZeroMemory(&address, sizeof(address));
+  address.sin_family = AF_INET;
+  address.sin_port = htons(9);
+  address.sin_addr.s_addr = htonl(0x7f000001);
+  denial = connect_and_require_denial(sock, &address);
+  closesocket(sock);
+  WSACleanup();
+  return denial;
+}
+
+/*
+ * Inbound direction: bind()+listen() on loopback must succeed (the
+ * ALE_AUTH_RECV_ACCEPT layer is only consulted when an inbound connection
+ * attempt actually arrives, not at bind/listen time -- so those succeeding
+ * is the *correct*, expected outcome and is asserted here), then a loopback
+ * self-connect to that listener must still be denied.
+ *
+ * Known limitation, disclosed rather than silently assumed: this loader's
+ * Job object caps ActiveProcessLimit=1 (install_job_boundary), so this
+ * process cannot spawn a second, independently-filtered peer to originate
+ * the inbound connection. The only available stimulus is a loopback
+ * self-connect from this same process, which the outbound
+ * ALE_AUTH_CONNECT filter already denies on its own. This probe therefore
+ * proves the end-to-end guarantee -- no loopback TCP connection ever
+ * completes to this process, in either direction -- but it does NOT, by
+ * itself, isolate the ALE_AUTH_RECV_ACCEPT_V4/V6 inbound filter from the
+ * outbound one. An independent, out-of-process verification of the
+ * inbound-only filter is a known gap.
+ */
+static int network_listen_probe_denied(void) {
+  WSADATA wsa_data;
+  SOCKET listener, client;
+  struct sockaddr_in address;
+  int address_length = sizeof(address);
+  int denial;
+
+  if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
+    fprintf(stderr, "kexe-loader-windows: WSAStartup failed (listen probe)\n");
+    return 70;
+  }
+  listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (listener == INVALID_SOCKET) {
+    fprintf(stderr, "kexe-loader-windows: network listen probe socket() failed: wsa=%d\n",
+            WSAGetLastError());
+    WSACleanup();
+    return 70;
+  }
+  ZeroMemory(&address, sizeof(address));
+  address.sin_family = AF_INET;
+  address.sin_port = htons(0);
+  address.sin_addr.s_addr = htonl(0x7f000001);
+  if (bind(listener, (struct sockaddr *)&address, sizeof(address)) != 0 ||
+      listen(listener, 1) != 0 ||
+      getsockname(listener, (struct sockaddr *)&address, &address_length) != 0) {
+    fprintf(stderr, "kexe-loader-windows: network listen probe setup failed unexpectedly: wsa=%d\n",
+            WSAGetLastError());
+    closesocket(listener);
+    WSACleanup();
+    return 70;
+  }
+  client = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (client == INVALID_SOCKET) {
+    fprintf(stderr, "kexe-loader-windows: network listen probe client socket() failed: wsa=%d\n",
+            WSAGetLastError());
+    closesocket(listener);
+    WSACleanup();
+    return 70;
+  }
+  denial = connect_and_require_denial(client, &address);
+  closesocket(client);
+  closesocket(listener);
+  WSACleanup();
+  return denial;
+}
 
 static int sandbox_probe(void) {
   if (getenv("KEXE_FILESYSTEM_PROBE") != NULL) {
@@ -208,6 +440,18 @@ static int sandbox_probe(void) {
       return 70;
     }
     fprintf(stderr, "KEXE_TRAP {:kind :sandbox :reason :process-denied}\n");
+    return 77;
+  }
+  if (getenv("KEXE_NETWORK_PROBE") != NULL) {
+    int denial = network_outbound_probe_denied();
+    if (denial != 0) return denial;
+    fprintf(stderr, "KEXE_TRAP {:kind :sandbox :reason :network-denied}\n");
+    return 77;
+  }
+  if (getenv("KEXE_NETWORK_LISTEN_PROBE") != NULL) {
+    int denial = network_listen_probe_denied();
+    if (denial != 0) return denial;
+    fprintf(stderr, "KEXE_TRAP {:kind :sandbox :reason :network-listen-denied}\n");
     return 77;
   }
   return 0;
@@ -260,6 +504,7 @@ int main(int argc, char **argv) {
   if (!FlushInstructionCache(GetCurrentProcess(), code, (size_t)length))
     fail_win("FlushInstructionCache");
   prohibit_dynamic_code();
+  install_network_denial();
 
   ctx = (struct kexe_context *)VirtualAlloc(NULL, sizeof(*ctx), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
   if (ctx == NULL) fail_win("VirtualAlloc context");
