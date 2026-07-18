@@ -142,6 +142,9 @@
      (do (validate-value-type! (second type) (inc depth) nodes)
          (validate-value-type! (nth type 2) (inc depth) nodes)
          type)
+     (and (vector? type) (= 2 (count type)) (= :option (first type)))
+     (do (validate-value-type! (second type) (inc depth) nodes)
+         type)
      (and (vector? type) (= 3 (count type)) (= :variant (first type)))
      (let [[_ type-id cases] type]
        (when-not (and (keyword? type-id) (namespace type-id))
@@ -203,5 +206,15 @@
            (when-not payload-type
              (throw (ex-info "variant case is not declared" {:phase :value :tag tag})))
            [type tag (bounded-typed-value! payload-type (nth value 2) (inc depth) nodes)]))
+
+       (= :option (first type))
+       (do
+         (when-not (and (vector? value) (= type (first value))
+                        (or (and (= 2 (count value)) (false? (second value)))
+                            (and (= 3 (count value)) (true? (second value)))))
+           (throw (ex-info "value is not the declared generic option type" {:phase :value})))
+         (if (false? (second value))
+           [type false]
+           [type true (bounded-typed-value! (second type) (nth value 2) (inc depth) nodes)]))
 
        :else (throw (ex-info "value type is outside the safe profile" {:phase :value}))))))

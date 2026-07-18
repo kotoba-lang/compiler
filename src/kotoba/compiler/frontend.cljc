@@ -100,6 +100,8 @@
   '{result-ok-of 2 result-err-of 2 result-ok?-of 2 result-value-of 3 result-error-of 3
     result-match-of 6})
 (def variant-operations '#{variant-new variant-match})
+(def generic-option-operations
+  '#{option-some-of option-none-of option-some?-of option-value-of option-match})
 (def typed-vector-operations
   '{vector-count 1 vector-get 3 vector-at 2 vector-drop 2 vector-assoc 3 vector-conj 2})
 (def sequencing-operations '#{do})
@@ -112,10 +114,11 @@
              (set (keys typed-safe-value-operations))
              (set (keys parametric-result-operations))
              variant-operations
+             generic-option-operations
              (set (keys typed-vector-operations))
              (set (keys string-operations))
              '#{let if cap-call ns defn defn- some some? nil? vector-i64 vector-new
-                match-result match-variant}))
+                match-result match-variant match-option}))
 (def max-functions 1024)
 (def max-expression-nodes 50000)
 (def max-lowered-nodes 100000)
@@ -143,8 +146,11 @@
 (defn- variant-type? [type]
   (and (vector? type) (= 3 (count type)) (= :variant (first type))))
 
+(defn- generic-option-type? [type]
+  (and (vector? type) (= 2 (count type)) (= :option (first type))))
+
 (defn- structured-type? [type]
-  (or (parametric-result-type? type) (variant-type? type)))
+  (or (parametric-result-type? type) (variant-type? type) (generic-option-type? type)))
 
 (defn- validate-value-type!
   ([type] (validate-value-type! type 0 (volatile! 0)))
@@ -159,6 +165,9 @@
      (parametric-result-type? type)
      (do (validate-value-type! (second type) (inc depth) nodes)
          (validate-value-type! (nth type 2) (inc depth) nodes)
+         type)
+     (generic-option-type? type)
+     (do (validate-value-type! (second type) (inc depth) nodes)
          type)
      (variant-type? type)
      (let [[_ type-id cases] type]
@@ -753,6 +762,32 @@
                 (reject! "match-variant branches require (:case binder body)" form))
               (list 'variant-match type (desugar-expr value)
                     (mapv (fn [[tag binder body]] [tag binder (desugar-expr body)]) branches))))
+        option-some-of
+        (do (when-not (= 2 (count args)) (reject! "option-some-of requires type and payload" form))
+            (list 'option-some-of (first args) (desugar-expr (second args))))
+        option-none-of
+        (do (when-not (= 1 (count args)) (reject! "option-none-of requires one type" form))
+            (list 'option-none-of (first args)))
+        option-some?-of
+        (do (when-not (= 2 (count args)) (reject! "option-some?-of requires type and value" form))
+            (list 'option-some?-of (first args) (desugar-expr (second args))))
+        option-value-of
+        (do (when-not (= 3 (count args)) (reject! "option-value-of requires type, value, and fallback" form))
+            (list 'option-value-of (first args) (desugar-expr (second args))
+                  (desugar-expr (nth args 2))))
+        match-option
+        (do (when-not (= 4 (count args))
+              (reject! "match-option requires value, type, none branch, and some branch" form))
+            (let [[value type none-branch some-branch] args]
+              (when-not (and (seq? none-branch) (= 2 (count none-branch))
+                             (= 'none (first none-branch)))
+                (reject! "match-option requires exactly one (none body) branch" form))
+              (when-not (and (seq? some-branch) (= 3 (count some-branch))
+                             (= 'some (first some-branch)) (symbol? (second some-branch)))
+                (reject! "match-option requires exactly one (some binder body) branch" form))
+              (list 'option-match type (desugar-expr value)
+                    (desugar-expr (second none-branch)) (second some-branch)
+                    (desugar-expr (nth some-branch 2)))))
         result-ok-of (do (when-not (= 2 (count args)) (reject! "result-ok-of requires type and payload" form))
                          (list 'result-ok-of (first args) (desugar-expr (second args))))
         result-err-of (do (when-not (= 2 (count args)) (reject! "result-err-of requires type and payload" form))
@@ -897,6 +932,40 @@
         (do (when-not (= (get typed-safe-value-operations op) (count args))
               (reject! "typed safe-value operation arity mismatch" form))
             (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
+        (= op 'option-none-of)
+        (do (when-not (= 1 (count args)) (reject! "option-none-of shape is invalid" form))
+            (validate-value-type! (first args))
+            (when-not (generic-option-type? (first args))
+              (reject! "option-none-of requires [:option payload-type]" form)))
+
+        (contains? '#{option-some-of option-some?-of} op)
+        (let [[type value] args]
+          (when-not (= 2 (count args)) (reject! "generic option operation shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (generic-option-type? type)
+            (reject! "generic option operation requires [:option payload-type]" form))
+          (validate-expr value locals functions (inc depth) budget))
+
+        (= op 'option-value-of)
+        (let [[type value fallback] args]
+          (when-not (= 3 (count args)) (reject! "option-value-of shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (generic-option-type? type)
+            (reject! "option-value-of requires [:option payload-type]" form))
+          (validate-expr value locals functions (inc depth) budget)
+          (validate-expr fallback locals functions (inc depth) budget))
+
+        (= op 'option-match)
+        (let [[type value none-body some-name some-body] args]
+          (when-not (= 5 (count args)) (reject! "option-match shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (and (generic-option-type? type) (symbol? some-name)
+                         (nil? (namespace some-name)))
+            (reject! "option-match requires option type and unqualified some binder" form))
+          (validate-expr value locals functions (inc depth) budget)
+          (validate-expr none-body locals functions (inc depth) budget)
+          (validate-expr some-body (conj locals some-name) functions (inc depth) budget))
 
         (= op 'variant-new)
         (let [[type tag payload] args]
@@ -1208,6 +1277,36 @@
             (when-not (apply = branch-types)
               (reject! "variant match branches must have the same value type" form))
             (first branch-types)))
+        option-some-of
+        (let [[type payload] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type payload locals signatures)
+                                    (second type) payload)
+          type)
+        option-none-of
+        (let [[type] args] (validate-value-type! type) type)
+        option-some?-of
+        (let [[type value] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          :bool)
+        option-value-of
+        (let [[type value fallback] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          (require-expression-type! (infer-expression-type fallback locals signatures)
+                                    (second type) fallback)
+          (second type))
+        option-match
+        (let [[type value none-body some-name some-body] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          (let [none-type (infer-expression-type none-body locals signatures)
+                some-type (infer-expression-type some-body
+                                                 (assoc locals some-name (second type)) signatures)]
+            (when-not (= none-type some-type)
+              (reject! "option match branches must have the same value type" form))
+            none-type))
         (infer-call-type op args locals signatures)))
     :else (reject! "value has no admitted type" form)))
 
@@ -1588,6 +1687,7 @@
                                                          (contains? typed-safe-value-operations (first %))
                                                          (contains? parametric-result-operations (first %))
                                                          (contains? variant-operations (first %))
+                                                         (contains? generic-option-operations (first %))
                                                          (= 'vector-new (first %))
                                                          (contains? typed-vector-operations (first %)))))
                                            (tree-seq coll? seq body))))
