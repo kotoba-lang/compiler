@@ -140,6 +140,23 @@
     (is (zero? (:exit result)) (:err result))
     (is (= (str expected) (str/trim (:out result))))))
 
+(deftest safe-source-identifiers-that-contain-ambient-names-compile-and-run
+  (let [source "(ns timing (:export [shot-hit]))
+                (defn shot-hit [delta-present delta-ms window-ms]
+                  (if delta-present
+                    (if (<= delta-ms window-ms) 1 0)
+                    0))"
+        compiled (compiler/compile-source source :js-kotoba-v1)
+        encoded (.encodeToString (java.util.Base64/getEncoder)
+                                 (.getBytes ^String (:source compiled) "UTF-8"))
+        program (str "import('data:text/javascript;base64," encoded
+                     "').then(m=>{const f=m.instantiateKotoba({})['shot-hit'];"
+                     "console.log(String(f(1n,150n,150n))+','+String(f(1n,151n,150n))+','+String(f(0n,0n,150n)))})")
+        result (shell/sh "node" "--input-type=module" "-e" program)]
+    (is (str/includes? (:source compiled) "k$window$002dms"))
+    (is (zero? (:exit result)) (:err result))
+    (is (= "1,0,0" (str/trim (:out result))))))
+
 (deftest emits-and-verifies-native-machine-code
   (doseq [target [:x86_64-kotoba-v1 :aarch64-kotoba-v1]]
     (let [artifact (:artifact (compiler/compile-source source target))]
