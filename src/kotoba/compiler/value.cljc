@@ -9,6 +9,7 @@
 (def adt-depth-limit 8)
 (def adt-node-limit 64)
 (def variant-case-limit 32)
+(def heterogeneous-vector-item-limit 32)
 
 (defn utf8-byte-count!
   "Return the exact UTF-8 byte count without normalizing or replacing malformed
@@ -145,6 +146,19 @@
      (and (vector? type) (= 2 (count type)) (= :option (first type)))
      (do (validate-value-type! (second type) (inc depth) nodes)
          type)
+     (and (vector? type) (= 2 (count type)) (= :vector (first type)))
+     (let [item-types (second type)]
+       (when-not (and (vector? item-types)
+                      (<= (count item-types) heterogeneous-vector-item-limit))
+         (throw (ex-info "heterogeneous vector types are invalid"
+                         {:phase :value :limit heterogeneous-vector-item-limit})))
+       (vswap! nodes inc)
+       (when (> @nodes adt-node-limit)
+         (throw (ex-info "value type exceeds node limit"
+                         {:phase :value :limit adt-node-limit})))
+       (doseq [item-type item-types]
+         (validate-value-type! item-type (inc depth) nodes))
+       type)
      (and (vector? type) (= 3 (count type)) (= :variant (first type)))
      (let [[_ type-id cases] type]
        (when-not (and (keyword? type-id) (namespace type-id))
@@ -216,5 +230,16 @@
          (if (false? (second value))
            [type false]
            [type true (bounded-typed-value! (second type) (nth value 2) (inc depth) nodes)]))
+
+       (= :vector (first type))
+       (let [item-types (second type)]
+         (when-not (and (vector? value) (= type (first value))
+                        (= (count value) (inc (count item-types))))
+           (throw (ex-info "value is not the declared heterogeneous vector type"
+                           {:phase :value})))
+         (into [type]
+               (map (fn [item-type item]
+                      (bounded-typed-value! item-type item (inc depth) nodes))
+                    item-types (rest value))))
 
        :else (throw (ex-info "value type is outside the safe profile" {:phase :value}))))))

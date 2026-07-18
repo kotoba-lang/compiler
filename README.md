@@ -210,6 +210,17 @@ even a payload-free none retains exact type identity. `option-some-of`,
 sentinels, cross-option substitution, malformed tags, and eager fallback
 evaluation are rejected.
 
+Fixed heterogeneous vectors use `[:vector [item-type ...]]` with at most 32
+positions inside the shared descriptor budget. Their canonical Web ABI is
+`[descriptor, item ...]`; exact descriptor identity, length, and every
+position's type are revalidated at boundaries. `(hetero-vector descriptor
+...)` constructs an exact value. `hetero-vector-at` and
+`hetero-vector-assoc` require an admission-time in-range integer index, making
+the projected/replacement type static. Updates return a new frozen value, and
+`hetero-vector-equal` performs validated structural equality without exposing
+JavaScript object identity. Dynamic indexes, sparse values, append/drop, and
+host mutation are not admitted.
+
 The first bounded sequential collection is `:vector-i64`, constructed
 explicitly with `(vector-i64 ...)` and capped at 128 items. `vector-count`,
 `vector-get`, `vector-assoc`, and `vector-conj` preserve signed-i64 elements;

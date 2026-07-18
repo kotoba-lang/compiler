@@ -325,6 +325,12 @@ both none and some runtime values. None is never represented by null,
 undefined, or an untyped sentinel. Construction, projection, lazy fallback,
 and exhaustive none/some matching revalidate exact descriptor identity and
 the bounded payload at every reference/Web boundary.
+Fixed heterogeneous vectors use `[:vector [item-type ...]]` with at most 32
+positions. The runtime value carries the descriptor before its exact item
+sequence; boundary validation checks descriptor identity, length, and each
+position recursively. Projection and persistent replacement admit only a
+statically in-range literal index, and equality is validated structural
+equality rather than host object identity.
 The first sequential collection profile is an explicitly constructed,
 128-item `vector<i64>` with signed-i64 element checks, frozen Web host values,
 lazy out-of-range lookup fallback, and persistent assoc/conj updates.

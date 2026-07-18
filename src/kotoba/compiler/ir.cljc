@@ -375,6 +375,43 @@
                        functions fuel heap call-stack cap-call)
             (eval-expr none-body env functions fuel heap call-stack cap-call)))
 
+        (= op 'hetero-vector-new)
+        (let [[type & item-forms] args
+              items (mapv #(eval-expr % env functions fuel heap call-stack cap-call)
+                          item-forms)]
+          (value/bounded-typed-value! type (into [type] items)))
+
+        (= op 'hetero-vector-count)
+        (let [[type value-form] args
+              items (value/bounded-typed-value!
+                     type (eval-expr value-form env functions fuel heap call-stack cap-call))]
+          #?(:clj (long (dec (count items)))
+             :cljs (i64/->bigint (dec (count items)))))
+
+        (= op 'hetero-vector-at)
+        (let [[type value-form index] args
+              items (value/bounded-typed-value!
+                     type (eval-expr value-form env functions fuel heap call-stack cap-call))
+              host-index #?(:clj (long index) :cljs (js/Number index))]
+          (nth items (inc host-index)))
+
+        (= op 'hetero-vector-assoc)
+        (let [[type value-form index item-form] args
+              items (value/bounded-typed-value!
+                     type (eval-expr value-form env functions fuel heap call-stack cap-call))
+              item (eval-expr item-form env functions fuel heap call-stack cap-call)
+              host-index #?(:clj (long index) :cljs (js/Number index))]
+          (value/bounded-typed-value! type (assoc items (inc host-index) item)))
+
+        (= op 'hetero-vector-equal)
+        (let [[type left-form right-form] args
+              left (value/bounded-typed-value!
+                    type (eval-expr left-form env functions fuel heap call-stack cap-call))
+              right (value/bounded-typed-value!
+                     type (eval-expr right-form env functions fuel heap call-stack cap-call))]
+          #?(:clj (if (= left right) 1 0)
+             :cljs (if (= left right) i64/one i64/zero)))
+
         (= op 'vector-new)
         (value/bounded-vector-i64!
          (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args))
