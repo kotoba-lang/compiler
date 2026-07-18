@@ -175,7 +175,8 @@ function parseTypedMetadata(module) {
 
 function parseCompatibility(module) {
   const sections = WebAssembly.Module.customSections(module, COMPATIBILITY_SECTION);
-  if (sections.length === 0) return null; // legacy hand-authored fixtures only
+  if (sections.length === 0)
+    reject("missing-compatibility", "Kotoba compatibility metadata is required");
   if (sections.length !== 1)
     reject("invalid-compatibility", "compatibility section must be unique");
   const bytes = new Uint8Array(sections[0]);
