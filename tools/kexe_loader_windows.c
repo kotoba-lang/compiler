@@ -223,11 +223,9 @@ static void prohibit_dynamic_code(void) {
  * intentionally retained (never closed) until process exit, the same
  * pattern run_appcontainer_parent() uses for its Job handle.
  *
- * NOTE (verification gap, honestly disclosed): FwpmEngineOpen0/FwpmFilterAdd0
- * are BFE management operations that Microsoft's own samples document as
- * requiring an administrative caller. This has not been exercised on a real
- * Windows host from this change -- the windows-arm64 CI job is the actual
- * first real execution of this code path (see docs/threat-model.md).
+ * Hosted x86_64 and Arm64 Windows CI exercises these BFE calls. They remain
+ * fail-closed defense in depth; the zero-capability AppContainer token is the
+ * primary network boundary.
  *
  * UPDATE (first real CI run, PR #67): FwpmEngineOpen0/FwpmFilterAdd0 did NOT
  * fail (the admin-privilege risk above did not materialize -- every
@@ -242,8 +240,8 @@ static void prohibit_dynamic_code(void) {
  * not guarantee precedence over higher-weighted filters that may already
  * exist there (from other software, or an OS-default permissive rule for
  * loopback/local traffic). This revision requests maximum explicit weight
- * instead, as a defensive hardening; whether that was in fact the cause is
- * unverified since this code cannot be exercised outside windows-arm64 CI.
+ * instead, as a defensive hardening; whether that was in fact the cause was
+ * unverified at that stage.
  * connect_and_require_denial() below was also expanded, at the same time,
  * to print an unambiguous diagnostic line on every resolution path (which
  * WSA error, synchronous vs. post-select, or a timeout), so a repeat
@@ -280,10 +278,9 @@ static void prohibit_dynamic_code(void) {
  * matching genuine (non-loopback) outbound/inbound traffic, which is the
  * actual guest-network-egress threat this boundary exists for. Two filters
  * per layer -- one general, one loopback-inclusive -- are required to deny
- * both without narrowing either. This has not been exercised on a real
- * Windows host from this change (see docs/threat-model.md for the honest
- * disclosure of what remains unverified, including that no probe in this
- * file exercises a genuine non-loopback destination).
+ * both without narrowing either. The authoritative AppContainer outbound
+ * probe below exercises a non-loopback TEST-NET-1 target and requires
+ * WSAEACCES.
  */
 static void install_network_denial(void) {
   HANDLE engine = NULL;

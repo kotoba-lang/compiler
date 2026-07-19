@@ -10,7 +10,7 @@
   "Pinned identity of the reviewed Windows native loader source.
   Updated for the zero-capability AppContainer execution boundary and its
   filesystem, process, outbound-network, and listen denial probes."
-  "4abe1b0ceda8976d32e151fd1521dd3768a9d42e1b5f30462c519f0c801f5e52")
+  "9e46cc58bf10ead962bbc0b019fd800c41719b7894996c46eae35ff606c258a4")
 
 (defn loader-source-for-profile [profile]
   (case (:os profile)
