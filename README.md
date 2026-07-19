@@ -25,7 +25,7 @@ in multiple roots, compilation rejects the ambiguity instead of selecting a
 package by argument order.
 
 All compilation results carry
-`:kotoba.floating-point/ieee-754-f64-arithmetic-v1`; restricted JavaScript artifacts
+`:kotoba.floating-point/ieee-754-f64-conversions-v1`; restricted JavaScript artifacts
 seal the equivalent policy. Phase 1 admits scalar `:f64`, decimal/exponent
 literals, exact bit conversion, add/subtract/multiply/divide, negate/absolute,
 ordered comparisons, and unordered detection on Kotoba Script and Wasm targets.
@@ -36,6 +36,12 @@ observable and canonicalize to `0x7ff8000000000000`, including arbitrary NaN
 payloads introduced through `f64-from-bits`. Implicit coercion, checked numeric
 conversion, nested f64 values, fused operations, remainder, square root,
 transcendentals, and native or CLJS lowering remain rejected.
+
+Conversions are explicit: `i64-to-f64-checked` rejects inexact integers,
+whereas `i64-to-f64-rounded` names the IEEE rounding request.
+`f64-to-i64-checked` accepts only finite integral in-range values;
+`f64-to-i64-truncating` names truncation toward zero while still rejecting
+NaN, infinities, and signed-i64 overflow.
 
 ## Relationship to `kotoba-lang/kotoba` and `kotoba-lang/kotoba-lang`
 

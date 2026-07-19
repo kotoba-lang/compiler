@@ -49,3 +49,13 @@ It adds explicitly typed `f64-add`, `f64-sub`, `f64-mul`, `f64-div`,
 rounding, division by zero, signed zero, infinities, ordered/unordered NaN
 behavior, and canonical NaN observation. This does not authorize implicit
 conversion, fused operations, remainder, square root, or transcendentals.
+
+## Phase 3a extension
+
+The policy advances to `:kotoba.floating-point/ieee-754-f64-conversions-v1`.
+Conversion names encode whether loss is forbidden or deliberately requested:
+`i64-to-f64-checked`, `i64-to-f64-rounded`, `f64-to-i64-checked`, and
+`f64-to-i64-truncating`. Checked conversion rejects any loss of information.
+The explicitly rounded variants use IEEE i64-to-binary64 rounding or
+truncation toward zero, but never accept NaN, infinity, or an out-of-range i64
+result.

@@ -40,6 +40,54 @@
              (.setBigInt64 view 0 bits true)
              (.getFloat64 view 0 true))))
 
+(defn i64-to-f64-rounded [value]
+  #?(:clj (do
+            (when-not (and (integer? value) (<= Long/MIN_VALUE value Long/MAX_VALUE))
+              (throw (ex-info "value is not a signed i64" {:phase :value})))
+            (double value))
+     :cljs (do
+             (when-not (and (i64/bigint-value? value) (i64/in-i64-range? value))
+               (throw (ex-info "value is not a signed i64" {:phase :value})))
+             (js/Number value))))
+
+(defn i64-to-f64-checked [value]
+  (let [result (i64-to-f64-rounded value)
+        exact? #?(:clj (= (bigint value)
+                          (bigint (.toBigIntegerExact (java.math.BigDecimal/valueOf result))))
+                  :cljs (= value (js/BigInt result)))]
+    (when-not exact?
+      (throw (ex-info "i64 is not exactly representable as f64"
+                      {:phase :value :conversion :i64-to-f64-checked})))
+    result))
+
+(defn- checked-i64-result [value conversion]
+  (when-not #?(:clj (<= (bigint Long/MIN_VALUE) value (bigint Long/MAX_VALUE))
+               :cljs (i64/in-i64-range? value))
+    (throw (ex-info "f64 conversion is outside signed i64 range"
+                    {:phase :value :conversion conversion})))
+  #?(:clj (long value) :cljs value))
+
+(defn f64-to-i64-checked [value]
+  (when-not (and (f64-value? value)
+                 #?(:clj (Double/isFinite ^double value) :cljs (js/Number.isFinite value))
+                 #?(:clj (= value (Math/rint ^double value)) :cljs (js/Number.isInteger value)))
+    (throw (ex-info "f64 is not a finite integral value"
+                    {:phase :value :conversion :f64-to-i64-checked})))
+  (checked-i64-result
+   #?(:clj (bigint (.toBigIntegerExact (java.math.BigDecimal/valueOf value)))
+      :cljs (js/BigInt value))
+   :f64-to-i64-checked))
+
+(defn f64-to-i64-truncating [value]
+  (when-not (and (f64-value? value)
+                 #?(:clj (Double/isFinite ^double value) :cljs (js/Number.isFinite value)))
+    (throw (ex-info "f64 is not finite"
+                    {:phase :value :conversion :f64-to-i64-truncating})))
+  (checked-i64-result
+   #?(:clj (bigint (.toBigInteger (java.math.BigDecimal/valueOf value)))
+      :cljs (js/BigInt (js/Math.trunc value)))
+   :f64-to-i64-truncating))
+
 (defn utf8-byte-count!
   "Return the exact UTF-8 byte count without normalizing or replacing malformed
   UTF-16. Unpaired surrogates fail closed on both JVM and JavaScript hosts."

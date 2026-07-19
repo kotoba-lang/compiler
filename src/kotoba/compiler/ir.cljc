@@ -28,6 +28,7 @@
 (def non-string-typed-ops
   '#{f64-to-bits f64-from-bits f64-add f64-sub f64-mul f64-div f64-neg f64-abs
      f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered
+     i64-to-f64-checked i64-to-f64-rounded f64-to-i64-checked f64-to-i64-truncating
      map-new map-get map-assoc
      bool-not option-some option-none option-some? option-value
      result-ok result-err result-ok? result-value result-error
@@ -65,7 +66,9 @@
                (some #(and (seq? %)
                            (contains? '#{f64-to-bits f64-from-bits
                                          f64-add f64-sub f64-mul f64-div f64-neg f64-abs
-                                         f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered}
+                                         f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered
+                                         i64-to-f64-checked i64-to-f64-rounded
+                                         f64-to-i64-checked f64-to-i64-truncating}
                                       (first %)))
                      (tree-seq coll? seq body))))
          (:functions program))))
@@ -363,6 +366,22 @@
 
         (= op 'f64-from-bits)
         (value/i64-bits-to-f64
+         (eval-expr (first args) env functions fuel heap call-stack cap-call))
+
+        (= op 'i64-to-f64-checked)
+        (value/i64-to-f64-checked
+         (eval-expr (first args) env functions fuel heap call-stack cap-call))
+
+        (= op 'i64-to-f64-rounded)
+        (value/i64-to-f64-rounded
+         (eval-expr (first args) env functions fuel heap call-stack cap-call))
+
+        (= op 'f64-to-i64-checked)
+        (value/f64-to-i64-checked
+         (eval-expr (first args) env functions fuel heap call-stack cap-call))
+
+        (= op 'f64-to-i64-truncating)
+        (value/f64-to-i64-truncating
          (eval-expr (first args) env functions fuel heap call-stack cap-call))
 
         (contains? '#{f64-add f64-sub f64-mul f64-div} op)

@@ -181,6 +181,8 @@
                       typed-map-count} op) :i64
         (= op 'f64-to-bits) :i64
         (= op 'f64-from-bits) :f64
+        (contains? '#{i64-to-f64-checked i64-to-f64-rounded} op) :f64
+        (contains? '#{f64-to-i64-checked f64-to-i64-truncating} op) :i64
         (contains? '#{f64-add f64-sub f64-mul f64-div f64-neg f64-abs} op) :f64
         (contains? '#{f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered} op) :bool
         (contains? '#{= < > <= >= hetero-vector-equal typed-set-equal
