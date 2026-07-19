@@ -1,7 +1,22 @@
-(ns kotoba.compiler.backend.aarch64)
+(ns kotoba.compiler.backend.aarch64
+  ;; See `kotoba.compiler.backend.wasm`'s ns form for why the whole
+  ;; `:require` clause is behind the reader-conditional.
+  #?(:cljs (:require [kotoba.compiler.cljs-i64 :as i64])))
 
+;; `u32le` only ever encodes a fully-constructed 32-bit ARM instruction
+;; WORD (opcode bits + small operand fields, always in [0, 2^32)) -- never
+;; an arbitrary `.kotoba` i64 VALUE -- so it stays plain JS-number-based on
+;; both runtimes, same reasoning `kotoba.compiler.backend.wasm`'s `uleb`
+;; comment gives (and `kotoba.compiler.backend.x86-64`'s `le32` mirrors):
+;; `(long word)` was already a no-op cast on :clj for values in this range;
+;; dropped for :cljs since cljs has no `long`. A JS int32 bitwise op on a
+;; word whose top bit is set (e.g. `0xd2800000`, which exceeds signed
+;; 32-bit max) still produces the byte-identical bit pattern
+;; `unsigned-bit-shift-right`+`bit-and 0xff` extracts on the JVM --
+;; interpreting the SAME 32 bits as negative vs. unsigned only matters for
+;; display, not for shift/and.
 (defn- u32le [word]
-  (mapv #(bit-and (unsigned-bit-shift-right (long word) (* 8 %)) 0xff) (range 4)))
+  (mapv #(bit-and (unsigned-bit-shift-right #?(:clj (long word) :cljs word) (* 8 %)) 0xff) (range 4)))
 (defn- insn [word] (u32le word))
 (defn- mov-reg [dst src] (insn (bit-or 0xaa0003e0 (bit-shift-left src 16) dst)))
 (defn- movz [rd imm shift]
@@ -10,17 +25,48 @@
 (defn- movk [rd imm shift]
   (insn (bit-or 0xf2800000 (bit-shift-left (quot shift 16) 21)
                 (bit-shift-left (bit-and imm 0xffff) 5) rd)))
+
+;; `value` DOES carry an arbitrary `.kotoba` i64 literal here (both from
+;; `emit-expr`'s `(integer? form)` case via `load-constant`, AND from
+;; `signed-division`'s `Long/MIN_VALUE` special case below) -- same
+;; highest-risk class of port `kotoba.compiler.backend.x86-64/le64`'s own
+;; comment documents. `unsigned-bit-shift-right value 32`/`48` on the JVM
+;; is genuine 64-bit-wide unsigned shifting; a naive cljs port using plain
+;; `>>>` would silently be a no-op or wrap mod-32 (JS bitwise shift amounts
+;; are taken mod 32), extracting the WRONG 16-bit chunk into `movk` and
+;; corrupting the loaded constant. The `:cljs` branch reduces VALUE to its
+;; unsigned 64-bit bit-pattern once (`BigInt.asUintN`), then extracts each
+;; 16-bit chunk via repeated division by a small, always-int32-safe bigint
+;; constant (65536) -- NOT `i64/ashr`, whose own divisor computation via a
+;; plain `bit-shift-left` silently wraps for shift>=32 (confirmed live,
+;; same bug `le64`'s own comment documents at length; see there) --
+;; converting to a plain JS number only for the final `imm` argument
+;; `movz`/`movk` receive; their own bit-or/bit-shift-left construction of
+;; the 32-bit instruction word is then exactly `u32le`'s already-safe
+;; 32-bit-bounded case.
 (defn- load-constant-reg [rd value]
-  (vec (concat (movz rd value 0) (movk rd (unsigned-bit-shift-right value 16) 16)
-               (movk rd (unsigned-bit-shift-right value 32) 32)
-               (movk rd (unsigned-bit-shift-right value 48) 48))))
+  #?(:clj
+     (vec (concat (movz rd value 0) (movk rd (unsigned-bit-shift-right value 16) 16)
+                  (movk rd (unsigned-bit-shift-right value 32) 32)
+                  (movk rd (unsigned-bit-shift-right value 48) 48)))
+     :cljs
+     (let [u (js/BigInt.asUintN 64 (i64/->bigint value))
+           base (js/BigInt 65536)
+           c0 (js/Number (bit-and u (js/BigInt 0xffff)))
+           r1 (/ u base)
+           c1 (js/Number (bit-and r1 (js/BigInt 0xffff)))
+           r2 (/ r1 base)
+           c2 (js/Number (bit-and r2 (js/BigInt 0xffff)))
+           r3 (/ r2 base)
+           c3 (js/Number (bit-and r3 (js/BigInt 0xffff)))]
+       (vec (concat (movz rd c0 0) (movk rd c1 16) (movk rd c2 32) (movk rd c3 48))))))
 (defn- load-constant [value] (load-constant-reg 0 value))
 (defn- b-ne [byte-offset]
   (insn (bit-or 0x54000001 (bit-shift-left (bit-and (quot byte-offset 4) 0x7ffff) 5))))
 
 (def ^:private signed-division
   (concat (insn 0xb5000041) (insn 0xd4200000)
-          (load-constant-reg 2 Long/MIN_VALUE) (insn 0xeb02001f) (b-ne 32)
+          (load-constant-reg 2 #?(:clj Long/MIN_VALUE :cljs i64/min-i64)) (insn 0xeb02001f) (b-ne 32)
           (load-constant-reg 2 -1) (insn 0xeb02003f) (b-ne 8)
           (insn 0xd4200000) (insn 0x9ac10c00)))
 
@@ -187,8 +233,14 @@
         (branch 8)                           ; b skip
         (insn 0xd4200000))))                 ; trap: brk ; skip:
 
+;; Same `cap-id`-is-a-cljs-`bigint` issue `kotoba.compiler.backend.x86-64`'s
+;; `emit-cap-call` documents at length -- coerced to a plain JS number once
+;; up front (always safely in [0,255]) rather than propagating bigint
+;; through `quot`/`mod`/`*`, which throw when mixed with a plain-number
+;; operand like the literal `64` here.
 (defn- emit-cap-call [cap-id value env depth]
-  (let [word-offset (+ 16 (* 8 (quot cap-id 64)))
+  (let [cap-id #?(:clj cap-id :cljs (js/Number cap-id))
+        word-offset (+ 16 (* 8 (quot cap-id 64)))
         bit-index (mod cap-id 64)]
     (vec (concat
           (ldr-context 16 word-offset) (tbnz 16 bit-index 8) (insn 0xd4200000)
@@ -236,7 +288,11 @@
 
 (defn emit-expr [form env depth]
   (cond
-    (integer? form) (load-constant form)
+    ;; `integer?` alone does not reliably recognize a cljs `bigint` (see
+    ;; `kotoba.compiler.cljs-i64`'s own namespace docstring) -- mirrors
+    ;; `kotoba.compiler.backend.wasm`'s identical dispatch guard.
+    #?(:clj (integer? form) :cljs (or (i64/bigint-value? form) (integer? form)))
+    (load-constant form)
     (symbol? form)
     (let [binding (get env form)]
       (if (map? binding)

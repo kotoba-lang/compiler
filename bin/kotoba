@@ -31,11 +31,18 @@
   (.error js/console message)
   (.exit js/process code))
 
-;; The three wasm32 target names `kotoba.compiler.nbb.cli` covers (mirrors
-;; its own `targets` table). Any other `--target` value, or any subcommand
-;; besides `compile`/`check`, falls through to the JVM `clojure -M:run`
-;; path below unchanged.
-(def ^:private nbb-native-targets #{"wasm32" "wasm32-browser" "wasm32-wasi" nil})
+;; The wasm32 and ordinary (non-aiueos) native target names
+;; `kotoba.compiler.nbb.cli` covers (mirrors its own `targets` table).
+;; `x86_64-aiueos-*`/`aarch64-aiueos-*` (ELF64/PE32+ firmware/kernel
+;; packaging) stay JVM-only -- see that namespace's own comment for why.
+;; Any other `--target` value, or any subcommand besides `compile`/
+;; `check`, falls through to the JVM `clojure -M:run` path below
+;; unchanged.
+(def ^:private nbb-native-targets
+  #{"wasm32" "wasm32-browser" "wasm32-wasi" nil
+    "x86_64" "x86_64-linux" "x86_64-macos" "x86_64-windows"
+    "aarch64" "aarch64-linux" "aarch64-macos" "aarch64-windows"
+    "aarch64-android" "aarch64-ios"})
 
 (defn- option [args flag] (second (drop-while #(not= flag %) args)))
 
