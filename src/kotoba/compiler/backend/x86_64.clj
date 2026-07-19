@@ -99,18 +99,27 @@
           (when align? [0x48 0x83 0xc4 0x08])
           [0x41 0x59]))))                         ; pop r9
 
+(def ^:private heap-call-offsets
+  {'pair 56 'pair-first 64 'pair-second 72
+   'kgraph-assert! 80 'kgraph-get 88 'kgraph-count 96 'kgraph-entity-at 104})
+
 (defn- emit-heap-call [op args env {:keys [temp-depth] :as ctx}]
   (let [ctx (assoc ctx :tail? false)
-        offset ({'pair 56 'pair-first 64 'pair-second 72} op)
-        pair? (= op 'pair)
-        values (if pair?
-                 (concat (emit-expr (first args) env ctx) [0x50]
-                         (emit-expr (second args) env (update ctx :temp-depth inc))
-                         [0x48 0x89 0xc2 0x5e])   ; rdx=right; pop rsi=left
-                 (concat (emit-expr (first args) env ctx)
-                         [0x48 0x89 0xc6]))        ; rsi=handle
+        offset (get heap-call-offsets op)
+        argc (count args)
+        ;; Evaluate each arg left-to-right onto the stack (mirrors emit-call's
+        ;; push shape), then pop them off in reverse into rsi/rdx/rcx/r8 (skip
+        ;; index 0 = rdi, reserved below for the context pointer moved from
+        ;; r9) -- net stack effect is zero, so `align?` still reads the
+        ;; original (pre-call) temp-depth exactly like the pair-only version.
+        values (loop [remaining args depth temp-depth out []]
+                 (if-let [arg (first remaining)]
+                   (recur (next remaining) (inc depth)
+                          (into out (concat (emit-expr arg env (assoc ctx :temp-depth depth)) [0x50])))
+                   out))
+        pops (mapcat #(nth arg-pops (inc %)) (reverse (range argc)))
         align? (even? temp-depth)]
-    (vec (concat values [0x41 0x51] (when align? [0x50])
+    (vec (concat values pops [0x41 0x51] (when align? [0x50])
                  [0x4c 0x89 0xcf 0x41 0xff 0x51 offset]
                  (when align? [0x48 0x83 0xc4 0x08]) [0x41 0x59]))))
 
@@ -188,7 +197,8 @@
         (= op 'cap-call)
         (emit-cap-call (first args) (second args) env ctx)
 
-        (contains? '#{pair pair-first pair-second} op)
+        (contains? '#{pair pair-first pair-second
+                      kgraph-assert! kgraph-get kgraph-count kgraph-entity-at} op)
         (emit-heap-call op args env ctx)
 
         (= op 'kernel-load-u8)
