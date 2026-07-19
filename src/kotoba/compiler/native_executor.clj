@@ -598,7 +598,11 @@
                          (= status :ok) (assoc :result (:result report))
                          trap (assoc :trap trap))]
           (when-not (valid-supervisor-report? report (:exit process))
-            (throw (ex-info "malformed native supervisor evidence"
+            (throw (ex-info (str "malformed native supervisor evidence"
+                                 " (exit=" (:exit process)
+                                 ", timed-out=" (:timed-out? process)
+                                 ", output-exceeded=" (:output-exceeded? process)
+                                 ", report-status=" status ")")
                             {:phase :execute :exit (:exit process)
                              :stdout (:stdout process) :stderr (:stderr process)})))
           {:artifact artifact :signer signer :target (:target artifact) :entry entry
