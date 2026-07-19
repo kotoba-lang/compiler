@@ -1,6 +1,7 @@
 (ns kotoba.compiler.admission
   (:require [clojure.set :as set]
             [kotoba.security.abac :as abac]
+            [kotoba.security.crypto-policy :as crypto]
             [kotoba.security.information-flow :as flow]
             ;; See `kotoba.compiler.ir`'s ns form for why a conditional
             ;; require needs to be the WHOLE clause, not an item inside it,
@@ -22,7 +23,8 @@
   throws before any backend is selected."
   [hir policy]
   (when-not (and (map? policy)
-                 (every? #{:allow :abac :attributes :information-flow} (keys policy))
+                 (every? #{:allow :abac :attributes :information-flow
+                           :crypto-required? :crypto-policy :crypto-envelope} (keys policy))
                  (or (not (contains? policy :allow)) (set? (:allow policy))))
     (throw (ex-info "malformed capability policy" {:phase :admission})))
   (let [required (set (:effects hir))
@@ -40,6 +42,10 @@
                                               :capabilities required}
                                              (:action supplied-attributes))))
         abac-result (abac/evaluate attributes (:abac policy))
+        crypto-required? (:crypto-required? policy)
+        crypto-result (when (or crypto-required? (:crypto-envelope policy))
+                        (crypto/check-production-envelope
+                         (:crypto-policy policy) (:crypto-envelope policy)))
         flow-policy (:information-flow policy)
         flow-result
         (when flow-policy
@@ -63,9 +69,13 @@
                       {:phase :admission
                        :information-flow/violations
                        (:information-flow/violations flow-result)})))
+    (when (and crypto-required? (not (:valid? crypto-result)))
+      (throw (ex-info "hybrid PQC policy denies compilation"
+                      {:phase :admission :crypto crypto-result})))
     {:admitted? true
      :required required
      :minimal-policy {:allow required}
      :unused-grants unused
      :abac abac-result
-     :information-flow flow-result}))
+     :information-flow flow-result
+     :crypto crypto-result}))
