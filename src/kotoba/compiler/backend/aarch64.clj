@@ -29,19 +29,6 @@
   (concat (insn 0xf94004f0) (insn 0xb5000050) (insn 0xd4200000)
           (insn 0xd1000610) (insn 0xf90004f0)))
 
-(defn- normalize-expr [form env]
-  (cond
-    (integer? form) form
-    (symbol? form) (get env form form)
-    :else (let [[op & args] form]
-            (if (= op 'let)
-              (let [[bindings body] args
-                    env' (reduce (fn [e [name value]]
-                                   (assoc e name (normalize-expr value e)))
-                                 env (partition 2 bindings))]
-                (normalize-expr body env'))
-              (apply list op (map #(normalize-expr % env) args))))))
-
 (defn- token-size [token] (if (and (map? token) (:call token)) 4 1))
 (defn- code-size [tokens] (reduce + (map token-size tokens)))
 (defn- sub-sp [amount] (insn (bit-or 0xd10003ff (bit-shift-left amount 10))))
@@ -60,16 +47,31 @@
 (defn- cbz-x0 [byte-offset]
   (insn (bit-or 0xb4000000 (bit-shift-left (bit-and (quot byte-offset 4) 0x7ffff) 5))))
 
+;; A `let`-bound value's own 16-byte-aligned stack slot, addressed relative
+;; to the CURRENT depth (16-byte slots pushed since function entry) rather
+;; than a fixed offset. Unlike params (fixed callee-saved registers x19+i,
+;; immune to stack movement), a let value can be read after further nested
+;; pushes (more arithmetic temporaries, nested lets), so its offset from the
+;; live stack pointer must be recomputed from how much *more* has been
+;; pushed since it was stored: `current-depth` slots are live now, the value
+;; was stored when only `let-depth` were, so it sits
+;; `(current-depth - let-depth - 1)` slots above the current stack pointer.
+(defn- load-let [reg let-depth current-depth]
+  (ldr-sp reg (* 16 (- current-depth let-depth 1))))
+(defn- pop-n [n] (when (pos? n) (add-sp (* 16 n))))
+
 (declare emit-expr)
-(defn- emit-binary [left right operation env]
-  (vec (concat (emit-expr left env) (save-x0) (emit-expr right env)
+
+(defn- emit-binary [left right operation env depth]
+  (vec (concat (emit-expr left env depth) (save-x0) (emit-expr right env (inc depth))
                (restore-binary) operation)))
 
-(defn- emit-call [op args env]
+(defn- emit-call [op args env depth]
   (when (> (count args) 5)
     (throw (ex-info "AArch64 fuel ABI supports at most five arguments"
                     {:phase :aarch64 :function op :arity (count args)})))
-  (let [saved (mapcat #(concat (emit-expr % env) (save-x0)) args)
+  (let [saved (mapcat (fn [i a] (concat (emit-expr a env (+ depth i)) (save-x0)))
+                      (range) args)
         restored (mapcat #(restore-to %) (reverse (range (count args))))]
     (vec (concat saved restored [{:call op}]))))
 
@@ -114,12 +116,12 @@
 ;; (`[x1, x3]`) leaves the ESR instruction-syndrome invalid (ISV=0) for the MMIO
 ;; that a device store/load triggers, so KVM cannot emulate it (it injects a
 ;; data abort instead of exiting) -- base-register addressing keeps ISV=1.
-(defn- emit-kernel-store-u8 [[base length index value] maximum env]
+(defn- emit-kernel-store-u8 [[base length index value] maximum env depth]
   (vec (concat
-        (emit-expr base env) (save-x0)
-        (emit-expr length env) (save-x0)
-        (emit-expr index env) (save-x0)
-        (emit-expr value env)                ; x0 = value (also the result)
+        (emit-expr base env depth) (save-x0)
+        (emit-expr length env (+ depth 1)) (save-x0)
+        (emit-expr index env (+ depth 2)) (save-x0)
+        (emit-expr value env (+ depth 3))    ; x0 = value (also the result)
         (ldr-sp 3 0) (add-sp 16)             ; x3 = index
         (ldr-sp 2 0) (add-sp 16)             ; x2 = length
         (ldr-sp 1 0) (add-sp 16)             ; x1 = base
@@ -129,11 +131,11 @@
         (branch 8)                           ; b skip
         (insn 0xd4200000))))                 ; trap: brk ; skip:
 
-(defn- emit-kernel-load-u8 [[base length index] maximum env]
+(defn- emit-kernel-load-u8 [[base length index] maximum env depth]
   (vec (concat
-        (emit-expr base env) (save-x0)
-        (emit-expr length env) (save-x0)
-        (emit-expr index env)                ; x0 = index
+        (emit-expr base env depth) (save-x0)
+        (emit-expr length env (+ depth 1)) (save-x0)
+        (emit-expr index env (+ depth 2))    ; x0 = index
         (mov-reg 3 0)                        ; x3 = index
         (ldr-sp 2 0) (add-sp 16)             ; x2 = length
         (ldr-sp 1 0) (add-sp 16)             ; x1 = base
@@ -156,12 +158,12 @@
           (insn 0xeb0200bf)          ; cmp x5, x2       (index+4 vs length)
           (b-cond cond-hi 16)))      ; b.hi trap  (index+4 > length)
 
-(defn- emit-kernel-store-u32 [[base length index value] maximum env]
+(defn- emit-kernel-store-u32 [[base length index value] maximum env depth]
   (vec (concat
-        (emit-expr base env) (save-x0)
-        (emit-expr length env) (save-x0)
-        (emit-expr index env) (save-x0)
-        (emit-expr value env)                ; x0 = value (also the result)
+        (emit-expr base env depth) (save-x0)
+        (emit-expr length env (+ depth 1)) (save-x0)
+        (emit-expr index env (+ depth 2)) (save-x0)
+        (emit-expr value env (+ depth 3))    ; x0 = value (also the result)
         (ldr-sp 3 0) (add-sp 16)             ; x3 = index
         (ldr-sp 2 0) (add-sp 16)             ; x2 = length
         (ldr-sp 1 0) (add-sp 16)             ; x1 = base
@@ -171,11 +173,11 @@
         (branch 8)                           ; b skip
         (insn 0xd4200000))))                 ; trap: brk ; skip:
 
-(defn- emit-kernel-load-u32 [[base length index] maximum env]
+(defn- emit-kernel-load-u32 [[base length index] maximum env depth]
   (vec (concat
-        (emit-expr base env) (save-x0)
-        (emit-expr length env) (save-x0)
-        (emit-expr index env)                ; x0 = index
+        (emit-expr base env depth) (save-x0)
+        (emit-expr length env (+ depth 1)) (save-x0)
+        (emit-expr index env (+ depth 2))    ; x0 = index
         (mov-reg 3 0)                        ; x3 = index
         (ldr-sp 2 0) (add-sp 16)             ; x2 = length
         (ldr-sp 1 0) (add-sp 16)             ; x1 = base
@@ -185,12 +187,12 @@
         (branch 8)                           ; b skip
         (insn 0xd4200000))))                 ; trap: brk ; skip:
 
-(defn- emit-cap-call [cap-id value env]
+(defn- emit-cap-call [cap-id value env depth]
   (let [word-offset (+ 16 (* 8 (quot cap-id 64)))
         bit-index (mod cap-id 64)]
     (vec (concat
           (ldr-context 16 word-offset) (tbnz 16 bit-index 8) (insn 0xd4200000)
-          (emit-expr value env)
+          (emit-expr value env depth)
           (mov-reg 2 0)                           ; x2=value
           (sub-sp 16) (str-sp 7 0)                ; preserve context
           (load-constant-reg 1 cap-id) (mov-reg 0 7)
@@ -201,64 +203,90 @@
   {'pair 56 'pair-first 64 'pair-second 72
    'kgraph-assert! 80 'kgraph-get 88 'kgraph-count 96 'kgraph-entity-at 104})
 
-(defn- emit-heap-call [op args env]
+(defn- emit-heap-call [op args env depth]
   (let [offset (get heap-call-offsets op)
         argc (count args)
         ;; Evaluate each arg left-to-right onto the stack (mirrors emit-call's
         ;; save/restore shape), then pop them off in reverse into x1..x(argc)
         ;; -- x0 is reserved for the context pointer moved in from x7 below.
-        saved (mapcat (fn [a] (concat (emit-expr a env) (save-x0))) args)
+        saved (mapcat (fn [i a] (concat (emit-expr a env (+ depth i)) (save-x0)))
+                      (range) args)
         restored (mapcat (fn [i] (restore-to (inc i))) (reverse (range argc)))]
     (vec (concat saved restored
                  (sub-sp 16) (str-sp 7 0)
                  (mov-reg 0 7) (ldr-context 16 offset) (insn 0xd63f0200)
                  (ldr-sp 7 0) (add-sp 16)))))
 
-(defn emit-expr [form env]
+(defn- emit-let [bindings body env depth]
+  ;; Genuinely sequential: each binding's value is evaluated exactly once, in
+  ;; source order, and pushed onto its own 16-byte stack slot before the next
+  ;; binding (or the body) is emitted -- unlike a compile-time substitution
+  ;; pass, an unreferenced or repeatedly-referenced side-effecting binding
+  ;; (kgraph-assert!, cap-call, pair, ...) still runs exactly once, and a
+  ;; binding referenced from inside an `if` branch still runs unconditionally
+  ;; before the branch is chosen (ADR-2607198300 follow-up).
+  (let [pairs (partition 2 bindings)]
+    (loop [remaining pairs d depth env env code []]
+      (if-let [[name value] (first remaining)]
+        (recur (next remaining) (inc d)
+               (assoc env name {:let-depth d})
+               (concat code (emit-expr value env d) (save-x0)))
+        (let [body-code (emit-expr body env d)]
+          (vec (concat code body-code (pop-n (count pairs)))))))))
+
+(defn emit-expr [form env depth]
   (cond
     (integer? form) (load-constant form)
-    (symbol? form) (mov-reg 0 (+ 19 (get env form)))
+    (symbol? form)
+    (let [binding (get env form)]
+      (if (map? binding)
+        (load-let 0 (:let-depth binding) depth)
+        (mov-reg 0 (+ 19 binding))))
     :else
     (let [[op & args] form]
       (cond
         (= op 'if)
-        (let [[test then else] args test-code (emit-expr test env)
-              then-code (emit-expr then env) else-code (emit-expr else env)]
+        (let [[test then else] args test-code (emit-expr test env depth)
+              then-code (emit-expr then env depth) else-code (emit-expr else env depth)]
           (vec (concat test-code (cbz-x0 (+ 8 (code-size then-code)))
                        then-code (branch (+ 4 (code-size else-code))) else-code)))
-        ;; `do`: emit each subexpression in order; each leaves its result in x0,
-        ;; the next overwrites it, so only the last value survives -- but every
-        ;; subexpression's side effects (kernel MMIO) execute exactly once, in
-        ;; order. This is the ordered-sequencing primitive `let` can't give
-        ;; (let inlines, so a side-effecting binding used 0 or >1 times drops or
-        ;; duplicates its effect).
+        ;; `do`: emit each subexpression in order at the SAME depth (each is
+        ;; self-contained -- net zero stack effect -- so no push/pop needed
+        ;; between them); each leaves its result in x0, the next overwrites
+        ;; it, so only the last value survives, but every subexpression's
+        ;; side effects execute exactly once, in order.
         (= op 'do)
-        (vec (mapcat #(emit-expr % env) args))
+        (vec (mapcat #(emit-expr % env depth) args))
+        (= op 'let)
+        (emit-let (first args) (second args) env depth)
         (= op 'cap-call)
-        (emit-cap-call (first args) (second args) env)
+        (emit-cap-call (first args) (second args) env depth)
         (contains? '#{pair pair-first pair-second
                       kgraph-assert! kgraph-get kgraph-count kgraph-entity-at} op)
-        (emit-heap-call op args env)
+        (emit-heap-call op args env depth)
         (and (= op '-) (= 1 (count args)))
-        (vec (concat (emit-expr (first args) env) (insn 0xcb0003e0)))
+        (vec (concat (emit-expr (first args) env depth) (insn 0xcb0003e0)))
         (contains? '#{+ - * quot} op)
-        (reduce (fn [left-code right]
-                  (vec (concat left-code (save-x0) (emit-expr right env) (restore-binary)
-                               (case op + (insn 0x8b010000) - (insn 0xcb010000)
-                                      * (insn 0x9b017c00) quot signed-division))))
-                (emit-expr (first args) env) (rest args))
+        (loop [remaining (rest args) left-code (emit-expr (first args) env depth)]
+          (if-let [right (first remaining)]
+            (recur (next remaining)
+                   (vec (concat left-code (save-x0) (emit-expr right env (inc depth))
+                                (restore-binary)
+                                (case op + (insn 0x8b010000) - (insn 0xcb010000)
+                                       * (insn 0x9b017c00) quot signed-division))))
+            left-code))
         (contains? '#{= < > <= >=} op)
         (let [[left right] args cset ({'= 0x9a9f17e0 '< 0x9a9fa7e0 '> 0x9a9fd7e0
                                       '<= 0x9a9fc7e0 '>= 0x9a9fb7e0} op)]
-          (emit-binary left right (concat (insn 0xeb01001f) (insn cset)) env))
-        (= op 'kernel-store-u8) (emit-kernel-store-u8 args 512 env)
-        (= op 'kernel-store-u8-4k) (emit-kernel-store-u8 args 4096 env)
-        (= op 'kernel-load-u8) (emit-kernel-load-u8 args 512 env)
-        (= op 'kernel-load-u8-4k) (emit-kernel-load-u8 args 4096 env)
-        (= op 'kernel-load-u8-16k) (emit-kernel-load-u8 args 16384 env)
-        (= op 'kernel-store-u32) (emit-kernel-store-u32 args 512 env)
-        (= op 'kernel-load-u32) (emit-kernel-load-u32 args 512 env)
-        :else (emit-call op args env)))))
+          (emit-binary left right (concat (insn 0xeb01001f) (insn cset)) env depth))
+        (= op 'kernel-store-u8) (emit-kernel-store-u8 args 512 env depth)
+        (= op 'kernel-store-u8-4k) (emit-kernel-store-u8 args 4096 env depth)
+        (= op 'kernel-load-u8) (emit-kernel-load-u8 args 512 env depth)
+        (= op 'kernel-load-u8-4k) (emit-kernel-load-u8 args 4096 env depth)
+        (= op 'kernel-load-u8-16k) (emit-kernel-load-u8 args 16384 env depth)
+        (= op 'kernel-store-u32) (emit-kernel-store-u32 args 512 env depth)
+        (= op 'kernel-load-u32) (emit-kernel-load-u32 args 512 env depth)
+        :else (emit-call op args env depth)))))
 
 (defn- emit-function [{:keys [name params body]}]
   (when (> (count params) 5)
@@ -272,7 +300,7 @@
                         (concat (mapcat (fn [i] (ldr-sp (+ 19 i) (* 8 i))) (range n))
                                 (add-sp register-frame)))
         params-to-saved (mapcat (fn [i] (mov-reg (+ 19 i) i)) (range n))
-        expression (emit-expr (normalize-expr body {}) (zipmap params (range)))]
+        expression (emit-expr body (zipmap params (range)) 0)]
     (vec (concat fuel-charge
                  (insn 0xa9bf7bfd) (insn 0x910003fd) ; stp fp,lr,[sp,#-16]!; mov fp,sp
                  save-frame params-to-saved expression restore-frame
