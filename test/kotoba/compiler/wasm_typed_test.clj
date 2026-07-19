@@ -57,6 +57,16 @@
                     "if(x['and-bits'](-1n,0x5555555555555555n)!==0x5555555555555555n)process.exit(3);"))]
     (is (zero? (:exit probe)) (:err probe))))
 
+(deftest oversized-typed-local-index-set-fails-before-invalid-wasm-emission
+  (let [bindings (str/join " " (mapcat (fn [index]
+                                           [(str "x" index) (str (double index))])
+                                         (range 129)))
+        source (str "(defn main [] :f64 (let [" bindings "] x128))")]
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo
+         #"typed Wasm local index exceeds the sealed one-byte profile"
+         (compiler/compile-source source :wasm32-browser-kotoba-v1)))))
+
 (deftest compatibility-is-sealed-and-host-admitted-before-instantiation
   (let [compiled (compiler/compile-source "(defn main [] 42)" :wasm32-browser-kotoba-v1)
         encoded (.encodeToString (java.util.Base64/getEncoder) ^bytes (:bytes compiled))
