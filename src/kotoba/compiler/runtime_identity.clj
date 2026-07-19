@@ -4,11 +4,12 @@
 
 (def loader-source-sha256
   "Pinned identity of the reviewed POSIX native loader source.
-  Updated for ADR-2607198300: adds the kgraph-assert!/kgraph-get/
-  kgraph-count/kgraph-entity-at all-integer EAVT datom store
-  (checked_kgraph_* functions and kexe_context_v2/kexe_shared_v2 fields in
-  tools/kexe_loader.c) alongside the existing pair-arena/cap-call surface."
-  "9d9c0641e3e86b5ea2363e38ef9e338935198eb78840b18c475136e367d0b233")
+  Updated for ADR-2607198300 follow-up: adds string_equal/string_concat
+  (checked_string_equal/checked_string_concat) plus a bounded 65536-byte
+  string_pool and the read-only code_base/code_length fields they resolve
+  a string handle's (offset, length) against, alongside the existing
+  pair-arena/kgraph-datom-arena/cap-call surface."
+  "dc102247f94f2c2d117e1e243ca6eeace398593097ff81765cae7915eb940047")
 
 (def windows-loader-source-sha256
   "Pinned identity of the reviewed Windows native loader source.

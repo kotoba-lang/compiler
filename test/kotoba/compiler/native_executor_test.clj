@@ -417,3 +417,46 @@
          zero-temp-depth guard) recursion, well within the 256-call fuel budget")
     (is (= {:capacity 4096 :used 51} (get-in result [:report :heap]))
         "one pair per call: the initial call plus 50 recursive calls")))
+
+;; ADR-2607198300 follow-up: string values are pair(offset,length) handles
+;; whose bytes live either in the artifact's own code+literal-data region
+;; (compile-time literals, embedded once per distinct content past the last
+;; function's code) or in a runtime string pool (string-concat results),
+;; uniformly resolved host-side by sign. Proven end to end through the real
+;; kexe-loader native process -- no JVM, no JS engine.
+(deftest string-literal-byte-length-round-trips-through-real-kexe-loader
+  (let [{:keys [envelope trust]}
+        (signed "(defn main [] (string-byte-length \"hello\"))" {:allow #{}})
+        {:keys [trust options]} (execution-options trust)
+        result (executor/execute envelope trust {:allow #{}} {:args []} options)]
+    (is (= 5 (get-in result [:evidence :result]))
+        "string-byte-length is exactly pair-second of the literal's own (offset,length) handle")))
+
+(deftest string-equal-compares-content-not-handle-identity
+  (let [{:keys [envelope trust]}
+        (signed "(defn same [] (string=? \"same\" \"same\"))
+                 (defn different-content [] (string=? \"abc\" \"xyz\"))
+                 (defn different-length [] (string=? \"ab\" \"abc\"))
+                 (defn main [] (+ (same) (+ (different-content) (different-length))))"
+               {:allow #{}})
+        {:keys [trust options]} (execution-options trust)
+        result (executor/execute envelope trust {:allow #{}} {:args []} options)]
+    (is (= 1 (get-in result [:evidence :result]))
+        "\"same\"=\"same\" (1) is the ONLY true comparison of the three -- two
+         SEPARATE literal occurrences of identical content get two DIFFERENT
+         pair handles (pair_new allocates a fresh slot every call), so this
+         proves string=? compares the addressed BYTES, not handle identity")))
+
+(deftest string-concat-produces-a-pool-handle-comparable-to-a-literal
+  (let [{:keys [envelope trust]}
+        (signed "(defn main []
+                   (+ (string-byte-length (string-concat \"foo\" \"bar\"))
+                      (string=? (string-concat \"foo\" \"bar\") \"foobar\")))"
+               {:allow #{}})
+        {:keys [trust options]} (execution-options trust)
+        result (executor/execute envelope trust {:allow #{}} {:args []} options)]
+    (is (= 7 (get-in result [:evidence :result]))
+        "6 (byte-length of the concatenated \"foobar\") + 1 (string=? against
+         the literal \"foobar\" is true) -- proves string=? correctly compares
+         a runtime string-pool handle (concat's own output, negative-encoded
+         offset) against a code-region literal handle (non-negative offset)")))

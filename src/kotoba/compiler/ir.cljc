@@ -13,6 +13,43 @@
 (def ^:private default-pair-capacity 4096)
 (def ^:private default-kgraph-capacity 4096)
 
+;; Shared between `kotoba.compiler.core` (JVM `clojure -M:run` path) and
+;; `kotoba.compiler.nbb.cli` (nbb-native fast path) -- both admit
+;; `:kotoba.hir/v3` (typed) HIR onto the x86_64/aarch64 native backends
+;; ONLY when the actual features used are limited to string literals +
+;; `string-byte-length`/`string=?`/`string-concat` (the only typed
+;; features those backends implement); every other typed feature (maps,
+;; options, results, variants, records, typed sets, heterogeneous
+;; vectors, ...) still requires the kotoba-script web target or typed
+;; Wasm target. A blanket per-backend allowance would silently let
+;; unsupported ops reach the backend and crash confusingly instead of
+;; rejecting cleanly -- so admission has to inspect which features are
+;; actually used, not just the HIR format tag.
+(def non-string-typed-ops
+  '#{map-new map-get map-assoc
+     bool-not option-some option-none option-some? option-value
+     result-ok result-err result-ok? result-value result-error
+     result-ok-of result-err-of result-ok?-of result-value-of result-error-of result-match-of
+     variant-new variant-match
+     option-some-of option-none-of option-some?-of option-value-of option-match
+     hetero-vector-new hetero-vector-count hetero-vector-at hetero-vector-assoc hetero-vector-equal
+     typed-set-new typed-set-count typed-set-contains typed-set-conj typed-set-disj typed-set-equal
+     typed-map-new typed-map-count typed-map-contains typed-map-get
+     typed-map-entry-at typed-map-assoc typed-map-dissoc typed-map-equal
+     record-new record-get record-assoc record-equal
+     vector-count vector-get vector-at vector-drop vector-assoc vector-conj})
+
+(defn only-string-typed-features? [hir]
+  (letfn [(walk [form]
+            (cond
+              (or (string? form) (integer? form) (symbol? form)) true
+              (seq? form)
+              (let [[op & args] form]
+                (and (not (contains? non-string-typed-ops op))
+                     (every? walk args)))
+              :else true))]
+    (every? #(walk (:body %)) (:functions hir))))
+
 (defn- trap! [reason data]
   (throw (ex-info (name reason) (merge {:phase :ir :trap reason} data))))
 

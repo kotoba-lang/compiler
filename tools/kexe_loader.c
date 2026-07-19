@@ -34,6 +34,7 @@ typedef int64_t (*kexe_fn8)(int64_t, int64_t, int64_t, int64_t,
 
 #define KEXE_PAIR_CAPACITY 4096u
 #define KEXE_KGRAPH_CAPACITY 4096u
+#define KEXE_STRING_POOL_BYTES 65536u
 
 struct kexe_context_v2 {
   uint64_t version;
@@ -51,6 +52,25 @@ struct kexe_context_v2 {
   int64_t (*kgraph_get)(struct kexe_context_v2 *, int64_t, int64_t);
   int64_t (*kgraph_count)(struct kexe_context_v2 *, int64_t);
   int64_t (*kgraph_entity_at)(struct kexe_context_v2 *, int64_t, int64_t);
+  /* string-* (ADR-2607198300 follow-up): a string VALUE is a pair(offset,
+   * length) handle (built by backend/{aarch64,x86_64}.clj's
+   * emit-string-literal via the existing pair_new above). `offset` addresses
+   * one contiguous byte space uniformly: non-negative resolves into the
+   * artifact's own code+literal-data region (`code_base`, read-only, string
+   * literals appended once per distinct content past the last function's
+   * code -- see emit-program); negative resolves into `string_pool` below
+   * (dynamic string-concat results), via `-offset - 1`. string-byte-length
+   * is exactly pair_second (no new host function); string=?/string-concat
+   * need one each, since only they read/copy the addressed bytes. */
+  int64_t (*string_equal)(struct kexe_context_v2 *, int64_t, int64_t);
+  int64_t (*string_concat)(struct kexe_context_v2 *, int64_t, int64_t);
+  /* Data-only (not part of the compiler-checked context-abi): the mmap'd
+   * code+literal-data region's base address and real (unpadded) byte
+   * length, set once in main() before the guest runs. Never read by guest
+   * code directly -- only string_equal/string_concat's C implementations
+   * resolve a non-negative string offset through these. */
+  const uint8_t *code_base;
+  uint64_t code_length;
 };
 
 struct kexe_pair_v1 { int64_t first; int64_t second; };
@@ -64,6 +84,8 @@ struct kexe_shared_v2 {
   struct kexe_pair_v1 pairs[KEXE_PAIR_CAPACITY];
   uint64_t kgraph_used;
   struct kexe_datom_v1 datoms[KEXE_KGRAPH_CAPACITY];
+  uint64_t string_pool_used;
+  uint8_t string_pool[KEXE_STRING_POOL_BYTES];
 };
 
 _Static_assert(offsetof(struct kexe_context_v2, fuel) == 8, "fuel ABI drift");
@@ -76,10 +98,14 @@ _Static_assert(offsetof(struct kexe_context_v2, kgraph_assert) == 80, "kgraph AB
 _Static_assert(offsetof(struct kexe_context_v2, kgraph_get) == 88, "kgraph ABI drift");
 _Static_assert(offsetof(struct kexe_context_v2, kgraph_count) == 96, "kgraph ABI drift");
 _Static_assert(offsetof(struct kexe_context_v2, kgraph_entity_at) == 104, "kgraph ABI drift");
+_Static_assert(offsetof(struct kexe_context_v2, string_equal) == 112, "string ABI drift");
+_Static_assert(offsetof(struct kexe_context_v2, string_concat) == 120, "string ABI drift");
 _Static_assert(sizeof(((struct kexe_shared_v2 *)0)->pairs) == 65536,
                "pair arena size drift");
 _Static_assert(sizeof(((struct kexe_shared_v2 *)0)->datoms) == 98304,
                "kgraph arena size drift");
+_Static_assert(sizeof(((struct kexe_shared_v2 *)0)->string_pool) == 65536,
+               "string pool size drift");
 
 static int parse_u64(const char *text, uint64_t *value) {
   if (text == NULL || *text < '0' || *text > '9') return -1;
@@ -233,6 +259,66 @@ static int64_t checked_kgraph_entity_at(struct kexe_context_v2 *context,
   }
   raise(SIGILL);
   return 0;
+}
+
+/* Resolves a string handle's (offset, length) pair, bounds-checks the
+ * addressed byte range against whichever region `offset`'s sign selects,
+ * and returns a pointer directly into that region -- never copies. */
+static const uint8_t *resolve_string_bytes(struct kexe_context_v2 *context,
+                                           int64_t offset, int64_t length) {
+  struct kexe_shared_v2 *shared = (struct kexe_shared_v2 *)context;
+  if (length < 0) { raise(SIGILL); return NULL; }
+  if (offset >= 0) {
+    if ((uint64_t)offset + (uint64_t)length > context->code_length) {
+      raise(SIGILL);
+      return NULL;
+    }
+    return context->code_base + offset;
+  }
+  uint64_t pool_offset = (uint64_t)(-offset - 1);
+  if (pool_offset + (uint64_t)length > KEXE_STRING_POOL_BYTES ||
+      pool_offset + (uint64_t)length < pool_offset) {
+    raise(SIGILL);
+    return NULL;
+  }
+  return shared->string_pool + pool_offset;
+}
+
+static int64_t checked_string_equal(struct kexe_context_v2 *context,
+                                    int64_t handle_a, int64_t handle_b) {
+  if (context == NULL || context->version != 2) { raise(SIGILL); return 0; }
+  int64_t offset_a = checked_pair_get(context, handle_a, 0);
+  int64_t length_a = checked_pair_get(context, handle_a, 1);
+  int64_t offset_b = checked_pair_get(context, handle_b, 0);
+  int64_t length_b = checked_pair_get(context, handle_b, 1);
+  if (length_a != length_b) return 0;
+  const uint8_t *a = resolve_string_bytes(context, offset_a, length_a);
+  const uint8_t *b = resolve_string_bytes(context, offset_b, length_b);
+  return memcmp(a, b, (size_t)length_a) == 0 ? 1 : 0;
+}
+
+static int64_t checked_string_concat(struct kexe_context_v2 *context,
+                                     int64_t handle_a, int64_t handle_b) {
+  struct kexe_shared_v2 *shared = (struct kexe_shared_v2 *)context;
+  if (context == NULL || context->version != 2) { raise(SIGILL); return 0; }
+  int64_t offset_a = checked_pair_get(context, handle_a, 0);
+  int64_t length_a = checked_pair_get(context, handle_a, 1);
+  int64_t offset_b = checked_pair_get(context, handle_b, 0);
+  int64_t length_b = checked_pair_get(context, handle_b, 1);
+  int64_t total = length_a + length_b;
+  if (total < 0 || length_a < 0 || length_b < 0 ||
+      shared->string_pool_used + (uint64_t)total > KEXE_STRING_POOL_BYTES ||
+      shared->string_pool_used + (uint64_t)total < shared->string_pool_used) {
+    raise(SIGILL);
+    return 0;
+  }
+  const uint8_t *a = resolve_string_bytes(context, offset_a, length_a);
+  const uint8_t *b = resolve_string_bytes(context, offset_b, length_b);
+  uint64_t pool_offset = shared->string_pool_used;
+  memcpy(shared->string_pool + pool_offset, a, (size_t)length_a);
+  memcpy(shared->string_pool + pool_offset + (uint64_t)length_a, b, (size_t)length_b);
+  shared->string_pool_used += (uint64_t)total;
+  return checked_pair_new(context, -((int64_t)pool_offset) - 1, total);
 }
 
 static int parse_allow(const char *text, uint64_t allow[4]) {
@@ -536,6 +622,10 @@ int main(int argc, char **argv) {
   shared->context.kgraph_get = checked_kgraph_get;
   shared->context.kgraph_count = checked_kgraph_count;
   shared->context.kgraph_entity_at = checked_kgraph_entity_at;
+  shared->context.string_equal = checked_string_equal;
+  shared->context.string_concat = checked_string_concat;
+  shared->context.code_base = (const uint8_t *)memory;
+  shared->context.code_length = (uint64_t)length;
   if (parse_allow(argv[5], shared->context.allow) != 0) return 2;
   int structured_report = getenv("KEXE_STRUCTURED_REPORT") != NULL;
 

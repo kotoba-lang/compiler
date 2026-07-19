@@ -155,8 +155,9 @@
 ;; why that stays out of scope).
 (defn- compile-native! [hir target backend policy]
   (when (and (= :kotoba.hir/v3 (:format hir))
-             (not (contains? #{:js-kotoba-v1 :wasm32-kotoba-v1} backend)))
-    (throw (ex-info "typed values currently require the kotoba-script web target or typed Wasm target"
+             (not (and (contains? #{:x86_64-kotoba-v1 :aarch64-kotoba-v1} backend)
+                       (ir/only-string-typed-features? hir))))
+    (throw (ex-info "typed values currently require the kotoba-script web target, typed Wasm target, or (native targets) string-only typed features"
                     {:phase :target :target target :backend backend
                      :value-profile :kotoba.value/typed-v1})))
   (when (nil? (:entry hir))
@@ -166,9 +167,11 @@
         kir (ir/lower hir)
         value (:oracle-value kir)
         profile (target-profile/profile target)
+        typed-values? (= :kotoba.kir/v4 (:format kir))
+        value-abi (if typed-values? :kotoba.typed/externref-v1 :kotoba.i64/direct-v1)
         compat (compatibility/descriptor
                 {:hir-format (:format hir) :kir-format (:format kir)
-                 :target target :target-profile profile :value-abi :kotoba.i64/direct-v1})
+                 :target target :target-profile profile :value-abi value-abi})
         emitted ((case backend
                    :x86_64-kotoba-v1 x86-64/emit-program
                    :aarch64-kotoba-v1 aarch64/emit-program) kir)
@@ -190,7 +193,9 @@
                         :pair-second-offset 72 :pair-capacity 4096
                         :kgraph-assert-offset 80 :kgraph-get-offset 88
                         :kgraph-count-offset 96 :kgraph-entity-at-offset 104
-                        :kgraph-capacity 4096}
+                        :kgraph-capacity 4096
+                        :string-equal-offset 112 :string-concat-offset 120
+                        :string-pool-capacity 65536}
           :effects (:effects hir)
           :compatibility compat
           :limits {:memory-bytes 65536 :fuel 256 :stack-bytes 4096}

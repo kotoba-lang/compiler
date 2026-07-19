@@ -11,6 +11,12 @@
 ;; `kotoba.compiler.backend.wasm`'s `uleb` comment gives: `(long n)` was
 ;; already a no-op cast on :clj for values in this range; dropped for :cljs
 ;; since cljs has no `long`.
+;; Mirrors `kotoba.compiler.backend.wasm`'s `utf8` -- `.getBytes` is JVM-only,
+;; cljs has no `String`/`Charset`; `TextEncoder` is the UTF-8-safe equivalent.
+(defn- utf8-bytes [s]
+  #?(:clj (.getBytes ^String s "UTF-8")
+     :cljs (js/Array.from (.encode (js/TextEncoder.) s))))
+
 (defn- le32 [n]
   (mapv #(bit-and (unsigned-bit-shift-right #?(:clj (long n) :cljs n) (* 8 %)) 0xff) (range 4)))
 
@@ -51,7 +57,9 @@
   [0x49 0x83 0x79 0x08 0x00 0x75 0x02 0x0f 0x0b 0x49 0xff 0x49 0x08])
 
 (defn- token-size [token]
-  (if (and (map? token) (or (:call token) (:tail-self token))) 5 1))
+  (cond (and (map? token) (or (:call token) (:tail-self token))) 5
+        (and (map? token) (:string-literal token)) 10
+        :else 1))
 (defn- code-size [tokens] (reduce + (map token-size tokens)))
 (declare emit-expr)
 
@@ -156,7 +164,11 @@
 
 (def ^:private heap-call-offsets
   {'pair 56 'pair-first 64 'pair-second 72
-   'kgraph-assert! 80 'kgraph-get 88 'kgraph-count 96 'kgraph-entity-at 104})
+   'kgraph-assert! 80 'kgraph-get 88 'kgraph-count 96 'kgraph-entity-at 104
+   ;; A string value IS a pair(offset,length) handle -- string-byte-length
+   ;; is exactly pair-second, no new host function needed.
+   'string-byte-length 72
+   'string=? 112 'string-concat 120})
 
 (defn- emit-heap-call [op args env {:keys [temp-depth] :as ctx}]
   (let [ctx (assoc ctx :tail? false)
@@ -223,6 +235,29 @@
                  (emit-expr value env (update ctx :temp-depth inc))
                  [0x5a] (if (= width 8) [0xee] [0xef])))))
 
+;; A string VALUE is a pair(offset, length) handle -- offset addresses a
+;; UTF-8 byte range either in the compiled artifact's own code+literal-data
+;; region (non-negative) or in the runtime string pool (negative, see
+;; tools/kexe_loader.c's checked_string_concat), uniformly resolved host-side.
+;; A literal's bytes are appended once per DISTINCT content to the artifact's
+;; :code array; its offset is only known once every function's code size is
+;; summed, so this emits a deferred {:string-literal content} token
+;; (finalize resolves it, token-size already reserves the 10 bytes a
+;; resolved movabs needs) for just the offset half -- length is already
+;; known here, at literal-encounter time, so needs no deferral. Mirrors
+;; emit-heap-call's 2-arg (pair) shape exactly, just with a deferred first
+;; "arg".
+(defn- emit-string-literal [content {:keys [temp-depth] :as ctx}]
+  (let [length (count (utf8-bytes content))
+        align? (even? temp-depth)]
+    (vec (concat [{:string-literal content}] [0x50]       ; push offset (rax)
+                 (into [0x48 0xb8] (le64 length)) [0x50]    ; push length (rax)
+                 [0x5a] [0x5e]                               ; pop rdx=length; pop rsi=offset
+                 [0x41 0x51] (when align? [0x50])
+                 [0x4c 0x89 0xcf 0x41 0xff 0x51 56]          ; rdi=r9; call [r9+56] (pair_new)
+                 (when align? [0x48 0x83 0xc4 0x08])
+                 [0x41 0x59]))))
+
 (defn- emit-let [bindings body env {:keys [temp-depth] :as ctx}]
   ;; Genuinely sequential: each binding's value is evaluated exactly once, in
   ;; source order, and pushed onto its own 8-byte stack slot before the next
@@ -251,6 +286,7 @@
     ;; `kotoba.compiler.backend.wasm`'s identical dispatch guard.
     #?(:clj (integer? form) :cljs (or (i64/bigint-value? form) (integer? form)))
     (into [0x48 0xb8] (le64 form))
+    (string? form) (emit-string-literal form ctx)
     (symbol? form)
     (let [binding (get env form)]
       (if (map? binding)
@@ -285,7 +321,8 @@
         (emit-cap-call (first args) (second args) env ctx)
 
         (contains? '#{pair pair-first pair-second
-                      kgraph-assert! kgraph-get kgraph-count kgraph-entity-at} op)
+                      kgraph-assert! kgraph-get kgraph-count kgraph-entity-at
+                      string-byte-length string=? string-concat} op)
         (emit-heap-call op args env ctx)
 
         (= op 'kernel-load-u8)
@@ -356,7 +393,7 @@
     {:tokens (vec (concat prologue expression epilogue))
      :expression-start (count prologue)}))
 
-(defn- finalize [tokens function-offset expression-offset offsets]
+(defn- finalize [tokens function-offset expression-offset offsets literal-offsets]
   (loop [remaining tokens position 0 out []]
     (if-let [token (first remaining)]
       (cond
@@ -373,9 +410,26 @@
           (recur (next remaining) (+ position 5)
                  (into out (concat [0xe9] (le32 (- expression-offset (+ absolute 5)))))))
 
+        (and (map? token) (:string-literal token))
+        (let [content (:string-literal token) offset (get literal-offsets content)]
+          (when-not offset
+            (throw (ex-info "unknown x86-64 string literal" {:content content})))
+          (recur (next remaining) (+ position 10) (into out (into [0x48 0xb8] (le64 offset)))))
+
         :else
         (recur (next remaining) (inc position) (conj out token)))
       out)))
+
+;; Every distinct string literal's content used anywhere in the program,
+;; collected once (order-preserving, first occurrence wins) so `finalize`
+;; can resolve every `{:string-literal content}` reference deterministically
+;; -- the SAME source compiled twice must produce byte-identical output for
+;; verifier.clj's independent re-emission check to hold.
+(defn- collect-string-literals [token-bodies]
+  (distinct (for [[_ emitted] token-bodies
+                  token (:tokens emitted)
+                  :when (and (map? token) (:string-literal token))]
+              (:string-literal token))))
 
 (defn emit-program [kir]
   (let [exported-names (set (or (:exports kir) (map :name (:functions kir))))
@@ -384,15 +438,26 @@
                   (if-let [[f emitted] (first items)]
                     (recur (next items) (+ offset (code-size (:tokens emitted)))
                            (assoc out (:name f) offset))
-                    out))]
+                    out))
+        code-size-total (reduce + 0 (map (fn [[_ emitted]] (code-size (:tokens emitted))) token-bodies))
+        literal-contents (collect-string-literals token-bodies)
+        literal-offsets (loop [remaining literal-contents pos code-size-total out {}]
+                          (if-let [content (first remaining)]
+                            (recur (next remaining)
+                                   (+ pos (count (utf8-bytes content)))
+                                   (assoc out content pos))
+                            out))
+        literal-bytes (vec (mapcat (fn [content]
+                                     (map #(bit-and (int %) 0xff) (utf8-bytes content)))
+                                   literal-contents))]
     (loop [items token-bodies code [] exports {}]
       (if-let [[function emitted] (first items)]
         (let [offset (get offsets (:name function))
               tokens (:tokens emitted)
-              body (finalize tokens offset (+ offset (:expression-start emitted)) offsets)]
+              body (finalize tokens offset (+ offset (:expression-start emitted)) offsets literal-offsets)]
           (recur (next items) (into code body)
                  (cond-> exports
                    (contains? exported-names (:name function))
                    (assoc (:name function)
                           {:offset offset :length (count body) :arity (count (:params function))}))))
-        {:code code :exports exports}))))
+        {:code (vec (concat code literal-bytes)) :exports exports}))))

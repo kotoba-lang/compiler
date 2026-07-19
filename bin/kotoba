@@ -1,7 +1,9 @@
 #!/usr/bin/env -S npx --no-install nbb
 (ns kotoba-driver
   (:require ["node:child_process" :as child]
+            ["node:crypto" :as crypto]
             ["node:fs" :as fs]
+            ["node:os" :as os]
             ["node:path" :as path]))
 
 (def usage
@@ -51,6 +53,36 @@
     (or (= cmd "check")
         (and (= cmd "compile") (contains? nbb-native-targets (option sub-args "--target"))))))
 
+;; `kotoba.compiler.nbb.cli` requires `kotoba.compiler.admission`, which in
+;; turn requires `kotoba.security.abac`/`kotoba.security.information-flow`
+;; from the `io.github.kotoba-lang/security` git dependency pinned in
+;; `deps.edn`. nbb has no concept of `deps.edn`/tools.deps -- it only
+;; resolves namespaces from directories on its own `--classpath`. `clojure
+;; -Spath` is the only thing that (a) fetches that pinned git SHA into
+;; `~/.gitlibs` if it isn't already cached there and (b) prints the
+;; resulting directories, so it's used here purely as a classpath
+;; resolver, not to run any compiler code on the JVM. Its result is cached
+;; to a temp file keyed by a hash of `deps.edn`'s bytes so the fast path
+;; only pays the JVM-startup + dependency-resolution cost once per distinct
+;; `deps.edn` (e.g. once per CI job's checkout), not once per `compile`/
+;; `check` call -- callers like `scripts/fuzz-native.cljs` invoke this
+;; fast path thousands of times in a loop.
+(defn- security-classpath-entry [root]
+  (let [deps-edn (.join path root "deps.edn")
+        digest (-> (.createHash crypto "sha256")
+                   (.update (.readFileSync fs deps-edn))
+                   (.digest "hex"))
+        cache-file (.join path (.tmpdir os) (str "kotoba-security-classpath-" digest ".txt"))]
+    (if (.existsSync fs cache-file)
+      (.trim (.readFileSync fs cache-file "utf8"))
+      (let [result (.spawnSync child "clojure" (clj->js ["-Spath"])
+                               #js {:cwd root :encoding "utf8" :maxBuffer 1048576})]
+        (if (and (not (.-error result)) (zero? (or (.-status result) 70)))
+          (let [resolved (.trim (.-stdout result))]
+            (.writeFileSync fs cache-file resolved)
+            resolved)
+          "")))))
+
 (let [args (vec *command-line-args*)
       boundary (first args)]
   (cond
@@ -76,9 +108,13 @@
         ;; `process.execPath` (the current `node`/`node.exe`) is a real,
         ;; directly-executable binary on every platform.
         (let [nbb-cli (.join path root "node_modules" "nbb" "cli.js")
+              security-cp (security-classpath-entry root)
+              classpath (if (seq security-cp)
+                          (str (.join path root "src") (.-delimiter path) security-cp)
+                          (.join path root "src"))
               result (.spawnSync child js/process.execPath
                                  (clj->js (into [nbb-cli "--classpath"
-                                                 (.join path root "src")
+                                                 classpath
                                                  (.join path root "src" "kotoba" "compiler" "nbb" "cli.cljs")]
                                                 sub-args))
                                  #js {:cwd root :stdio "inherit" :env js/process.env})]

@@ -30,6 +30,20 @@
 (def targets target-profile/compatibility-targets)
 (def supported-targets (set (keys target-profile/profiles)))
 
+;; Native (x86_64/aarch64) targets admit ONLY the string slice of "typed
+;; values" (string literals + string-byte-length/string=?/string-concat,
+;; ADR-2607198300 follow-up) -- every other typed feature (options, results,
+;; variants, records, typed maps/vectors/sets) has zero native backend
+;; codegen and must keep producing the same "requires kotoba-script web
+;; target" rejection it always has. This is a content check, not a blanket
+;; per-backend allowance: :kotoba.hir/v3 covers ALL typed features uniformly,
+;; so admitting the format for native without inspecting which features are
+;; actually used would silently let unsupported ops reach the backend and
+;; crash confusingly instead of rejecting cleanly. Shared with
+;; `kotoba.compiler.nbb.cli` (the nbb-native fast path) via
+;; `kotoba.compiler.ir/only-string-typed-features?` so both compile paths
+;; admit the exact same native-typed-feature subset.
+
 (defn check-source
   ([source] (check-source source {}))
   ([source policy]
@@ -46,8 +60,10 @@
         backend (target-profile/backend target)
         hir (frontend/analyze source)
         _ (when (and (= :kotoba.hir/v3 (:format hir))
-                     (not (contains? #{:js-kotoba-v1 :wasm32-kotoba-v1} backend)))
-            (throw (ex-info "typed values currently require the kotoba-script web target or typed Wasm target"
+                     (not (contains? #{:js-kotoba-v1 :wasm32-kotoba-v1} backend))
+                     (not (and (contains? #{:x86_64-kotoba-v1 :aarch64-kotoba-v1} backend)
+                               (ir/only-string-typed-features? hir))))
+            (throw (ex-info "typed values currently require the kotoba-script web target, typed Wasm target, or (native targets) string-only typed features"
                             {:phase :target :target target :backend backend
                              :value-profile :kotoba.value/typed-v1})))
         _ (when (and (nil? (:entry hir)) (not= backend :js-kotoba-v1))
@@ -158,7 +174,9 @@
                                      :pair-second-offset 72 :pair-capacity 4096
                                      :kgraph-assert-offset 80 :kgraph-get-offset 88
                                      :kgraph-count-offset 96 :kgraph-entity-at-offset 104
-                                     :kgraph-capacity 4096}
+                                     :kgraph-capacity 4096
+                                     :string-equal-offset 112 :string-concat-offset 120
+                                     :string-pool-capacity 65536}
                       :effects (:effects hir)
                        :compatibility compatibility
                        :limits {:memory-bytes 65536
