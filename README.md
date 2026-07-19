@@ -25,7 +25,7 @@ in multiple roots, compilation rejects the ambiguity instead of selecting a
 package by argument order.
 
 All compilation results carry
-`:kotoba.floating-point/ieee-754-f32-f64-v6`; restricted JavaScript artifacts
+`:kotoba.floating-point/ieee-754-f32-f64-v7`; restricted JavaScript artifacts
 seal the equivalent policy. Scalar `:f32` and `:f64` provide exact bit
 conversion, explicit arithmetic, ordered comparisons, unordered detection,
 and checked-versus-lossy numeric conversions on Kotoba Script and Wasm targets.
@@ -54,6 +54,11 @@ Qualified `f64-atan2-bounded` accepts finite coordinate pairs, preserves the
 IEEE signed-zero quadrant cases, and uses fixed octant reduction plus a
 degree-39 odd kernel with `2e-15` absolute-error bound. NaN and infinity trap;
 neither output target calls a host atan2 function.
+`f64-exp-bounded` supports `[-512*ln(2),512*ln(2)]` through fixed split-`ln(2)`
+reduction and exact binary scaling. `f64-log-bounded` supports
+`[2^-512,2^512]` through sealed exponent/mantissa extraction. They provide
+`1e-13` relative/absolute error bounds, trap outside those domains, and never
+import host exp/log functions.
 
 Conversions are explicit: `i64-to-f64-checked` rejects inexact integers,
 whereas `i64-to-f64-rounded` names the IEEE rounding request.

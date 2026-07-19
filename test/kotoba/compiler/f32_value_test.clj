@@ -6,7 +6,7 @@
             [kotoba.compiler.ir :as ir]))
 
 (def source
-  (str "(ns pilot.f32 (:export [main from-bits bits rounded widen add divide unordered to-f32 rounded-i64 to-i64 truncating f32-s f32-lo f32-hi f64-s f64-lo f64-hi sin cos wide-sin wide-cos exp log atan2])) "
+  (str "(ns pilot.f32 (:export [main from-bits bits rounded widen add divide unordered to-f32 rounded-i64 to-i64 truncating f32-s f32-lo f32-hi f64-s f64-lo f64-hi sin cos wide-sin wide-cos exp log atan2 wide-exp wide-log])) "
        "(defn main [] 0) "
        "(defn from-bits [x :i64] :f32 (f32-from-bits x)) "
        "(defn bits [x :f32] :i64 (f32-to-bits x)) "
@@ -31,7 +31,9 @@
        "(defn wide-cos [x :f64] :f64 (f64-cos-bounded x)) "
        "(defn exp [x :f64] :f64 (f64-exp-near-zero x)) "
        "(defn log [x :f64] :f64 (f64-log-near-one x)) "
-       "(defn atan2 [y :f64 x :f64] :f64 (f64-atan2-bounded y x))"))
+       "(defn atan2 [y :f64 x :f64] :f64 (f64-atan2-bounded y x)) "
+       "(defn wide-exp [x :f64] :f64 (f64-exp-bounded x)) "
+       "(defn wide-log [x :f64] :f64 (f64-log-bounded x))"))
 
 (defn- node-run [javascript]
   (shell/sh "node" "--input-type=module" "-e" javascript))
@@ -73,7 +75,12 @@
        "for(const y of [-1e300,-0,7,1e300])for(const z of [-9,-0,0,1e300]){"
        "if(Math.abs(x.atan2(y,z)-Math.atan2(y,z))>2e-15)process.exit(27);}"
        "if(!Object.is(x.atan2(-0,1),-0)||x.atan2(0,-1)!==Math.PI||x.atan2(-0,-1)!==-Math.PI)process.exit(28);"
-       "for(const p of [[NaN,1],[1,NaN],[Infinity,1],[1,-Infinity]])try{x.atan2(...p);process.exit(29)}catch(e){}"))
+       "for(const p of [[NaN,1],[1,NaN],[Infinity,1],[1,-Infinity]])try{x.atan2(...p);process.exit(29)}catch(e){}"
+       "const el=512*Math.LN2;for(let i=0;i<=8;i++){const v=-el+2*el*i/8,a=x['wide-exp'](v),b=Math.exp(v);"
+       "if(Math.abs(a-b)/b>1e-13)process.exit(30);}"
+       "for(let i=-512;i<=512;i+=128){const v=2**i;if(Math.abs(x['wide-log'](v)-Math.log(v))>1e-13)process.exit(31);}"
+       "for(const [f,vals] of [[x['wide-exp'],[NaN,Infinity,-Infinity,el+Number.EPSILON*el]],"
+       "[x['wide-log'],[NaN,Infinity,-Infinity,0,2**-513,2**513]]])for(const v of vals)try{f(v);process.exit(32)}catch(e){}"))
 
 (deftest f32-reference-js-and-wasm-share-the-sealed-profile
   (let [js-artifact (compiler/compile-source source :js-kotoba-v1)
@@ -124,6 +131,15 @@
            (Double/doubleToLongBits ^double (ir/execute kir 'atan2 [-0.0 1.0]))))
     (is (= Math/PI (ir/execute kir 'atan2 [0.0 -1.0])))
     (is (thrown? clojure.lang.ExceptionInfo (ir/execute kir 'atan2 [Double/POSITIVE_INFINITY 1.0])))
+    (is (< (/ (Math/abs (- (ir/execute kir 'wide-exp [300.0]) (Math/exp 300.0)))
+              (Math/exp 300.0))
+           1.0e-13))
+    (is (< (Math/abs (- (ir/execute kir 'wide-log [(Math/pow 2.0 300.0)])
+                        (Math/log (Math/pow 2.0 300.0))))
+           1.0e-13))
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (ir/execute kir 'wide-exp [(Math/nextUp (* 512.0 (Math/log 2.0)))])))
+    (is (thrown? clojure.lang.ExceptionInfo (ir/execute kir 'wide-log [(Math/pow 2.0 513.0)])))
     (is (= 16777216.0 (double (ir/execute kir 'rounded-i64 [16777217]))))
     (is (thrown? clojure.lang.ExceptionInfo (ir/execute kir 'to-f32 [16777217])))
     (is (= :kotoba.typed/mixed-f32-f64-v3 (:value-abi wasm-artifact)))
