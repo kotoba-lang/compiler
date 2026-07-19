@@ -378,6 +378,54 @@
                                         [0x20 value-local 0x05]
                                         (emit* (bounded-sin-form value) env) [0x0b])
                                 (emit* (bounded-cos-form value) env))))
+                    (contains? '#{f64-sin-bounded f64-cos-bounded} op)
+                    (let [value-local (allocate! 0x7c)
+                          scaled-local (allocate! 0x7c)
+                          nearest-local (allocate! 0x7c)
+                          quadrant-local (allocate! 0x7e)
+                          reduced-local (allocate! 0x7c)
+                          reduced {:wasm-local reduced-local}
+                          sin-code (concat [0x20 reduced-local]
+                                           (emit* (f64-constant 0) env) [0x61 0x04 0x7c]
+                                           [0x20 reduced-local 0x05]
+                                           (emit* (bounded-sin-form reduced) env) [0x0b])
+                          cos-code (emit* (bounded-cos-form reduced) env)
+                          neg-sin (concat sin-code [0x9a])
+                          neg-cos (concat cos-code [0x9a])
+                          branch-code
+                          (if (= op 'f64-sin-bounded)
+                            [sin-code cos-code neg-sin neg-cos]
+                            [cos-code neg-sin neg-cos sin-code])
+                          choose (fn choose [quadrant]
+                                   (if (= quadrant 3)
+                                     (nth branch-code quadrant)
+                                     (concat [0x20 quadrant-local 0x42] (sleb quadrant) [0x51 0x04 0x7c]
+                                             (nth branch-code quadrant) [0x05]
+                                             (choose (inc quadrant)) [0x0b])))]
+                      (concat
+                       (emit* (first args) env) [0x21 value-local]
+                       ;; Reject NaN, infinities, and values outside ±8192π.
+                       [0x20 value-local 0x20 value-local 0x62
+                        0x20 value-local 0x99]
+                       (emit* (f64-constant "4672803451707862296") env)
+                       [0x64 0x72 0x04 0x40 0x00 0x0b]
+                       ;; scaled=x*(2/π), then nearest integer with ties away from zero.
+                       [0x20 value-local]
+                       (emit* (f64-constant "4603909380684499075") env)
+                       [0xa2 0x21 scaled-local 0x20 scaled-local]
+                       (emit* (f64-constant "0") env) [0x66 0x04 0x7c]
+                       [0x20 scaled-local]
+                       (emit* (f64-constant "4602678819172646912") env) [0xa0 0x9c 0x05]
+                       [0x20 scaled-local]
+                       (emit* (f64-constant "-4620693217682128896") env) [0xa0 0x9b 0x0b]
+                       [0x21 nearest-local]
+                       ;; r=(x-n*pi/2_hi)-n*pi/2_lo.
+                       [0x20 value-local 0x20 nearest-local]
+                       (emit* (f64-constant "4609753056924675352") env) [0xa2 0xa1]
+                       [0x20 nearest-local]
+                       (emit* (f64-constant "4364452196894661639") env) [0xa2 0xa1 0x21 reduced-local]
+                       [0x20 nearest-local 0xb0 0x42] (sleb 3) [0x83 0x21 quadrant-local]
+                       (choose 0)))
                     (contains? '#{f64-eq f64-lt f64-le f64-gt f64-ge} op)
                     (concat (emit* (first args) env) (emit* (second args) env)
                             [({'f64-eq 0x61 'f64-lt 0x63 'f64-gt 0x64
