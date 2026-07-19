@@ -27,10 +27,11 @@
 ;; actually used, not just the HIR format tag.
 (def non-string-typed-ops
   '#{f32-to-bits f32-from-bits f64-to-f32-rounded f32-to-f64-exact
-     f32-add f32-sub f32-mul f32-div f32-neg f32-abs
+     f32-add f32-sub f32-mul f32-div f32-min f32-max f32-neg f32-abs f32-sqrt
      f32-eq f32-lt f32-le f32-gt f32-ge f32-unordered
      i64-to-f32-checked i64-to-f32-rounded f32-to-i64-checked f32-to-i64-truncating
-     f64-to-bits f64-from-bits f64-add f64-sub f64-mul f64-div f64-neg f64-abs
+     f64-to-bits f64-from-bits f64-add f64-sub f64-mul f64-div f64-min f64-max
+     f64-neg f64-abs f64-sqrt
      f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered
      i64-to-f64-checked i64-to-f64-rounded f64-to-i64-checked f64-to-i64-truncating
      map-new map-get map-assoc
@@ -69,7 +70,8 @@
                (= :f64 result)
                (some #(and (seq? %)
                            (contains? '#{f64-to-bits f64-from-bits
-                                         f64-add f64-sub f64-mul f64-div f64-neg f64-abs
+                                         f64-add f64-sub f64-mul f64-div f64-min f64-max
+                                         f64-neg f64-abs f64-sqrt
                                          f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered
                                          i64-to-f64-checked i64-to-f64-rounded
                                          f64-to-i64-checked f64-to-i64-truncating}
@@ -85,7 +87,8 @@
                (some #(and (seq? %)
                            (contains? '#{f32-to-bits f32-from-bits
                                          f64-to-f32-rounded f32-to-f64-exact
-                                         f32-add f32-sub f32-mul f32-div f32-neg f32-abs
+                                         f32-add f32-sub f32-mul f32-div f32-min f32-max
+                                         f32-neg f32-abs f32-sqrt
                                          f32-eq f32-lt f32-le f32-gt f32-ge f32-unordered
                                          i64-to-f32-checked i64-to-f32-rounded
                                          f32-to-i64-checked f32-to-i64-truncating}
@@ -416,15 +419,21 @@
         (value/f64-to-i64-truncating
          (eval-expr (first args) env functions fuel heap call-stack cap-call))
 
-        (contains? '#{f64-add f64-sub f64-mul f64-div} op)
+        (contains? '#{f64-add f64-sub f64-mul f64-div f64-min f64-max} op)
         (let [[left right] (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
-          ((case op f64-add + f64-sub - f64-mul * f64-div f64-divide) left right))
+          ((case op f64-add + f64-sub - f64-mul * f64-div f64-divide
+                 f64-min #?(:clj #(Math/min (double %1) (double %2)) :cljs js/Math.min)
+                 f64-max #?(:clj #(Math/max (double %1) (double %2)) :cljs js/Math.max)) left right))
 
         (= op 'f64-neg)
         (- (double (eval-expr (first args) env functions fuel heap call-stack cap-call)))
 
         (= op 'f64-abs)
         (#?(:clj Math/abs :cljs js/Math.abs)
+         (eval-expr (first args) env functions fuel heap call-stack cap-call))
+
+        (= op 'f64-sqrt)
+        (#?(:clj Math/sqrt :cljs js/Math.sqrt)
          (eval-expr (first args) env functions fuel heap call-stack cap-call))
 
         (contains? '#{f64-eq f64-lt f64-le f64-gt f64-ge} op)
@@ -468,15 +477,21 @@
         (value/f32-to-i64-truncating
          (eval-expr (first args) env functions fuel heap call-stack cap-call))
 
-        (contains? '#{f32-add f32-sub f32-mul f32-div} op)
+        (contains? '#{f32-add f32-sub f32-mul f32-div f32-min f32-max} op)
         (let [[left right] (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
-          (as-f32 ((case op f32-add + f32-sub - f32-mul * f32-div f32-divide) left right)))
+          (as-f32 ((case op f32-add + f32-sub - f32-mul * f32-div f32-divide
+                         f32-min #?(:clj #(Math/min (.floatValue ^Number %1) (.floatValue ^Number %2)) :cljs js/Math.min)
+                         f32-max #?(:clj #(Math/max (.floatValue ^Number %1) (.floatValue ^Number %2)) :cljs js/Math.max)) left right)))
 
         (= op 'f32-neg)
         (as-f32 (- (eval-expr (first args) env functions fuel heap call-stack cap-call)))
 
         (= op 'f32-abs)
         (as-f32 (#?(:clj Math/abs :cljs js/Math.abs)
+                 (eval-expr (first args) env functions fuel heap call-stack cap-call)))
+
+        (= op 'f32-sqrt)
+        (as-f32 (#?(:clj Math/sqrt :cljs js/Math.sqrt)
                  (eval-expr (first args) env functions fuel heap call-stack cap-call)))
 
         (contains? '#{f32-eq f32-lt f32-le f32-gt f32-ge} op)

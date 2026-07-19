@@ -12,7 +12,7 @@ code bytes. A structurally independent target verifier decodes all emitted
 instructions before admission.
 
 The shared value policy is
-`:kotoba.floating-point/ieee-754-f32-f64-v1`. It admits scalar f32 and
+`:kotoba.floating-point/ieee-754-f32-f64-v2`. It admits scalar f32 and
 f64 values only on restricted Kotoba Script and Wasm: decimal source literals are
 normalized to exact i64 bit patterns, and only `f64-to-bits`/
 `f64-from-bits` cross the KIR alongside explicit basic arithmetic, unary
@@ -24,6 +24,8 @@ remainder, square root, and transcendental paths fail closed.
 Exact/rounded i64-to-f64 and integral/truncating f64-to-i64 conversions have
 distinct operation names. Checked forms reject lost information; explicit
 rounding forms still reject non-finite and out-of-range integer results.
+Square root, minimum, and maximum have explicit cross-backend special-value
+semantics; other transcendentals remain outside the core profile.
 
 Native verification does not trust a sealed KIR merely because its hash is
 valid. Before re-emission, an independent KIR profile checker validates exact

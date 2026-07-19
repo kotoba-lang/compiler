@@ -6,7 +6,7 @@
             [kotoba.compiler.ir :as ir]))
 
 (def source
-  (str "(ns pilot.f32 (:export [main from-bits bits rounded widen add divide unordered to-f32 rounded-i64 to-i64 truncating])) "
+  (str "(ns pilot.f32 (:export [main from-bits bits rounded widen add divide unordered to-f32 rounded-i64 to-i64 truncating f32-s f32-lo f32-hi f64-s f64-lo f64-hi])) "
        "(defn main [] 0) "
        "(defn from-bits [x :i64] :f32 (f32-from-bits x)) "
        "(defn bits [x :f32] :i64 (f32-to-bits x)) "
@@ -18,7 +18,13 @@
        "(defn to-f32 [x :i64] :f32 (i64-to-f32-checked x)) "
        "(defn rounded-i64 [x :i64] :f32 (i64-to-f32-rounded x)) "
        "(defn to-i64 [x :f32] :i64 (f32-to-i64-checked x)) "
-       "(defn truncating [x :f32] :i64 (f32-to-i64-truncating x))"))
+       "(defn truncating [x :f32] :i64 (f32-to-i64-truncating x)) "
+       "(defn f32-s [x :f32] :f32 (f32-sqrt x)) "
+       "(defn f32-lo [x :f32 y :f32] :f32 (f32-min x y)) "
+       "(defn f32-hi [x :f32 y :f32] :f32 (f32-max x y)) "
+       "(defn f64-s [x :f64] :f64 (f64-sqrt x)) "
+       "(defn f64-lo [x :f64 y :f64] :f64 (f64-min x y)) "
+       "(defn f64-hi [x :f64 y :f64] :f64 (f64-max x y))"))
 
 (defn- node-run [javascript]
   (shell/sh "node" "--input-type=module" "-e" javascript))
@@ -34,7 +40,13 @@
        "try{x['to-f32'](16777217n);process.exit(7)}catch(e){}"
        "if(x['rounded-i64'](16777217n)!==16777216)process.exit(8);"
        "if(x['to-i64'](one)!==1n||x.truncating(x.rounded(1.9))!==1n)process.exit(9);"
-       "try{x['to-i64'](tenth);process.exit(10)}catch(e){}"))
+       "try{x['to-i64'](tenth);process.exit(10)}catch(e){}"
+       "if(x['f32-s'](Math.fround(4))!==2||!Number.isNaN(x['f32-s'](Math.fround(-1))))process.exit(11);"
+       "if(!Object.is(x['f32-lo'](0,-0),-0)||!Object.is(x['f32-hi'](0,-0),0))process.exit(12);"
+       "if(!Number.isNaN(x['f32-lo'](NaN,0))||!Number.isNaN(x['f32-hi'](0,NaN)))process.exit(13);"
+       "if(x['f64-s'](4)!==2||!Number.isNaN(x['f64-s'](-1)))process.exit(14);"
+       "if(!Object.is(x['f64-lo'](0,-0),-0)||!Object.is(x['f64-hi'](0,-0),0))process.exit(15);"
+       "if(!Number.isNaN(x['f64-lo'](NaN,0))||!Number.isNaN(x['f64-hi'](0,NaN)))process.exit(16);"))
 
 (deftest f32-reference-js-and-wasm-share-the-sealed-profile
   (let [js-artifact (compiler/compile-source source :js-kotoba-v1)
@@ -55,6 +67,12 @@
            (ir/execute kir 'bits [(ir/execute kir 'add [(float 1.0) (float 0.1)])])))
     (is (Float/isInfinite ^float (ir/execute kir 'divide [(float 1.0) (float 0.0)])))
     (is (true? (ir/execute kir 'unordered [Float/NaN (float 1.0)])))
+    (is (= (float 2.0) (ir/execute kir 'f32-s [(float 4.0)])))
+    (is (Float/isNaN ^float (ir/execute kir 'f32-s [(float -1.0)])))
+    (is (= Integer/MIN_VALUE
+           (Float/floatToIntBits
+            ^float (ir/execute kir 'f32-lo [(float 0.0) (Float/intBitsToFloat Integer/MIN_VALUE)]))))
+    (is (Double/isNaN ^double (ir/execute kir 'f64-s [-1.0])))
     (is (= 16777216.0 (double (ir/execute kir 'rounded-i64 [16777217]))))
     (is (thrown? clojure.lang.ExceptionInfo (ir/execute kir 'to-f32 [16777217])))
     (is (= :kotoba.typed/mixed-f32-f64-v3 (:value-abi wasm-artifact)))

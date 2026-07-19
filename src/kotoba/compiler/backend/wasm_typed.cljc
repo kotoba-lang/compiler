@@ -184,7 +184,7 @@
         (= op 'f64-from-bits) :f64
         (contains? '#{i64-to-f64-checked i64-to-f64-rounded} op) :f64
         (contains? '#{f64-to-i64-checked f64-to-i64-truncating} op) :i64
-        (contains? '#{f64-add f64-sub f64-mul f64-div f64-neg f64-abs} op) :f64
+        (contains? '#{f64-add f64-sub f64-mul f64-div f64-min f64-max f64-neg f64-abs f64-sqrt} op) :f64
         (contains? '#{f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered} op) :bool
         (= op 'f32-to-bits) :i64
         (= op 'f32-from-bits) :f32
@@ -192,7 +192,7 @@
         (= op 'f32-to-f64-exact) :f64
         (contains? '#{i64-to-f32-checked i64-to-f32-rounded} op) :f32
         (contains? '#{f32-to-i64-checked f32-to-i64-truncating} op) :i64
-        (contains? '#{f32-add f32-sub f32-mul f32-div f32-neg f32-abs} op) :f32
+        (contains? '#{f32-add f32-sub f32-mul f32-div f32-min f32-max f32-neg f32-abs f32-sqrt} op) :f32
         (contains? '#{f32-eq f32-lt f32-le f32-gt f32-ge f32-unordered} op) :bool
         (contains? '#{= < > <= >= hetero-vector-equal typed-set-equal
                       typed-map-equal record-equal} op) :i64
