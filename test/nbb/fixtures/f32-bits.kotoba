@@ -1,4 +1,4 @@
-(ns f32-bits (:export [main bits from-bits rounded widen add to-f32 to-i64 sqrt minimum maximum sin cos wide-sin wide-cos exp log atan2]))
+(ns f32-bits (:export [main bits from-bits rounded widen add to-f32 to-i64 sqrt minimum maximum sin cos wide-sin wide-cos exp log atan2 wide-exp wide-log]))
 (defn main [] 0)
 (defn bits [value :f32] :i64 (f32-to-bits value))
 (defn from-bits [value :i64] :f32 (f32-from-bits value))
@@ -17,3 +17,5 @@
 (defn exp [value :f64] :f64 (f64-exp-near-zero value))
 (defn log [value :f64] :f64 (f64-log-near-one value))
 (defn atan2 [y :f64 x :f64] :f64 (f64-atan2-bounded y x))
+(defn wide-exp [value :f64] :f64 (f64-exp-bounded value))
+(defn wide-log [value :f64] :f64 (f64-log-bounded value))

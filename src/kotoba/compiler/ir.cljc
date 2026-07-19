@@ -33,6 +33,7 @@
      f64-to-bits f64-from-bits f64-add f64-sub f64-mul f64-div f64-min f64-max
      f64-neg f64-abs f64-sqrt f64-sin-quarter-turn f64-cos-quarter-turn
      f64-sin-bounded f64-cos-bounded f64-exp-near-zero f64-log-near-one f64-atan2-bounded
+     f64-exp-bounded f64-log-bounded
      f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered
      i64-to-f64-checked i64-to-f64-rounded f64-to-i64-checked f64-to-i64-truncating
      map-new map-get map-assoc
@@ -76,6 +77,7 @@
                                          f64-sin-quarter-turn f64-cos-quarter-turn
                                          f64-sin-bounded f64-cos-bounded
                                          f64-exp-near-zero f64-log-near-one f64-atan2-bounded
+                                         f64-exp-bounded f64-log-bounded
                                          f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered
                                          i64-to-f64-checked i64-to-f64-rounded
                                          f64-to-i64-checked f64-to-i64-truncating}
@@ -274,6 +276,55 @@
                   angle (if swap? (- 1.5707963267948966 base) base)
                   angle (if x-negative? (- 3.141592653589793 angle) angle)]
               (if y-negative? (- angle) angle)))))
+
+(def ^:private wide-exp-limit 354.891356446692)
+(def ^:private wide-log-min 7.458340731200207e-155)
+(def ^:private wide-log-max 1.3407807929942597e154)
+
+(defn- binary-scale [exponent]
+  (value/i64-bits-to-f64
+   #?(:clj (* (+ (long exponent) 1023) 4503599627370496)
+      :cljs (* (js/BigInt (+ exponent 1023)) (js/BigInt "4503599627370496")))))
+
+(defn- f64-exp-bounded [value]
+  (when-not (and #?(:clj (Double/isFinite ^double value) :cljs (js/Number.isFinite value))
+                 (<= (#?(:clj Math/abs :cljs js/Math.abs) value) wide-exp-limit))
+    (trap! :f64-exp-bounded-domain {}))
+  (let [scaled (* value 1.4426950408889634)
+        exponent (#?(:clj (fn [x] (long (if (neg? x) (Math/ceil (- x 0.5))
+                                                    (Math/floor (+ x 0.5)))))
+                     :cljs (fn [x] (if (neg? x) (js/Math.ceil (- x 0.5))
+                                                   (js/Math.floor (+ x 0.5)))))
+                  scaled)
+        reduced (- (- value (* exponent 0.6931471805599453))
+                   (* exponent 2.3190468138462996e-17))]
+    (* (f64-exp-near-zero reduced) (binary-scale exponent))))
+
+(defn- normalized-log-parts [input]
+  #?(:clj
+     (let [bits (value/f64-to-i64-bits input)
+           exponent (- (quot bits 4503599627370496) 1023)
+           mantissa (value/i64-bits-to-f64
+                     (+ (bit-and bits 4503599627370495) 4607182418800017408))]
+       (if (> mantissa 1.5) [(* mantissa 0.5) (inc exponent)] [mantissa exponent]))
+     :cljs
+     (let [bits (value/f64-to-i64-bits input)
+           unit (js/BigInt "4503599627370496")
+           field (/ bits unit)
+           exponent (- (js/Number field) 1023)
+           fraction (- bits (* field unit))
+           mantissa (value/i64-bits-to-f64
+                     (+ fraction (js/BigInt "4607182418800017408")))]
+       (if (> mantissa 1.5) [(* mantissa 0.5) (inc exponent)] [mantissa exponent]))))
+
+(defn- f64-log-bounded [input]
+  (when-not (and #?(:clj (Double/isFinite ^double input) :cljs (js/Number.isFinite input))
+                 (<= wide-log-min input wide-log-max))
+    (trap! :f64-log-bounded-domain {}))
+  (let [[mantissa exponent] (normalized-log-parts input)
+        kernel (f64-log-near-one mantissa)]
+    (+ (+ kernel (* exponent 0.6931471805599453))
+       (* exponent 2.3190468138462996e-17))))
 
 (defn- validate-runtime-value! [runtime-value type position]
   (case type
@@ -619,6 +670,14 @@
         (= op 'f64-atan2-bounded)
         (let [[y x] (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
           (f64-atan2-bounded y x))
+
+        (= op 'f64-exp-bounded)
+        (f64-exp-bounded
+         (eval-expr (first args) env functions fuel heap call-stack cap-call))
+
+        (= op 'f64-log-bounded)
+        (f64-log-bounded
+         (eval-expr (first args) env functions fuel heap call-stack cap-call))
 
         (contains? '#{f64-eq f64-lt f64-le f64-gt f64-ge} op)
         (let [[left right] (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]

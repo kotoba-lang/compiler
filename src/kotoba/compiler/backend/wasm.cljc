@@ -271,6 +271,48 @@
                                           'angle1)]
                       (list 'if (negative? y) (list 'f64-neg 'angle2) 'angle2))))))
 
+(defn- wide-exp-form [value]
+  (let [half (f64-constant "4602678819172646912")]
+    (list 'let ['scaled (list 'f64-mul value (f64-constant "4609176140021203710"))
+                'exponent (list 'if (list '< (list 'f64-to-bits 'scaled) 0)
+                                (list 'f64-to-i64-truncating (list 'f64-sub 'scaled half))
+                                (list 'f64-to-i64-truncating (list 'f64-add 'scaled half)))
+                'exponent-f64 (list 'i64-to-f64-checked 'exponent)
+                'reduced (list 'f64-sub
+                               (list 'f64-sub value
+                                     (list 'f64-mul 'exponent-f64
+                                           (f64-constant "4604418534313441775")))
+                               (list 'f64-mul 'exponent-f64
+                                     (f64-constant "4358002977218854975")))
+                'scale-bits (list '* (list '+ 'exponent 1023)
+                                  (exact-i64 "4503599627370496"))
+                'scale (list 'f64-from-bits 'scale-bits)]
+          (list 'f64-mul (bounded-exp-form 'reduced) 'scale))))
+
+(defn- wide-log-form [value]
+  (let [unit (exact-i64 "4503599627370496")
+        mask (exact-i64 "4503599627370495")
+        one-bits (exact-i64 "4607182418800017408")
+        one-and-half-bits (exact-i64 "4609434218613702656")]
+    (list 'let ['bits (list 'f64-to-bits value)
+                'exponent0 (list '- (list 'quot 'bits unit) 1023)
+                'mantissa0 (list 'f64-from-bits
+                                 (list '+ (list 'bit-and 'bits mask) one-bits))
+                'high (list '> (list 'f64-to-bits 'mantissa0) one-and-half-bits)
+                'mantissa (list 'if 'high
+                                (list 'f64-mul 'mantissa0
+                                      (f64-constant "4602678819172646912"))
+                                'mantissa0)
+                'exponent (list 'if 'high (list '+ 'exponent0 1) 'exponent0)
+                'exponent-f64 (list 'i64-to-f64-checked 'exponent)
+                'kernel (bounded-log-form 'mantissa)]
+          (list 'f64-add
+                (list 'f64-add 'kernel
+                      (list 'f64-mul 'exponent-f64
+                            (f64-constant "4604418534313441775")))
+                (list 'f64-mul 'exponent-f64
+                      (f64-constant "4358002977218854975"))))))
+
 (defn- emit-typed-function-body
   [function function-indices intrinsic-indices descriptor-indices literal-indices signatures]
   (let [locals (volatile! [])
@@ -535,6 +577,26 @@
                               (finite-check y-local) (finite-check x-local)
                               [0x72 0x04 0x40 0x00 0x0b]
                               (emit* (bounded-atan2-form y x) env)))
+                    (= op 'f64-exp-bounded)
+                    (let [value-local (allocate! 0x7c)
+                          value {:wasm-local value-local}]
+                      (concat (emit* (first args) env) [0x21 value-local]
+                              [0x20 value-local 0x20 value-local 0x62
+                               0x20 value-local 0x99]
+                              (emit* (f64-constant "4644950930959776239") env)
+                              [0x64 0x72 0x04 0x40 0x00 0x0b]
+                              (emit* (wide-exp-form value) env)))
+                    (= op 'f64-log-bounded)
+                    (let [value-local (allocate! 0x7c)
+                          value {:wasm-local value-local}]
+                      (concat (emit* (first args) env) [0x21 value-local]
+                              [0x20 value-local 0x20 value-local 0x62
+                               0x20 value-local]
+                              (emit* (f64-constant "2301339409586323456") env)
+                              [0x63 0x72 0x20 value-local]
+                              (emit* (f64-constant "6913025428013711360") env)
+                              [0x64 0x72 0x04 0x40 0x00 0x0b]
+                              (emit* (wide-log-form value) env)))
                     (contains? '#{f64-eq f64-lt f64-le f64-gt f64-ge} op)
                     (concat (emit* (first args) env) (emit* (second args) env)
                             [({'f64-eq 0x61 'f64-lt 0x63 'f64-gt 0x64
