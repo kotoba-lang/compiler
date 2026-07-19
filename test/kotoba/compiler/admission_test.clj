@@ -33,6 +33,50 @@
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"malformed capability policy"
                         (compiler/check-source effect-source {:allow [[:cap/call 7]]}))))
 
+(deftest admission-enforces-shared-four-axis-abac
+  (let [policy {:allow #{[:cap/call 7]}
+                :attributes {:subject {:id :builder :tenant "alpha"}
+                             :resource {:tenant "alpha" :trust :reviewed}
+                             :environment {:surface :ci :device-trusted? true}}
+                :abac {:policy/id :compiler/release
+                       :subject/ids #{:builder}
+                       :resource/tenants #{"alpha"}
+                       :resource/trust #{:reviewed}
+                       :action/ids #{:compiler/admit}
+                       :action/capabilities #{[:cap/call 7]}
+                       :environment/surfaces #{:ci}
+                       :environment/require-device-trust? true
+                       :tenant/isolation? true}}
+        admission (:admission (compiler/check-source effect-source policy))]
+    (is (true? (get-in admission [:abac :abac/allowed?])))
+    (is (= :compiler/release (get-in admission [:abac :abac/policy-id])))
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo #"ABAC policy denies compilation"
+         (compiler/check-source effect-source
+                                (assoc-in policy [:attributes :environment :surface]
+                                          :developer-laptop))))))
+
+(deftest compiler-prevents-implicit-classification-downgrade
+  (let [base {:allow #{[:cap/call 7]}
+              :attributes {:subject {:id :release-bot}
+                           :environment {:now "2026-07-19T12:00:00Z"}}
+              :information-flow {:input-classifications [:confidential]
+                                 :output-classification :public}}
+        grant {:id :release-redaction :subject :release-bot :purpose :release
+               :from :confidential :to :public
+               :expires-at "2026-07-20T00:00:00Z"}]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"information-flow policy denies compilation"
+                          (compiler/check-source effect-source base)))
+    (is (true?
+         (get-in (compiler/check-source
+                  effect-source
+                  (-> base
+                      (assoc-in [:attributes :purpose] :release)
+                      (assoc-in [:information-flow :purpose] :release)
+                      (assoc-in [:information-flow :declassification-grant] grant)))
+                 [:admission :information-flow :information-flow/allowed?])))))
+
 (deftest dynamic-capability-identifiers-and-native-codegen-fail-closed
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"literal capability id"
                         (compiler/check-source
