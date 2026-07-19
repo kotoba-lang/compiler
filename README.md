@@ -289,7 +289,10 @@ reference-types feature. Unsupported KIR v4 operations still fail during
 lowering; metadata presence alone is never treated as qualification.
 
 The first bounded sequential collection is `:vector-i64`, constructed
-explicitly with `(vector-i64 ...)` and capped at 128 items. `vector-count`,
+explicitly with `(vector-i64 ...)` and capped at 16,384 items at runtime.
+Source forms retain the independent 128-item admission bound; larger binary
+inputs enter Web through checked arrays and typed Wasm through the host-issued
+`typedValues.bytes`/`typedValues.vectorI64` factories. `vector-count`,
 `vector-get`, `vector-at`, `vector-drop`, `vector-assoc`, and `vector-conj` preserve signed-i64 elements;
 get uses a lazy fallback for every out-of-range index, while assoc traps.
 Generated Web values are frozen arrays and updates are persistent. Ordinary

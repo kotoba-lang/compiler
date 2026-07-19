@@ -163,7 +163,7 @@
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a signed i64"
                         (value/bounded-vector-i64! [1 "2"])))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"exceeds item limit"
-                        (value/bounded-vector-i64! (vec (range 129))))))
+                        (value/bounded-vector-i64! (vec (range 16385))))))
 
 (deftest typed-map-values-have-canonical-order-typed-values-and-no-sentinel
   (let [type [:map :keyword [:option :string]]

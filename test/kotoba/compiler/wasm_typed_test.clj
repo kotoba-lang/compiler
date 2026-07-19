@@ -188,13 +188,17 @@
         probe (node-probe
                compiled
                (str "const x=h.instance.exports,v=x.make();"
+                    "const binary=h.typedValues.bytes(Buffer.alloc(12171,7));"
                     "if(x.main()!==42n||x.bitops()!==10n||x['count-items'](v)!==3n||x.lookup(v,1n)!==20n||"
                     "x.lookup(v,-1n)!==99n||x.lookup(v,4294967296n)!==99n||x.at(v,2n)!==30n)process.exit(2);"
+                    "if(x['count-items'](binary)!==12171n||x.at(binary,12170n)!==7n)process.exit(5);"
                     "const updated=x.update(v,1n),appended=x.append(v),dropped=x['drop-items'](v,2n);"
                     "if(x.at(updated,1n)!==77n||x['count-items'](appended)!==4n||"
                     "x['count-items'](dropped)!==1n||x.at(dropped,0n)!==30n)process.exit(3);"
                     "for(const run of [()=>x.at(v,-1n),()=>x.at(v,4294967296n),"
-                    "()=>x.update(v,4294967296n),()=>x['drop-items'](v,4n),()=>x.append(x.full()),"
+                    "()=>x.update(v,4294967296n),()=>x['drop-items'](v,4n),"
+                    "()=>h.typedValues.bytes(Buffer.alloc(16385)),()=>h.typedValues.bytes([256]),"
+                    "()=>h.typedValues.vectorI64([1n,2]),"
                     "()=>x['count-items'](Object.freeze([v[0],10n,20n,30n]))]){"
                     "let rejected=false;try{run()}catch(e){rejected=true}if(!rejected)process.exit(4)}"))]
     (is (= 2 typed/abi-version))

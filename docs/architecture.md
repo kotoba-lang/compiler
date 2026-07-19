@@ -383,7 +383,9 @@ can observe them. Compilation seals `:reference-types` as a required Wasm
 feature. Operations outside the qualified algebraic corpus remain fail-closed
 at typed Wasm lowering.
 The first sequential collection profile is an explicitly constructed,
-128-item `vector<i64>` with signed-i64 element checks, frozen Web host values,
+16,384-item runtime `vector<i64>` with signed-i64 element checks, frozen Web
+host values, host-issued typed Wasm byte/vector factories, an independent
+128-item source-form admission bound,
 lazy out-of-range lookup fallback, and persistent assoc/conj updates.
 Ordinary vector literals and flat vector destructuring now lower into this
 profile. Required destructured positions use a trapping access operation;

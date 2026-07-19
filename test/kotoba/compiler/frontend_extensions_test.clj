@@ -131,7 +131,7 @@
     (is (= [7 2] (ir/execute kir 'update [[1 2] 0 7])))
     (is (= [1 2 3] (ir/execute kir 'append [[1 2] 3])))
     (is (= 1 (ir/execute kir 'same? [[1 2] [1 2]])))
-    (is (= 128 (get-in compiled [:manifest :kotoba.artifact/limits :vector-i64-items])))
+    (is (= 16384 (get-in compiled [:manifest :kotoba.artifact/limits :vector-i64-items])))
     (is (zero? (:exit result)) (:err result))
     (doseq [target-name (unsupported-typed-targets)]
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
