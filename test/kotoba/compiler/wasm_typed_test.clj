@@ -1,5 +1,6 @@
 (ns kotoba.compiler.wasm-typed-test
   (:require [clojure.java.shell :as shell]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [kotoba.compiler.backend.wasm :as wasm]
             [kotoba.compiler.backend.wasm-typed :as typed]
@@ -167,4 +168,56 @@
         probe (node-probe compiled
                           "if(h.instance.exports.main()!==42n)process.exit(2);")]
     (is (not-any? #{[:bool true]} (typed/literal-table (:kir compiled))))
+    (is (zero? (:exit probe)) (:err probe))))
+
+(deftest bounded-typed-map-has-real-wasm-runtime-parity
+  (let [source
+        "(ns typed.map (:export [main present missing update remove compare-map]))
+         (defn main [] :i64 42)
+         (defn present [] :i64
+           (option-value-of [:option :i64]
+             (typed-map-get [:map :keyword :i64]
+               (typed-map-new [:map :keyword :i64] :b 2 :a 1) :b) 0))
+         (defn missing [] [:option :i64]
+           (typed-map-get [:map :keyword :i64]
+             (typed-map-new [:map :keyword :i64]) :missing))
+         (defn update [] :i64
+           (typed-map-count [:map :keyword :i64]
+             (typed-map-assoc [:map :keyword :i64]
+               (typed-map-new [:map :keyword :i64] :a 1) :b 2)))
+         (defn remove [] :bool
+           (typed-map-contains [:map :keyword :i64]
+             (typed-map-dissoc [:map :keyword :i64]
+               (typed-map-new [:map :keyword :i64] :a 1 :b 2) :a) :b))
+         (defn compare-map [] :i64
+           (typed-map-equal [:map :keyword :i64]
+             (typed-map-new [:map :keyword :i64] :b 2 :a 1)
+             (typed-map-new [:map :keyword :i64] :a 1 :b 2)))"
+        compiled (compiler/compile-source source :wasm32-kotoba-v1)
+        probe (node-probe
+               compiled
+               (str "const x=h.instance.exports,n=x.missing();"
+                    "if(x.main()!==42n||x.present()!==2n||n[1]!==false||"
+                    "x.update()!==2n||x.remove()!==true||x['compare-map']()!==1n)process.exit(2);"))]
+    (is (= 31 (get-in compiled [:limits :typed-map-entries])))
+    (is (zero? (:exit probe)) (:err probe))))
+
+(deftest descriptor-node-budget-is-per-descriptor-with-a-separate-table-bound
+  (let [names (mapv #(symbol (str "value-" %)) (range 16))
+        exports (str/join " " (cons "main" (map str names)))
+        functions
+        (str/join
+         "\n"
+         (map-indexed
+          (fn [index name]
+            (let [type (str "[:record :budget/type-" index
+                            " [[:a :i64] [:b :string] [:c [:option :i64]]]]")]
+              (str "(defn " name " [] " type
+                   " (record " type " " index " \"v\" (option-none-of [:option :i64])))")))
+          names))
+        source (str "(ns typed.descriptor-budget (:export [" exports "]))\n"
+                    "(defn main [] :i64 42)\n" functions)
+        compiled (compiler/compile-source source :wasm32-kotoba-v1)
+        probe (node-probe compiled "if(h.instance.exports.main()!==42n)process.exit(2);")]
+    (is (> (count (typed/descriptor-table (:kir compiled))) 16))
     (is (zero? (:exit probe)) (:err probe))))

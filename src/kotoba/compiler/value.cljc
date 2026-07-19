@@ -11,6 +11,7 @@
 (def variant-case-limit 32)
 (def heterogeneous-vector-item-limit 32)
 (def typed-set-item-limit 32)
+(def typed-map-entry-limit 31)
 (def record-field-limit 32)
 
 (defn utf8-byte-count!
@@ -164,6 +165,10 @@
      (and (vector? type) (= 2 (count type)) (= :set (first type)))
      (do (validate-value-type! (second type) (inc depth) nodes)
          type)
+     (and (vector? type) (= 3 (count type)) (= :map (first type)))
+     (do (validate-value-type! (second type) (inc depth) nodes)
+         (validate-value-type! (nth type 2) (inc depth) nodes)
+         type)
      (and (vector? type) (= 3 (count type)) (= :record (first type)))
      (let [[_ type-id fields] type]
        (when-not (and (keyword? type-id) (namespace type-id))
@@ -260,6 +265,13 @@
                                  (second type))
                          (second left) (second right))
 
+      (= :map (first type))
+      (let [entry-type [:vector [(second type) (nth type 2)]]]
+        (compare-sequences (repeat (max (count (second left)) (count (second right)))
+                                   entry-type)
+                           (mapv #(into [entry-type] %) (second left))
+                           (mapv #(into [entry-type] %) (second right))))
+
       (= :record (first type))
       (compare-sequences (map second (nth type 2)) (rest left) (rest right))
 
@@ -347,6 +359,28 @@
                        (partition 2 1 sorted-items))
              (throw (ex-info "typed set contains a duplicate item" {:phase :value})))
            [type sorted-items]))
+
+       (= :map (first type))
+       (let [key-type (second type)
+             value-type (nth type 2)]
+         (when-not (and (vector? value) (= 2 (count value)) (= type (first value))
+                        (vector? (second value))
+                        (<= (count (second value)) typed-map-entry-limit)
+                        (every? #(and (vector? %) (= 2 (count %))) (second value)))
+           (throw (ex-info "value is not the declared typed map"
+                           {:phase :value :limit typed-map-entry-limit})))
+         (let [entries (mapv (fn [[key item]]
+                               [(bounded-typed-value! key-type key (inc depth) nodes)
+                                (bounded-typed-value! value-type item (inc depth) nodes)])
+                             (second value))
+               sorted-entries (vec (sort #(compare-typed-values key-type
+                                                                 (first %1) (first %2))
+                                         entries))]
+           (when (some (fn [[[left _] [right _]]]
+                         (zero? (compare-typed-values key-type left right)))
+                       (partition 2 1 sorted-entries))
+             (throw (ex-info "typed map contains a duplicate key" {:phase :value})))
+           [type sorted-entries]))
 
        (= :record (first type))
        (let [fields (nth type 2)]

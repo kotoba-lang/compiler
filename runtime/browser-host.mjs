@@ -27,7 +27,18 @@ const ALLOWED_IMPORTS = new Set([
   "kotoba:typed/set-op-i64/function",
   "kotoba:typed/set-op-ref/function",
   "kotoba:typed/set-contains-i64/function",
-  "kotoba:typed/set-contains-ref/function"
+  "kotoba:typed/set-contains-ref/function",
+  "kotoba:typed/map-contains-i64/function",
+  "kotoba:typed/map-contains-ref/function",
+  "kotoba:typed/map-get-i64/function",
+  "kotoba:typed/map-get-ref/function",
+  "kotoba:typed/map-entry-at/function",
+  "kotoba:typed/map-assoc-ii/function",
+  "kotoba:typed/map-assoc-ir/function",
+  "kotoba:typed/map-assoc-ri/function",
+  "kotoba:typed/map-assoc-rr/function",
+  "kotoba:typed/map-dissoc-i64/function",
+  "kotoba:typed/map-dissoc-ref/function"
 ]);
 
 export class KotobaHostError extends Error {
@@ -132,6 +143,7 @@ function parseTypedMetadata(module) {
       return Object.freeze(["vector", Object.freeze(Array.from({ length: count }, () => descriptor(depth + 1)))]);
     }
     if (tag === 8) return Object.freeze(["set", descriptor(depth + 1)]);
+    if (tag === 10) return Object.freeze(["map", descriptor(depth + 1), descriptor(depth + 1)]);
     if (tag === 6 || tag === 9) {
       const name = text();
       const count = uleb();
@@ -154,7 +166,10 @@ function parseTypedMetadata(module) {
   const count = uleb();
   if (count > MAX_TYPED_DESCRIPTORS)
     reject("invalid-typed-metadata", "too many typed ABI descriptors");
-  const descriptors = Array.from({ length: count }, () => descriptor(1));
+  const descriptors = Array.from({ length: count }, () => {
+    nodes = 0;
+    return descriptor(1);
+  });
   const literalCount = uleb();
   if (literalCount > 256) reject("invalid-typed-metadata", "too many typed ABI literals");
   const literals = [];
@@ -331,6 +346,16 @@ function createTypedRuntime(abi) {
       const length = Math.max(left[1].length, right[1].length);
       return compareSequence(Array.from({ length }, () => descriptor[1]), left[1], right[1]);
     }
+    if (kind === "map") {
+      const length = Math.min(left[1].length, right[1].length);
+      for (let index = 0; index < length; index += 1) {
+        let compared = compareValue(descriptor[1], left[1][index][0], right[1][index][0]);
+        if (compared !== 0) return compared;
+        compared = compareValue(descriptor[2], left[1][index][1], right[1][index][1]);
+        if (compared !== 0) return compared;
+      }
+      return left[1].length < right[1].length ? -1 : left[1].length > right[1].length ? 1 : 0;
+    }
     if (kind === "record")
       return compareSequence(descriptor[2].map(([, type]) => type), left.slice(1), right.slice(1));
     reject("invalid-typed-value", "typed value has no canonical order");
@@ -395,6 +420,19 @@ function createTypedRuntime(abi) {
         for (let index = 1; index < value[1].length; index += 1)
           if (compareValue(descriptor[1], value[1][index - 1], value[1][index]) >= 0)
             reject("invalid-typed-value", "typed set is duplicated or non-canonical");
+      } else if (kind === "map") {
+        if (!sameTrustedDescriptor(value[0], descriptor) || value.length !== 2 ||
+            !Array.isArray(value[1]) || !Object.isFrozen(value[1]) || value[1].length > 31)
+          reject("invalid-typed-value", "typed map shape is invalid");
+        value[1].forEach(entry => {
+          if (!Array.isArray(entry) || !Object.isFrozen(entry) || entry.length !== 2)
+            reject("invalid-typed-value", "typed map entry shape is invalid");
+          assertValue(descriptor[1], entry[0], state);
+          assertValue(descriptor[2], entry[1], state);
+        });
+        for (let index = 1; index < value[1].length; index += 1)
+          if (compareValue(descriptor[1], value[1][index - 1][0], value[1][index][0]) >= 0)
+            reject("invalid-typed-value", "typed map keys are duplicated or non-canonical");
       } else if (kind === "record") {
         if (!sameTrustedDescriptor(value[0], descriptor) || value.length !== descriptor[2].length + 1)
           reject("invalid-typed-value", "record shape or nominal descriptor is invalid");
@@ -449,6 +487,17 @@ function createTypedRuntime(abi) {
           if (compareValue(descriptor[1], sorted[index - 1], sorted[index]) === 0)
             reject("invalid-typed-set", "duplicate typed set item rejected");
         result = [descriptor, Object.freeze(sorted)];
+      } else if (kind === "map") {
+        if (builder.slots.length % 2 !== 0)
+          reject("invalid-typed-builder", "typed map builder has an unmatched key");
+        const entries = [];
+        for (let index = 0; index < builder.slots.length; index += 2)
+          entries.push(Object.freeze([builder.slots[index], builder.slots[index + 1]]));
+        entries.sort((left, right) => compareValue(descriptor[1], left[0], right[0]));
+        for (let index = 1; index < entries.length; index += 1)
+          if (compareValue(descriptor[1], entries[index - 1][0], entries[index][0]) === 0)
+            reject("invalid-typed-map", "duplicate typed map key rejected");
+        result = [descriptor, Object.freeze(entries)];
       } else reject("invalid-typed-builder", "primitive descriptor cannot be constructed");
       return assertValue(descriptor, Object.freeze(result));
     },
@@ -487,6 +536,7 @@ function createTypedRuntime(abi) {
       if (descriptor === "string") return BigInt(utf8Length(checked));
       if (descriptor[0] === "vector" || descriptor[0] === "record") return BigInt(checked.length - 1);
       if (descriptor[0] === "set") return BigInt(checked[1].length);
+      if (descriptor[0] === "map") return BigInt(checked[1].length);
       reject("invalid-typed-operation", "count is not defined for this descriptor");
     },
     bool(value) { return value !== 0; },
@@ -511,7 +561,32 @@ function createTypedRuntime(abi) {
     },
     "set-contains-ref"(descriptorId, value, item) {
       return setContains(descriptorId, value, item) ? 1 : 0;
-    }
+    },
+    "map-contains-i64"(descriptorId, value, key) {
+      return mapContains(descriptorId, value, i64(key)) ? 1 : 0;
+    },
+    "map-contains-ref"(descriptorId, value, key) {
+      return mapContains(descriptorId, value, key) ? 1 : 0;
+    },
+    "map-get-i64"(descriptorId, value, key) { return mapGet(descriptorId, value, i64(key)); },
+    "map-get-ref"(descriptorId, value, key) { return mapGet(descriptorId, value, key); },
+    "map-entry-at"(descriptorId, value, index) { return mapEntryAt(descriptorId, value, i64(index)); },
+    "map-assoc-ii"(descriptorId, value, key, item) {
+      return mapAssoc(descriptorId, value, i64(key), i64(item));
+    },
+    "map-assoc-ir"(descriptorId, value, key, item) {
+      return mapAssoc(descriptorId, value, i64(key), item);
+    },
+    "map-assoc-ri"(descriptorId, value, key, item) {
+      return mapAssoc(descriptorId, value, key, i64(item));
+    },
+    "map-assoc-rr"(descriptorId, value, key, item) {
+      return mapAssoc(descriptorId, value, key, item);
+    },
+    "map-dissoc-i64"(descriptorId, value, key) {
+      return mapDissoc(descriptorId, value, i64(key));
+    },
+    "map-dissoc-ref"(descriptorId, value, key) { return mapDissoc(descriptorId, value, key); }
   });
   const assoc = (descriptorId, value, index, replacement) => {
     const descriptor = descriptorAt(descriptorId);
@@ -550,6 +625,63 @@ function createTypedRuntime(abi) {
     const checked = assertValue(descriptor, value);
     assertValue(descriptor[1], item);
     return checked[1].some(existing => compareValue(descriptor[1], existing, item) === 0);
+  };
+  const checkedMap = (descriptorId, value) => {
+    const descriptor = descriptorAt(descriptorId);
+    if (!Array.isArray(descriptor) || descriptor[0] !== "map")
+      reject("invalid-typed-operation", "map operation requires a map descriptor");
+    return [descriptor, assertValue(descriptor, value)];
+  };
+  const mapIndex = (descriptorId, value, key) => {
+    const [descriptor, checked] = checkedMap(descriptorId, value);
+    assertValue(descriptor[1], key);
+    return [descriptor, checked,
+            checked[1].findIndex(entry => compareValue(descriptor[1], entry[0], key) === 0)];
+  };
+  const mapContains = (descriptorId, value, key) => mapIndex(descriptorId, value, key)[2] >= 0;
+  const mapGet = (descriptorId, value, key) => {
+    const [descriptor, checked, index] = mapIndex(descriptorId, value, key);
+    const optionDescriptor = abi.descriptors.find(candidate =>
+      Array.isArray(candidate) && candidate[0] === "option" &&
+      sameDescriptor(candidate[1], descriptor[2]));
+    if (optionDescriptor === undefined)
+      reject("invalid-typed-operation", "typed map lookup option descriptor is absent");
+    return assertValue(optionDescriptor, Object.freeze(index < 0
+      ? [optionDescriptor, false]
+      : [optionDescriptor, true, checked[1][index][1]]));
+  };
+  const mapEntryAt = (descriptorId, value, index) => {
+    const [descriptor, checked] = checkedMap(descriptorId, value);
+    const entryDescriptor = abi.descriptors.find(candidate =>
+      Array.isArray(candidate) && candidate[0] === "vector" && candidate[1].length === 2 &&
+      sameDescriptor(candidate[1][0], descriptor[1]) && sameDescriptor(candidate[1][1], descriptor[2]));
+    const optionDescriptor = abi.descriptors.find(candidate =>
+      Array.isArray(candidate) && candidate[0] === "option" &&
+      sameDescriptor(candidate[1], entryDescriptor));
+    if (entryDescriptor === undefined || optionDescriptor === undefined)
+      reject("invalid-typed-operation", "typed map entry option descriptor is absent");
+    if (index < 0n || index >= BigInt(checked[1].length))
+      return assertValue(optionDescriptor, Object.freeze([optionDescriptor, false]));
+    const entry = checked[1][Number(index)];
+    return assertValue(optionDescriptor, Object.freeze([
+      optionDescriptor, true, Object.freeze([entryDescriptor, entry[0], entry[1]])]));
+  };
+  const mapAssoc = (descriptorId, value, key, item) => {
+    const [descriptor, checked, index] = mapIndex(descriptorId, value, key);
+    assertValue(descriptor[2], item);
+    if (index < 0 && checked[1].length >= 31)
+      reject("invalid-typed-map", "typed map entry budget exceeded");
+    const entries = [...checked[1]];
+    const entry = Object.freeze([key, item]);
+    if (index < 0) entries.push(entry); else entries[index] = entry;
+    entries.sort((left, right) => compareValue(descriptor[1], left[0], right[0]));
+    return assertValue(descriptor, Object.freeze([descriptor, Object.freeze(entries)]));
+  };
+  const mapDissoc = (descriptorId, value, key) => {
+    const [descriptor, checked, index] = mapIndex(descriptorId, value, key);
+    if (index < 0) return checked;
+    return assertValue(descriptor, Object.freeze([
+      descriptor, Object.freeze(checked[1].filter((_, itemIndex) => itemIndex !== index))]));
   };
   return Object.freeze({ imports });
 }

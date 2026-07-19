@@ -759,3 +759,62 @@
 
 (deftest map-assoc-reference-and-kotoba-script-agree
   (is (= 2 (oracle "(defn main [] (get (assoc {:a 1} :b 2) :b))"))))
+
+(deftest canonical-typed-map-reference-semantics-are-bounded-and-sentinel-free
+  (let [type "[:map :keyword :i64]"
+        source (str
+                "(defn main [] :i64 "
+                "(let [m (typed-map-new " type " :b 2 :a 1) "
+                "      m2 (typed-map-assoc " type " m :b 7) "
+                "      m3 (typed-map-dissoc " type " m2 :a)] "
+                "  (if (typed-map-contains " type " m3 :b) "
+                "    (if (= 1 (typed-map-count " type " m3)) "
+                "      (option-value-of [:option :i64] "
+                "        (typed-map-get " type " m3 :b) 0) 0) 0)))")]
+    (is (= 7 (oracle source)))
+    (let [compiled (compiler/compile-source source :js-kotoba-v1)
+          encoded (.encodeToString (java.util.Base64/getEncoder)
+                                   (.getBytes ^String (:source compiled) "UTF-8"))
+          probe (shell/sh "node" "--input-type=module" "-e"
+                          (str "import('data:text/javascript;base64," encoded
+                               "').then(m=>{if(m.instantiateKotoba({}).main()!==7n)process.exit(2)})"))]
+      (is (= 31 (get-in compiled [:manifest :kotoba.artifact/limits :typed-map-entries])))
+      (is (zero? (:exit probe)) (:err probe)))
+    (is (= [[:option :i64] false]
+           (ir/execute (ir/lower (frontend/analyze
+                                  (str "(defn main [] [:option :i64] "
+                                       "(typed-map-get " type
+                                       " (typed-map-new " type ") :missing))")))
+                       'main [])))))
+
+(deftest canonical-typed-map-rejects-type-confusion-and-overflow
+  (doseq [source
+          ["(defn main [] [:map :keyword :i64] (typed-map-new [:map :keyword :i64] :a \"bad\"))"
+           "(defn main [] [:option :i64] (typed-map-get [:map :keyword :i64] (typed-map-new [:map :keyword :i64]) \"bad\"))"]]
+    (is (some? (rejection-message source))))
+  (let [entries (str/join " " (mapcat (fn [index]
+                                         [(str ":k" index) (str index)])
+                                       (range 32)))
+        source (str "(defn main [] [:map :keyword :i64] "
+                    "(typed-map-new [:map :keyword :i64] " entries "))")]
+    (is (re-find #"entry limit" (rejection-message source)))))
+
+(deftest explicit-type-aliases-expand-before-hir-and-cannot-be-forged
+  (let [source "(def person-type [:record :demo/person [[:age :i64]]])
+                (defn age [person [:alias person-type]] :i64
+                  (record-get person-type person :age))
+                (defn main [] :i64
+                  (age (record person-type 42)))"
+        hir (frontend/analyze source)
+        age (some #(when (= 'age (:name %)) %) (:functions hir))]
+    (is (= 42 (oracle source)))
+    (is (= [[:record :demo/person [[:age :i64]]]] (:param-types age))))
+  (is (= 42
+         (oracle "(def age-type :i64)
+                  (def person-type [:record :demo/person [[:age [:alias age-type]]]])
+                  (defn main [] [:alias age-type]
+                    (record-get person-type (record person-type 42) :age))")))
+  (doseq [source ["(defn main [] [:alias missing] 0)"
+                  "(def not-a-type 7) (defn main [] [:alias not-a-type] 0)"
+                  "(def a [:alias b]) (def b [:alias a]) (defn main [] 0)"]]
+    (is (some? (rejection-message source)))))

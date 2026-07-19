@@ -16,6 +16,12 @@
   {:id :typed-set
    :source "(defn main [] (typed-set-count [:set :i64] (typed-set [:set :i64] 3 1 2)))"
    :expect 3}
+  {:id :typed-map
+   :source "(defn main [] (option-value-of [:option :i64] (typed-map-get [:map :keyword :i64] (typed-map-new [:map :keyword :i64] :b 7 :a 1) :b) 0))"
+   :expect 7}
+  {:id :typed-map-entry-iteration
+   :source "(defn main [] (match-option (typed-map-entry-at [:map :keyword :i64] (typed-map-new [:map :keyword :i64] :b 7 :a 1) 0) [:option [:vector [:keyword :i64]]] (none 0) (some entry (hetero-vector-at [:vector [:keyword :i64]] entry 1))))"
+   :expect 1}
   {:id :nominal-record
    :source "(defn main [] (record-get [:record :conformance/person [[:name :string] [:age :i64]]] (record [:record :conformance/person [[:name :string] [:age :i64]]] \"Kotoba\" 7) :age))"
    :expect 7}]
@@ -30,6 +36,9 @@
    :source "(defn main [] [:vector [:i64 :string]] (hetero-vector [:vector [:i64 :string]] \"wrong\" \"ok\"))"}
   {:id :set-duplicate
    :source "(defn main [] [:set :i64] (typed-set [:set :i64] 1 1))"
+   :phase :runtime}
+  {:id :map-duplicate-key
+   :source "(defn main [] [:map :keyword :i64] (typed-map-new [:map :keyword :i64] :a 1 :a 2))"
    :phase :runtime}
   {:id :record-unknown-field
    :source "(defn main [value [:record :conformance/person [[:age :i64]]]] (record-get [:record :conformance/person [[:age :i64]]] value :missing))"}

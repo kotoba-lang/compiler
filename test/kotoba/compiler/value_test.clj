@@ -149,7 +149,7 @@
       (is (thrown? clojure.lang.ExceptionInfo
                    (value/bounded-typed-value! type invalid)))))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"record fields are invalid"
-                        (value/validate-value-type!
+               (value/validate-value-type!
                          [:record :demo/bad [[:x :i64] [:x :string]]])))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"record fields are invalid"
                         (value/validate-value-type!
@@ -164,3 +164,27 @@
                         (value/bounded-vector-i64! [1 "2"])))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"exceeds item limit"
                         (value/bounded-vector-i64! (vec (range 129))))))
+
+(deftest typed-map-values-have-canonical-order-typed-values-and-no-sentinel
+  (let [type [:map :keyword [:option :string]]
+        none [[:option :string] false]
+        some [[:option :string] true "Kotoba"]
+        canonical [type [[:a some] [:z none]]]]
+    (is (= canonical
+           (value/bounded-typed-value! type [type [[:z none] [:a some]]])))
+    (is (neg? (value/compare-typed-values type canonical
+                                          [type [[:b some] [:z none]]])))
+    (doseq [invalid [[type [[:a some] [:a none]]]
+                     [type [[:a "wrong"]]]
+                     [type [["not-keyword" some]]]
+                     [[:map :keyword :i64] [[:a 1] [:b 2] [:c 3]
+                                             [:d 4] [:e 5] [:f 6] [:g 7]
+                                             [:h 8] [:i 9] [:j 10] [:k 11]
+                                             [:l 12] [:m 13] [:n 14] [:o 15]
+                                             [:p 16] [:q 17] [:r 18] [:s 19]
+                                             [:t 20] [:u 21] [:v 22] [:w 23]
+                                             [:x 24] [:y 25] [:z 26] [:aa 27]
+                                             [:ab 28] [:ac 29] [:ad 30] [:ae 31]
+                                             [:af 32] [:ag 33]]]]]
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (value/bounded-typed-value! (first invalid) invalid))))))

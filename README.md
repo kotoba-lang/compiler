@@ -242,6 +242,22 @@ descriptor ...)`, count, membership, idempotent insertion, removal, and
 structural equality preserve this representation without observing host
 insertion order or object identity.
 
+Canonical typed maps use `[:map key-type value-type]` and at most 31 entries
+inside the shared 64-node value budget. Values are
+`[descriptor, sorted-entry-vector]`; every entry is an exact two-item
+key/value vector, sorted by the same language-owned total order used by typed
+sets. Duplicate keys fail closed. `typed-map-new`, `typed-map-count`,
+`typed-map-contains`, `typed-map-get`, `typed-map-assoc`,
+`typed-map-entry-at`, `typed-map-dissoc`, and `typed-map-equal` preserve the descriptor and validate
+both sides recursively. Lookup returns `[:option value-type]`, so absence
+never uses null, undefined, zero, or a caller-provided sentinel. JavaScript
+object identity, property coercion, insertion order and mutation are outside
+the ABI. The older leaf `:map` profile remains a separate keyword-to-i64
+compatibility type and is not interchangeable with `[:map K V]`.
+`typed-map-entry-at` accepts a checked i64 index and returns
+`[:option [:vector [key-type value-type]]]`; it provides deterministic,
+fuel-bounded traversal without admitting callbacks or host iterators.
+
 Nominal bounded records use
 `[:record :qualified/type [[:field field-type] ...]]`, with 1–32 unique
 keyword fields in declaration order under the shared descriptor budget. Their
