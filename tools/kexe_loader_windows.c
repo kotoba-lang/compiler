@@ -641,7 +641,7 @@ static int network_listen_probe_denied(void) {
    mapping, so the child never needs ambient access to the source path. */
 static int run_appcontainer_parent(int argc, char **argv) {
   FILE *file;
-  long length;
+  long length = 0;
   HANDLE mapping = NULL, job = NULL;
   void *view = NULL;
   SECURITY_ATTRIBUTES inherit;
