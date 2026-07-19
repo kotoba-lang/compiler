@@ -25,16 +25,17 @@ in multiple roots, compilation rejects the ambiguity instead of selecting a
 package by argument order.
 
 All compilation results carry
-`:kotoba.floating-point/ieee-754-f64-conversions-v1`; restricted JavaScript artifacts
-seal the equivalent policy. Phase 1 admits scalar `:f64`, decimal/exponent
-literals, exact bit conversion, add/subtract/multiply/divide, negate/absolute,
-ordered comparisons, and unordered detection on Kotoba Script and Wasm targets.
-The reader normalizes every literal to its exact
+`:kotoba.floating-point/ieee-754-f32-f64-v1`; restricted JavaScript artifacts
+seal the equivalent policy. Scalar `:f32` and `:f64` provide exact bit
+conversion, explicit arithmetic, ordered comparisons, unordered detection,
+and checked-versus-lossy numeric conversions on Kotoba Script and Wasm targets.
+Decimal literals remain f64; f32 creation always names its rounding, integer
+conversion, or bit construction. The reader normalizes every f64 literal to its exact
 signed-i64 IEEE-754 bit pattern before KIR, preserving signed zero and making
 JVM and JVM-free compiler artifacts byte-identical. NaN payloads are not
 observable and canonicalize to `0x7ff8000000000000`, including arbitrary NaN
-payloads introduced through `f64-from-bits`. Implicit coercion, checked numeric
-conversion, nested f64 values, fused operations, remainder, square root,
+payloads introduced through `f64-from-bits`; f32 observation similarly uses
+canonical `0x7fc00000`. Implicit coercion, nested floating values, fused operations, remainder, square root,
 transcendentals, and native or CLJS lowering remain rejected.
 
 Conversions are explicit: `i64-to-f64-checked` rejects inexact integers,
@@ -295,13 +296,14 @@ ABI and must follow the ABI of the selected target.
 The Wasm parity path reserves the versioned `kotoba.typed` custom section for
 canonical binary descriptor and literal tables. Hosts parse it with strict
 UTF-8, uniqueness, EOF, depth, node, member, and table limits before
-instantiation. Binary typed ABI v3 retains the bounded `vector-i64` descriptor
-and adds scalar `f64` tag 12; an older host rejects it before instantiation.
+instantiation. Binary typed ABI v4 retains scalar `f64` tag 12 and adds scalar
+`f32` tag 13; an older host rejects it before instantiation.
 `kotoba.typed/externref-v1` consumes that table through frozen, host-issued
 canonical values, validates every reference parameter and result, and rejects
 forged, descriptor-reused, or cross-schema values. The compiled result seals the required Wasm
 reference-types feature only when reference values are present. Scalar-only
-f64 modules use the Wasm scalar ABI without typed host imports and seal
+floating-only modules use the Wasm scalar ABI without unnecessary value-host
+imports. f32 users seal `:kotoba.typed/mixed-f32-f64-v3`; f64-only users retain
 `:kotoba.typed/mixed-f64-v2`. Unsupported KIR v4 operations still fail during
 lowering; metadata presence alone is never treated as qualification.
 

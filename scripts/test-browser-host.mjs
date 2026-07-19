@@ -18,7 +18,7 @@ const main42 = withCompatibility(rawMain42);
 
 const typedMain42 = withCompatibility(Uint8Array.from([
   0,97,115,109,1,0,0,0,
-  0,18,12,107,111,116,111,98,97,46,116,121,112,101,100,3,1,4,0,0,
+  0,18,12,107,111,116,111,98,97,46,116,121,112,101,100,4,1,4,0,0,
   1,5,1,96,0,1,126,
   3,2,1,0,
   7,8,1,4,109,97,105,110,0,0,
@@ -32,7 +32,7 @@ assert.deepEqual(hosted.report(), { heap: { capacity: 4096, used: 0 } });
 await instantiateKotoba(main42, { expectedSha256: hosted.sha256 });
 const typedHosted = await instantiateKotoba(typedMain42);
 assert.deepEqual(typedHosted.typedAbi, {
-  version: 3,
+  version: 4,
   descriptors: [["option", "i64"]],
   literals: []
 });
@@ -76,6 +76,6 @@ await assert.rejects(
 assert.equal(browserProfile.format, "kotoba.browser-host/v1");
 assert.equal(browserProfile.maxModuleBytes, 1048576);
 assert.equal(browserProfile.pairCapacity, 4096);
-assert.equal(browserProfile.typedAbiVersion, 3);
+assert.equal(browserProfile.typedAbiVersion, 4);
 assert.ok(Object.isFrozen(browserProfile));
 console.log("browser-host: admission, identity, execution, and denial vectors passed");

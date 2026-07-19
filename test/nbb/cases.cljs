@@ -44,4 +44,5 @@
    {:name "sleb-boundary-128" :source "test/nbb/fixtures/sleb-boundary-128.kotoba" :target "wasm32-browser" :policy nil}
    ;; Exact float token normalization and Wasm lowering must be byte-identical
    ;; between the JVM and JVM-free nbb compiler hosts.
-   {:name "f64-bits" :source "test/nbb/fixtures/f64-bits.kotoba" :target "wasm32-browser" :policy nil}])
+   {:name "f64-bits" :source "test/nbb/fixtures/f64-bits.kotoba" :target "wasm32-browser" :policy nil}
+   {:name "f32-bits" :source "test/nbb/fixtures/f32-bits.kotoba" :target "wasm32-browser" :policy nil}])

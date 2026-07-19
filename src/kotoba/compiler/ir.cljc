@@ -26,7 +26,11 @@
 ;; rejecting cleanly -- so admission has to inspect which features are
 ;; actually used, not just the HIR format tag.
 (def non-string-typed-ops
-  '#{f64-to-bits f64-from-bits f64-add f64-sub f64-mul f64-div f64-neg f64-abs
+  '#{f32-to-bits f32-from-bits f64-to-f32-rounded f32-to-f64-exact
+     f32-add f32-sub f32-mul f32-div f32-neg f32-abs
+     f32-eq f32-lt f32-le f32-gt f32-ge f32-unordered
+     i64-to-f32-checked i64-to-f32-rounded f32-to-i64-checked f32-to-i64-truncating
+     f64-to-bits f64-from-bits f64-add f64-sub f64-mul f64-div f64-neg f64-abs
      f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered
      i64-to-f64-checked i64-to-f64-rounded f64-to-i64-checked f64-to-i64-truncating
      map-new map-get map-assoc
@@ -73,6 +77,22 @@
                      (tree-seq coll? seq body))))
          (:functions program))))
 
+(defn uses-f32? [program]
+  (boolean
+   (some (fn [{:keys [param-types result body]}]
+           (or (some #{:f32} param-types)
+               (= :f32 result)
+               (some #(and (seq? %)
+                           (contains? '#{f32-to-bits f32-from-bits
+                                         f64-to-f32-rounded f32-to-f64-exact
+                                         f32-add f32-sub f32-mul f32-div f32-neg f32-abs
+                                         f32-eq f32-lt f32-le f32-gt f32-ge f32-unordered
+                                         i64-to-f32-checked i64-to-f32-rounded
+                                         f32-to-i64-checked f32-to-i64-truncating}
+                                      (first %)))
+                     (tree-seq coll? seq body))))
+         (:functions program))))
+
 (defn- trap! [reason data]
   (throw (ex-info (name reason) (merge {:phase :ir :trap reason} data))))
 
@@ -88,6 +108,13 @@
 (defn- f64-divide [left right]
   #?(:clj (let [^double left left ^double right right] (/ left right))
      :cljs (/ left right)))
+
+(defn- as-f32 [value]
+  #?(:clj (.floatValue ^Number value) :cljs (js/Math.fround value)))
+
+(defn- f32-divide [left right]
+  #?(:clj (let [^float left left ^float right right] (/ left right))
+     :cljs (js/Math.fround (/ left right))))
 
 (defn- validate-runtime-value! [runtime-value type position]
   (case type
@@ -107,6 +134,10 @@
     :f64
     (when-not (value/f64-value? runtime-value)
       (trap! :value-type-mismatch {:expected :f64 :position position}))
+
+    :f32
+    (when-not (value/f32-value? runtime-value)
+      (trap! :value-type-mismatch {:expected :f32 :position position}))
 
     :keyword
     (try
@@ -285,6 +316,7 @@
     #?(:clj (long form) :cljs (i64/->bigint form))
     (string? form)
     (value/bounded-string! form value/string-literal-byte-limit)
+    (value/f32-value? form) form
     (value/f64-value? form) form
     (keyword? form)
     (value/bounded-keyword! form value/keyword-value-byte-limit)
@@ -403,6 +435,58 @@
         (let [[left right] (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
           (or #?(:clj (Double/isNaN ^double left) :cljs (js/Number.isNaN left))
               #?(:clj (Double/isNaN ^double right) :cljs (js/Number.isNaN right))))
+
+        (= op 'f32-to-bits)
+        (value/f32-to-i64-bits
+         (eval-expr (first args) env functions fuel heap call-stack cap-call))
+
+        (= op 'f32-from-bits)
+        (value/i64-bits-to-f32
+         (eval-expr (first args) env functions fuel heap call-stack cap-call))
+
+        (= op 'f64-to-f32-rounded)
+        (value/f64-to-f32-rounded
+         (eval-expr (first args) env functions fuel heap call-stack cap-call))
+
+        (= op 'f32-to-f64-exact)
+        (value/f32-to-f64-exact
+         (eval-expr (first args) env functions fuel heap call-stack cap-call))
+
+        (= op 'i64-to-f32-checked)
+        (value/i64-to-f32-checked
+         (eval-expr (first args) env functions fuel heap call-stack cap-call))
+
+        (= op 'i64-to-f32-rounded)
+        (value/i64-to-f32-rounded
+         (eval-expr (first args) env functions fuel heap call-stack cap-call))
+
+        (= op 'f32-to-i64-checked)
+        (value/f32-to-i64-checked
+         (eval-expr (first args) env functions fuel heap call-stack cap-call))
+
+        (= op 'f32-to-i64-truncating)
+        (value/f32-to-i64-truncating
+         (eval-expr (first args) env functions fuel heap call-stack cap-call))
+
+        (contains? '#{f32-add f32-sub f32-mul f32-div} op)
+        (let [[left right] (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
+          (as-f32 ((case op f32-add + f32-sub - f32-mul * f32-div f32-divide) left right)))
+
+        (= op 'f32-neg)
+        (as-f32 (- (eval-expr (first args) env functions fuel heap call-stack cap-call)))
+
+        (= op 'f32-abs)
+        (as-f32 (#?(:clj Math/abs :cljs js/Math.abs)
+                 (eval-expr (first args) env functions fuel heap call-stack cap-call)))
+
+        (contains? '#{f32-eq f32-lt f32-le f32-gt f32-ge} op)
+        (let [[left right] (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
+          ((case op f32-eq = f32-lt < f32-le <= f32-gt > f32-ge >=) left right))
+
+        (= op 'f32-unordered)
+        (let [[left right] (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
+          (or #?(:clj (Float/isNaN ^float left) :cljs (js/Number.isNaN left))
+              #?(:clj (Float/isNaN ^float right) :cljs (js/Number.isNaN right))))
 
         (= op 'map-new)
         (let [values (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)

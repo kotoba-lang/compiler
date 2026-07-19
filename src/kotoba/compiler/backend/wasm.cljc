@@ -71,6 +71,10 @@
                 (identity-text (wasm-runtime target))
                 (identity-text (cond
                                  (some (fn [{:keys [param-types result]}]
+                                         (or (some #{:f32} param-types) (= :f32 result)))
+                                       (:functions kir))
+                                 :kotoba.typed/mixed-f32-f64-v3
+                                 (some (fn [{:keys [param-types result]}]
                                          (or (some #{:f64} param-types) (= :f64 result)))
                                        (:functions kir))
                                  :kotoba.typed/mixed-f64-v2
@@ -339,6 +343,65 @@
                               (emit* (second args) env) [0x21 right-local]
                               [0x20 left-local 0x20 left-local 0x62
                                0x20 right-local 0x20 right-local 0x62 0x72
+                               0x10 (get intrinsic-indices 'typed-bool)]))
+                    (= op 'f32-to-bits)
+                    (let [value-local (allocate! 0x7d)]
+                      (concat (emit* (first args) env) [0x21 value-local]
+                              [0x20 value-local 0x20 value-local 0x5c 0x04 0x7e]
+                              [0x42] (sleb 2143289344)
+                              [0x05 0x20 value-local 0xbc 0xac 0x0b]))
+                    (= op 'f32-from-bits)
+                    (let [bits-local (allocate! 0x7e)
+                          value-local (allocate! 0x7d)]
+                      (concat (emit* (first args) env) [0x21 bits-local]
+                              [0x20 bits-local 0x42] (sleb -2147483648) [0x53]
+                              [0x20 bits-local 0x42] (sleb 2147483647) [0x55 0x72]
+                              [0x04 0x40 0x00 0x0b]
+                              [0x20 bits-local 0xa7 0xbe 0x21 value-local]
+                              [0x20 value-local 0x20 value-local 0x5c 0x04 0x7d]
+                              [0x42] (sleb 2143289344) [0xa7 0xbe]
+                              [0x05 0x20 value-local 0x0b]))
+                    (= op 'f64-to-f32-rounded)
+                    (concat (emit* (first args) env) [0xb6])
+                    (= op 'f32-to-f64-exact)
+                    (concat (emit* (first args) env) [0xbb])
+                    (= op 'i64-to-f32-rounded)
+                    (concat (emit* (first args) env) [0xb4])
+                    (= op 'i64-to-f32-checked)
+                    (let [source-local (allocate! 0x7e)
+                          result-local (allocate! 0x7d)]
+                      (concat (emit* (first args) env) [0x21 source-local]
+                              [0x20 source-local 0xb4 0x21 result-local]
+                              [0x20 result-local 0xae 0x20 source-local 0x52
+                               0x04 0x40 0x00 0x0b 0x20 result-local]))
+                    (= op 'f32-to-i64-truncating)
+                    (concat (emit* (first args) env) [0xae])
+                    (= op 'f32-to-i64-checked)
+                    (let [source-local (allocate! 0x7d)
+                          result-local (allocate! 0x7e)]
+                      (concat (emit* (first args) env) [0x21 source-local]
+                              [0x20 source-local 0xae 0x21 result-local]
+                              [0x20 result-local 0xb4 0x20 source-local 0x5c
+                               0x04 0x40 0x00 0x0b 0x20 result-local]))
+                    (contains? '#{f32-add f32-sub f32-mul f32-div} op)
+                    (concat (emit* (first args) env) (emit* (second args) env)
+                            [({'f32-add 0x92 'f32-sub 0x93 'f32-mul 0x94 'f32-div 0x95} op)])
+                    (= op 'f32-neg)
+                    (concat (emit* (first args) env) [0x8c])
+                    (= op 'f32-abs)
+                    (concat (emit* (first args) env) [0x8b])
+                    (contains? '#{f32-eq f32-lt f32-le f32-gt f32-ge} op)
+                    (concat (emit* (first args) env) (emit* (second args) env)
+                            [({'f32-eq 0x5b 'f32-lt 0x5d 'f32-gt 0x5e
+                               'f32-le 0x5f 'f32-ge 0x60} op)
+                             0x10 (get intrinsic-indices 'typed-bool)])
+                    (= op 'f32-unordered)
+                    (let [left-local (allocate! 0x7d)
+                          right-local (allocate! 0x7d)]
+                      (concat (emit* (first args) env) [0x21 left-local]
+                              (emit* (second args) env) [0x21 right-local]
+                              [0x20 left-local 0x20 left-local 0x5c
+                               0x20 right-local 0x20 right-local 0x5c 0x72
                                0x10 (get intrinsic-indices 'typed-bool)]))
                     (contains? '#{+ - * quot bit-xor bit-and} op)
                     (let [opcode ({'+ 0x7c '- 0x7d '* 0x7e 'quot 0x7f

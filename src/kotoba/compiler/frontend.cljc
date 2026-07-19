@@ -128,6 +128,15 @@
     f64-eq 2 f64-lt 2 f64-le 2 f64-gt 2 f64-ge 2 f64-unordered 2
     i64-to-f64-checked 1 i64-to-f64-rounded 1
     f64-to-i64-checked 1 f64-to-i64-truncating 1})
+
+(def f32-operations
+  '{f32-to-bits 1 f32-from-bits 1
+    f64-to-f32-rounded 1 f32-to-f64-exact 1
+    i64-to-f32-checked 1 i64-to-f32-rounded 1
+    f32-to-i64-checked 1 f32-to-i64-truncating 1
+    f32-add 2 f32-sub 2 f32-mul 2 f32-div 2
+    f32-neg 1 f32-abs 1
+    f32-eq 2 f32-lt 2 f32-le 2 f32-gt 2 f32-ge 2 f32-unordered 2})
 (def reserved-function-names
   (set/union forbidden-heads arithmetic comparisons (set (keys heap-operations))
              (set (keys kgraph-operations))
@@ -145,6 +154,7 @@
              (set (keys typed-vector-operations))
              (set (keys string-operations))
              (set (keys f64-operations))
+             (set (keys f32-operations))
              '#{let if cap-call ns defn defn- some some? nil? vector-i64 vector-new
                 hetero-vector typed-set record match-result match-variant match-option}))
 (def max-functions 1024)
@@ -168,7 +178,7 @@
 ;; most 256 distinct capabilities can ever exist), not the unrelated
 ;; function-count limit.
 (def max-namespace-capabilities 256)
-(def value-types #{:i64 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64})
+(def value-types #{:i64 :f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64})
 
 (declare reject!)
 
@@ -208,8 +218,8 @@
      (reject! "value type exceeds depth limit" type))
    (cond
      (contains? value-types type)
-     (do (when (and (= type :f64) (pos? depth))
-           (reject! "f64 is admitted only as a phase-1 scalar, not inside structured values" type))
+     (do (when (and (contains? #{:f32 :f64} type) (pos? depth))
+           (reject! "floating-point values are admitted only as scalars, not inside structured values" type))
          type)
      (parametric-result-type? type)
      (do (validate-value-type! (second type) (inc depth) nodes)
@@ -1207,6 +1217,11 @@
               (reject! "f64 operation arity mismatch" form))
             (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
 
+        (contains? f32-operations op)
+        (do (when-not (= (get f32-operations op) (count args))
+              (reject! "f32 operation arity mismatch" form))
+            (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
         (contains? typed-map-operations op)
         (do (case op
               map-new (when (odd? (count args))
@@ -1643,6 +1658,37 @@
       (contains? '#{f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered} op)
       (do (doseq [[type arg] (map vector types args)]
             (require-expression-type! type :f64 arg))
+          :bool)
+
+      (= op 'f32-to-bits)
+      (do (require-expression-type! (first types) :f32 (first args)) :i64)
+
+      (= op 'f32-from-bits)
+      (do (require-expression-type! (first types) :i64 (first args)) :f32)
+
+      (= op 'f64-to-f32-rounded)
+      (do (require-expression-type! (first types) :f64 (first args)) :f32)
+
+      (= op 'f32-to-f64-exact)
+      (do (require-expression-type! (first types) :f32 (first args)) :f64)
+
+      (contains? '#{i64-to-f32-checked i64-to-f32-rounded} op)
+      (do (require-expression-type! (first types) :i64 (first args)) :f32)
+
+      (contains? '#{f32-to-i64-checked f32-to-i64-truncating} op)
+      (do (require-expression-type! (first types) :f32 (first args)) :i64)
+
+      (contains? '#{f32-add f32-sub f32-mul f32-div} op)
+      (do (doseq [[type arg] (map vector types args)]
+            (require-expression-type! type :f32 arg))
+          :f32)
+
+      (contains? '#{f32-neg f32-abs} op)
+      (do (require-expression-type! (first types) :f32 (first args)) :f32)
+
+      (contains? '#{f32-eq f32-lt f32-le f32-gt f32-ge f32-unordered} op)
+      (do (doseq [[type arg] (map vector types args)]
+            (require-expression-type! type :f32 arg))
           :bool)
 
       (= op 'map-new)
@@ -2133,7 +2179,7 @@
         (reject! "typed parameters require alternating name/type pairs" raw-params))
       (mapv (fn [[pattern type]]
               (validate-value-type! type)
-              (when (and (or (contains? #{:f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64} type)
+              (when (and (or (contains? #{:f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64} type)
                              (structured-type? type))
                          (not (or (symbol? pattern)
                                   (and (= type :map) (map? pattern))
@@ -2384,9 +2430,9 @@
     (check-lowering-budget! parsed)
     (let [typed-values? (boolean
                          (some (fn [{:keys [param-types result body]}]
-                                 (or (some #(or (contains? #{:f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64} %)
+                                 (or (some #(or (contains? #{:f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64} %)
                                                 (structured-type? %)) param-types)
-                                     (or (contains? #{:f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64} result)
+                                     (or (contains? #{:f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64} result)
                                          (structured-type? result))
                                      (some #(or (string? %) (keyword? %) (boolean? %)
                                                 (and (seq? %)
