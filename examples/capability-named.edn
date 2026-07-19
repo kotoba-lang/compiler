@@ -1,0 +1,7 @@
+;; ADR-2607182410: named-capability counterpart of capability-policy.edn --
+;; capability-named.kotoba writes `(cap-call :identity/sign value)` instead
+;; of a magic integer. `:identity/sign` resolves (at parse time, via
+;; resources/kotoba/compiler/capability-registry.edn) to id 1, so the policy
+;; below is identical in shape to capability-policy.edn -- admission.cljc
+;; never sees the keyword, only the resolved [:cap/call 1] effect.
+{:allow #{[:cap/call 1]}}

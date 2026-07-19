@@ -1,7 +1,11 @@
 (ns kotoba.compiler.backend.wasm
   ;; See `kotoba.compiler.ir`'s ns form for why the whole `:require` clause
   ;; (not just an item inside it) is behind the reader-conditional.
-  #?(:cljs (:require [kotoba.compiler.cljs-i64 :as i64])))
+  #?(:clj (:require [kotoba.compiler.backend.wasm-typed :as typed]
+                    [kotoba.compiler.compatibility :as compatibility])
+     :cljs (:require [kotoba.compiler.backend.wasm-typed :as typed]
+                     [kotoba.compiler.compatibility :as compatibility]
+                     [kotoba.compiler.cljs-i64 :as i64])))
 
 ;; `uleb` only ever encodes small, non-negative, interpreter-internal counts
 ;; and indices in this file (section/payload lengths, function/type/import
@@ -43,6 +47,29 @@
   #?(:clj (mapv #(bit-and (int %) 0xff) (.getBytes ^String s "UTF-8"))
      :cljs (vec (js/Array.from (.encode (js/TextEncoder.) s)))))
 (defn- name-bytes [s] (let [bs (utf8 s)] (into (uleb (count bs)) bs)))
+
+(def compatibility-section-name "kotoba.compatibility")
+
+(defn- wasm-runtime [target]
+  (case target
+    :wasm32-browser-kotoba-v1 :kotoba-browser-host-v1
+    :wasm32-wasi-kotoba-v1 :kotoba-wasi-host-v1
+    :kotoba-capability-host-v1))
+
+(defn- identity-text [value]
+  (if-let [ns (namespace value)] (str ns "/" (name value)) (name value)))
+
+(defn- compatibility-bytes [kir target]
+  (let [fields [compatibility/compiler-version
+                (identity-text compatibility/language-version)
+                (identity-text (:format kir))
+                (identity-text target)
+                (identity-text (wasm-runtime target))
+                (identity-text (if (= :kotoba.kir/v4 (:format kir))
+                        :kotoba.typed/externref-v1 :kotoba.i64/direct-v1))
+                (identity-text compatibility/tender-role)
+                (identity-text :kotoba.capability-host/v1)]]
+    (vec (concat [1] (mapcat name-bytes fields)))))
 
 (defn- local-count [form]
   (if-not (seq? form)
@@ -88,6 +115,14 @@
                   (emit-expr then env ctx) [0x05]
                   (emit-expr else env ctx) [0x0b]))
 
+        ;; `do`: emit each subexpression in order; drop all but the last value
+        ;; from the stack (0x1a = drop). Side effects run once, in order.
+        (= op 'do)
+        (let [n (count args)]
+          (mapcat (fn [i arg]
+                    (concat (emit-expr arg env ctx) (when (< i (dec n)) [0x1a])))
+                  (range n) args))
+
         (= op 'cap-call)
         (let [[cap-id value] args]
           (concat [0x42] (sleb cap-id) (emit-expr value env ctx)
@@ -103,11 +138,6 @@
             (concat (emit-expr (first args) env ctx)
                     (mapcat #(concat (emit-expr % env ctx) [opcode]) (rest args)))))
 
-        (contains? '#{bit-and bit-xor} op)
-        (let [opcode ({'bit-and 0x83 'bit-xor 0x85} op)]
-          (concat (emit-expr (first args) env ctx)
-                  (mapcat #(concat (emit-expr % env ctx) [opcode]) (rest args))))
-
         (contains? '#{= < > <= >=} op)
         (concat (emit-many args env ctx)
                 [({'= 0x51 '< 0x53 '> 0x55 '<= 0x57 '>= 0x59} op)
@@ -115,6 +145,342 @@
 
         :else
         (concat (emit-many args env ctx) [0x10 (get function-indices op)]))))) ; call
+
+(defn- i32-const [value] (into [0x41] (sleb value)))
+
+(defn- typed-function-signatures [functions]
+  (into {} (map (fn [function] [(:name function) function]) functions)))
+
+(defn- typed-function-type [{:keys [param-types result]}]
+  (concat [0x60] (uleb (count param-types)) (map typed/wasm-type param-types)
+          [1 (typed/wasm-type result)]))
+
+(defn- emit-typed-function-body
+  [function function-indices intrinsic-indices descriptor-indices literal-indices signatures]
+  (let [locals (volatile! [])
+        param-count (count (:params function))
+        allocate! (fn [wasm-type]
+                    (let [index (+ param-count (count @locals))]
+                      (vswap! locals conj wasm-type)
+                      index))
+        descriptor-id (fn [type]
+                        (or (get descriptor-indices type)
+                            (throw (ex-info "typed Wasm descriptor is not sealed"
+                                            {:phase :wasm-typed-lowering :descriptor type}))))
+        env (into {} (map-indexed (fn [index [name type]]
+                                    [name {:index index :type type}])
+                                  (map vector (:params function) (:param-types function))))]
+    (letfn [(emit-builder [type tag item-forms item-types env]
+              (let [initial (concat (i32-const (descriptor-id type)) (i32-const tag)
+                                    [0x10 (get intrinsic-indices 'typed-new)])
+                    pushed (reduce (fn [code [item item-type]]
+                                     (concat code (emit* item env)
+                                             [0x10 (get intrinsic-indices
+                                                        (if (= item-type :i64)
+                                                          'typed-push-i64
+                                                          'typed-push-ref))]))
+                                   initial (map vector item-forms item-types))]
+                (concat (i32-const (descriptor-id type)) pushed
+                        [0x10 (get intrinsic-indices 'typed-seal)])))
+            (emit-get [type value-form index item-type env]
+              (concat (i32-const (descriptor-id type)) (emit* value-form env)
+                      (i32-const index)
+                      [0x10 (get intrinsic-indices
+                                 (if (= item-type :i64) 'typed-get-i64 'typed-get-ref))]))
+            (emit-bool [code]
+              (concat code [0x10 (get intrinsic-indices 'typed-bool)]))
+            (emit-equal [type left right env]
+              (concat (i32-const (descriptor-id type))
+                      (emit* left env) (emit* right env)
+                      [0x10 (get intrinsic-indices 'typed-equal) 0xad]))
+            (emit-test [form env]
+              (let [type (typed/infer-type
+                          form
+                          (into {} (map (fn [[key item]] [key (:type item)]) env))
+                          signatures)]
+                (case type
+                  :i64 (concat (emit* form env) [0x50 0x45])
+                  :bool (concat (i32-const (descriptor-id :bool))
+                                (emit* form env)
+                                [0x10 (get intrinsic-indices 'typed-tag)])
+                  (throw (ex-info "typed Wasm condition must be bool or i64"
+                                  {:phase :wasm-typed-lowering
+                                   :type type :form form})))))
+            (emit-assoc [type value index replacement replacement-type env]
+              (concat (i32-const (descriptor-id type)) (emit* value env)
+                      (i32-const index) (emit* replacement env)
+                      [0x10 (get intrinsic-indices
+                                 (if (= replacement-type :i64)
+                                   'typed-assoc-i64 'typed-assoc-ref))]))
+            (emit-match [type value-form branches env]
+              (let [value-local (allocate! 0x6f)
+                    tag-local (allocate! 0x7f)
+                    result-type (typed/infer-type
+                                 (nth (first branches) 2)
+                                 (assoc (into {} (map (fn [[key item]] [key (:type item)]) env))
+                                        (second (first branches))
+                                        (second (first (nth type 2))))
+                                 signatures)
+                    setup (concat (emit* value-form env) [0x21 value-local]
+                                  (i32-const (descriptor-id type)) [0x20 value-local]
+                                  [0x10 (get intrinsic-indices 'typed-tag) 0x21 tag-local])
+                    emit-branches
+                    (fn emit-branches [index remaining]
+                      (let [[_ binder body] (first remaining)
+                            payload-type (second (nth (nth type 2) index))
+                            binder-local (allocate! (typed/wasm-type payload-type))
+                            branch-env (assoc env binder {:index binder-local :type payload-type})
+                            body-code (concat (emit-get type {:wasm-local value-local} index payload-type env)
+                                              [0x21 binder-local] (emit* body branch-env))]
+                        (if (= 1 (count remaining))
+                          body-code
+                          (concat [0x20 tag-local] (i32-const index) [0x46 0x04
+                                  (typed/wasm-type result-type)]
+                                  body-code [0x05]
+                                  (emit-branches (inc index) (rest remaining)) [0x0b]))))]
+                (concat setup (emit-branches 0 branches))))
+            (emit* [form env]
+              (cond
+                (and (map? form) (contains? form :wasm-local)) [0x20 (:wasm-local form)]
+                (integer? form) (into [0x42] (sleb form))
+                (or (string? form) (keyword? form) (boolean? form))
+                (let [literal [(cond (string? form) :string (keyword? form) :keyword :else :bool)
+                               (if (keyword? form) (str form) form)]]
+                  (concat (i32-const (get literal-indices literal))
+                          [0x10 (get intrinsic-indices 'typed-literal)]))
+                (symbol? form) [0x20 (:index (get env form))]
+                :else
+                (let [[op & args] form]
+                  (cond
+                    (= op 'let)
+                    (let [[bindings body] args]
+                      (loop [remaining (partition 2 bindings) current-env env code []]
+                        (if-let [[name value] (first remaining)]
+                          (let [type (typed/infer-type value
+                                                       (into {} (map (fn [[key item]]
+                                                                      [key (:type item)]) current-env))
+                                                       signatures)
+                                value-code (emit* value current-env)
+                                local (allocate! (typed/wasm-type type))]
+                            (recur (next remaining)
+                                   (assoc current-env name {:index local :type type})
+                                   (concat code value-code [0x21 local])))
+                          (concat code (emit* body current-env)))))
+                    (= op 'if)
+                    (let [[test then else] args
+                          result-type (typed/infer-type
+                                       then
+                                       (into {} (map (fn [[key item]] [key (:type item)]) env))
+                                       signatures)]
+                      (concat (emit-test test env)
+                              [0x04 (typed/wasm-type result-type)]
+                              (emit* then env) [0x05] (emit* else env) [0x0b]))
+                    (contains? '#{+ - * quot} op)
+                    (let [opcode ({'+ 0x7c '- 0x7d '* 0x7e 'quot 0x7f} op)]
+                      (if (and (= op '-) (= 1 (count args)))
+                        (concat [0x42 0] (emit* (first args) env) [0x7d])
+                        (concat (emit* (first args) env)
+                                (mapcat #(concat (emit* % env) [opcode]) (rest args)))))
+                    (= op 'string-byte-length)
+                    (concat (i32-const (descriptor-id :string)) (emit* (first args) env)
+                            [0x10 (get intrinsic-indices 'typed-count)])
+                    (= op 'string=?)
+                    (emit-bool
+                     (concat (i32-const (descriptor-id :string))
+                             (emit* (first args) env) (emit* (second args) env)
+                             [0x10 (get intrinsic-indices 'typed-equal)]))
+                    (= op 'bool-not)
+                    (emit-bool (concat (emit-test (first args) env) [0x45]))
+                    (contains? '#{= < > <= >=} op)
+                    (let [operand-type (typed/infer-type
+                                        (first args)
+                                        (into {} (map (fn [[key item]] [key (:type item)]) env))
+                                        signatures)]
+                      (if (= operand-type :i64)
+                        (concat (emit* (first args) env) (emit* (second args) env)
+                                [({'= 0x51 '< 0x53 '> 0x55 '<= 0x57 '>= 0x59} op)
+                                 0xad])
+                        (if (= op '=)
+                          (emit-equal operand-type (first args) (second args) env)
+                          (throw (ex-info "typed Wasm ordering requires i64 operands"
+                                          {:phase :wasm-typed-lowering
+                                           :operation op :type operand-type})))))
+                    (contains? '#{option-some-of option-none-of} op)
+                    (let [[type & payload] args]
+                      (emit-builder type (if (= op 'option-some-of) 1 0) payload
+                                    (if (seq payload) [(second type)] []) env))
+                    (contains? '#{result-ok-of result-err-of} op)
+                    (let [[type payload] args
+                          tag (if (= op 'result-ok-of) 1 0)]
+                      (emit-builder type tag [payload]
+                                    [(if (= tag 1) (second type) (nth type 2))] env))
+                    (= op 'variant-new)
+                    (let [[type tag payload] args
+                          index (first (keep-indexed #(when (= tag (first %2)) %1)
+                                                     (nth type 2)))
+                          payload-type (second (nth (nth type 2) index))]
+                      (emit-builder type index [payload] [payload-type] env))
+                    (= op 'hetero-vector-new)
+                    (let [[type & items] args]
+                      (emit-builder type -1 items (second type) env))
+                    (= op 'typed-set-new)
+                    (let [[type & items] args]
+                      (emit-builder type -1 items (repeat (count items) (second type)) env))
+                    (= op 'typed-map-new)
+                    (let [[type & items] args]
+                      (emit-builder type -1 items
+                                    (take (count items) (cycle [(second type) (nth type 2)])) env))
+                    (= op 'record-new)
+                    (let [[type & items] args]
+                      (emit-builder type -1 items (map second (nth type 2)) env))
+                    (= op 'option-match)
+                    (let [[type value none-body binder some-body] args
+                          value-local (allocate! 0x6f)
+                          binder-type (second type)
+                          binder-local (allocate! (typed/wasm-type binder-type))
+                          result-type (typed/infer-type none-body
+                                                       (into {} (map (fn [[key item]] [key (:type item)]) env))
+                                                       signatures)]
+                      (concat (emit* value env) [0x21 value-local]
+                              (i32-const (descriptor-id type)) [0x20 value-local]
+                              [0x10 (get intrinsic-indices 'typed-tag) 0x04
+                               (typed/wasm-type result-type)]
+                              (emit-get type {:wasm-local value-local} 0 binder-type env)
+                              [0x21 binder-local]
+                              (emit* some-body (assoc env binder {:index binder-local :type binder-type}))
+                              [0x05] (emit* none-body env) [0x0b]))
+                    (= op 'result-match-of)
+                    (let [[type value ok-name ok-body err-name err-body] args
+                          value-local (allocate! 0x6f)
+                          ok-type (second type)
+                          err-type (nth type 2)
+                          ok-local (allocate! (typed/wasm-type ok-type))
+                          err-local (allocate! (typed/wasm-type err-type))
+                          result-type (typed/infer-type ok-body
+                                                       (assoc (into {} (map (fn [[key item]] [key (:type item)]) env))
+                                                              ok-name ok-type)
+                                                       signatures)]
+                      (concat (emit* value env) [0x21 value-local]
+                              (i32-const (descriptor-id type)) [0x20 value-local]
+                              [0x10 (get intrinsic-indices 'typed-tag) 0x04
+                               (typed/wasm-type result-type)]
+                              (emit-get type {:wasm-local value-local} 0 ok-type env)
+                              [0x21 ok-local]
+                              (emit* ok-body (assoc env ok-name {:index ok-local :type ok-type}))
+                              [0x05]
+                              (emit-get type {:wasm-local value-local} 0 err-type env)
+                              [0x21 err-local]
+                              (emit* err-body (assoc env err-name {:index err-local :type err-type}))
+                              [0x0b]))
+                    (= op 'variant-match) (emit-match (first args) (second args) (nth args 2) env)
+                    (= op 'hetero-vector-at)
+                    (let [[type value index] args
+                          item-type (nth (second type) index)]
+                      (emit-get type value index item-type env))
+                    (= op 'record-get)
+                    (let [[type value field] args
+                          index (first (keep-indexed #(when (= field (first %2)) %1) (nth type 2)))
+                          item-type (second (nth (nth type 2) index))]
+                      (emit-get type value index item-type env))
+                    (contains? '#{option-some?-of result-ok?-of} op)
+                    (let [[type value] args]
+                      (emit-bool (concat (i32-const (descriptor-id type)) (emit* value env)
+                                         [0x10 (get intrinsic-indices 'typed-tag)])))
+                    (contains? '#{option-value-of result-value-of result-error-of} op)
+                    (let [[type value fallback] args
+                          wanted (if (= op 'result-error-of) 0 1)
+                          payload-type (case op
+                                         option-value-of (second type)
+                                         result-value-of (second type)
+                                         result-error-of (nth type 2))
+                          value-local (allocate! 0x6f)]
+                      (concat (emit* value env) [0x21 value-local]
+                              (i32-const (descriptor-id type)) [0x20 value-local]
+                              [0x10 (get intrinsic-indices 'typed-tag)]
+                              (i32-const wanted) [0x46 0x04 (typed/wasm-type payload-type)]
+                              (emit-get type {:wasm-local value-local} 0 payload-type env)
+                              [0x05] (emit* fallback env) [0x0b]))
+                    (= op 'hetero-vector-assoc)
+                    (let [[type value index replacement] args]
+                      (emit-assoc type value index replacement (nth (second type) index) env))
+                    (= op 'record-assoc)
+                    (let [[type value field replacement] args
+                          index (first (keep-indexed #(when (= field (first %2)) %1) (nth type 2)))
+                          replacement-type (second (nth (nth type 2) index))]
+                      (emit-assoc type value index replacement replacement-type env))
+                    (contains? '#{hetero-vector-equal typed-set-equal typed-map-equal record-equal} op)
+                    (let [[type left right] args] (emit-equal type left right env))
+                    (contains? '#{typed-set-contains typed-set-conj typed-set-disj} op)
+                    (let [[type value item] args
+                          item-type (second type)
+                          operation ({'typed-set-contains 0 'typed-set-conj 1 'typed-set-disj 2} op)
+                          contains? (= op 'typed-set-contains)
+                          code (concat (i32-const (descriptor-id type)) (emit* value env)
+                                       (when-not contains? (i32-const operation)) (emit* item env)
+                                       [0x10 (get intrinsic-indices
+                                                  (if contains?
+                                                    (if (= item-type :i64)
+                                                      'typed-set-contains-i64 'typed-set-contains-ref)
+                                                    (if (= item-type :i64)
+                                                      'typed-set-op-i64 'typed-set-op-ref)))])]
+                      (if (= op 'typed-set-contains) (emit-bool code) code))
+                    (contains? '#{hetero-vector-count typed-set-count} op)
+                    (let [[type value] args]
+                      (concat (i32-const (descriptor-id type)) (emit* value env)
+                              [0x10 (get intrinsic-indices 'typed-count)]))
+                    (= op 'typed-map-count)
+                    (let [[type value] args]
+                      (concat (i32-const (descriptor-id type)) (emit* value env)
+                              [0x10 (get intrinsic-indices 'typed-count)]))
+                    (contains? '#{typed-map-contains typed-map-get typed-map-dissoc} op)
+                    (let [[type value key] args
+                          key-type (second type)
+                          prefix (case op
+                                   typed-map-contains "typed-map-contains-"
+                                   typed-map-get "typed-map-get-"
+                                   typed-map-dissoc "typed-map-dissoc-")
+                          intrinsic (symbol (str prefix (if (= key-type :i64) "i64" "ref")))
+                          code (concat (i32-const (descriptor-id type)) (emit* value env)
+                                       (emit* key env) [0x10 (get intrinsic-indices intrinsic)])]
+                      (if (= op 'typed-map-contains) (emit-bool code) code))
+                    (= op 'typed-map-entry-at)
+                    (let [[type value index] args]
+                      (concat (i32-const (descriptor-id type)) (emit* value env)
+                              (emit* index env)
+                              [0x10 (get intrinsic-indices 'typed-map-entry-at)]))
+                    (= op 'typed-map-assoc)
+                    (let [[type value key item] args
+                          key-code (if (= (second type) :i64) "i" "r")
+                          item-code (if (= (nth type 2) :i64) "i" "r")
+                          intrinsic (symbol (str "typed-map-assoc-" key-code item-code))]
+                      (concat (i32-const (descriptor-id type)) (emit* value env)
+                              (emit* key env) (emit* item env)
+                              [0x10 (get intrinsic-indices intrinsic)]))
+                    :else
+                    (if-let [function-index (get function-indices op)]
+                      (concat (mapcat #(emit* % env) args) [0x10 function-index])
+                      (throw (ex-info "typed Wasm operation is not qualified"
+                                      {:phase :wasm-typed-lowering
+                                       :operation op :form form})))))))]
+      (let [prefix (mapcat (fn [[index type]]
+                             (when (typed/reference-type? type)
+                               (concat (i32-const (descriptor-id type)) [0x20 index]
+                                       [0x10 (get intrinsic-indices 'typed-assert-ref)
+                                        0x21 index])))
+                           (map-indexed vector (:param-types function)))
+            body-code (emit* (:body function) env)
+            body-code (if (typed/reference-type? (:result function))
+                        (concat (i32-const (descriptor-id (:result function))) body-code
+                                [0x10 (get intrinsic-indices 'typed-assert-ref)])
+                        body-code)
+            declarations (if (empty? @locals) [0]
+                           (concat (uleb (count @locals))
+                                   (mapcat (fn [type] [1 type]) @locals)))
+            charge [0x23 0 0x50 0x04 0x40 0x00 0x0b
+                    0x23 0 0x42 1 0x7d 0x24 0]
+            instructions (concat prefix charge body-code)
+            body (concat declarations instructions [0x0b])]
+        (concat (uleb (count body)) body)))))
 
 (defn- function-type [{:keys [params]}]
   (concat [0x60] (uleb (count params)) (repeat (count params) 0x7e) [1 0x7e]))
@@ -136,6 +502,9 @@
 
 (defn emit [kir target]
   (let [functions (:functions kir)
+        typed? (= :kotoba.kir/v4 (:format kir))
+        exported-names (set (or (:exports kir) (map :name functions)))
+        exported-functions (filterv #(contains? exported-names (:name %)) functions)
         has-cap? (contains? (set (map first (:effects kir))) :cap/call)
         heap-ops (let [found (volatile! #{})]
                    (letfn [(walk [form]
@@ -148,7 +517,37 @@
                                (coll? form) (doseq [item form] (walk item))))]
                      (doseq [function functions] (walk (:body function)))
                      @found))
-        imports (vec (concat
+        typed-imports (when typed?
+                        [['typed-literal "kotoba:typed" "literal" [0x60 1 0x7f 1 0x6f]]
+                         ['typed-new "kotoba:typed" "new" [0x60 2 0x7f 0x7f 1 0x6f]]
+                         ['typed-push-i64 "kotoba:typed" "push-i64" [0x60 2 0x6f 0x7e 1 0x6f]]
+                         ['typed-push-ref "kotoba:typed" "push-ref" [0x60 2 0x6f 0x6f 1 0x6f]]
+                         ['typed-seal "kotoba:typed" "seal" [0x60 2 0x7f 0x6f 1 0x6f]]
+                         ['typed-assert-ref "kotoba:typed" "assert-ref" [0x60 2 0x7f 0x6f 1 0x6f]]
+                         ['typed-tag "kotoba:typed" "tag" [0x60 2 0x7f 0x6f 1 0x7f]]
+                         ['typed-get-i64 "kotoba:typed" "get-i64" [0x60 3 0x7f 0x6f 0x7f 1 0x7e]]
+                         ['typed-get-ref "kotoba:typed" "get-ref" [0x60 3 0x7f 0x6f 0x7f 1 0x6f]]
+                         ['typed-count "kotoba:typed" "count" [0x60 2 0x7f 0x6f 1 0x7e]]
+                         ['typed-bool "kotoba:typed" "bool" [0x60 1 0x7f 1 0x6f]]
+                         ['typed-equal "kotoba:typed" "equal" [0x60 3 0x7f 0x6f 0x6f 1 0x7f]]
+                         ['typed-assoc-i64 "kotoba:typed" "assoc-i64" [0x60 4 0x7f 0x6f 0x7f 0x7e 1 0x6f]]
+                         ['typed-assoc-ref "kotoba:typed" "assoc-ref" [0x60 4 0x7f 0x6f 0x7f 0x6f 1 0x6f]]
+                         ['typed-set-op-i64 "kotoba:typed" "set-op-i64" [0x60 4 0x7f 0x6f 0x7f 0x7e 1 0x6f]]
+                         ['typed-set-op-ref "kotoba:typed" "set-op-ref" [0x60 4 0x7f 0x6f 0x7f 0x6f 1 0x6f]]
+                         ['typed-set-contains-i64 "kotoba:typed" "set-contains-i64" [0x60 3 0x7f 0x6f 0x7e 1 0x7f]]
+                         ['typed-set-contains-ref "kotoba:typed" "set-contains-ref" [0x60 3 0x7f 0x6f 0x6f 1 0x7f]]
+                         ['typed-map-contains-i64 "kotoba:typed" "map-contains-i64" [0x60 3 0x7f 0x6f 0x7e 1 0x7f]]
+                         ['typed-map-contains-ref "kotoba:typed" "map-contains-ref" [0x60 3 0x7f 0x6f 0x6f 1 0x7f]]
+                         ['typed-map-get-i64 "kotoba:typed" "map-get-i64" [0x60 3 0x7f 0x6f 0x7e 1 0x6f]]
+                         ['typed-map-get-ref "kotoba:typed" "map-get-ref" [0x60 3 0x7f 0x6f 0x6f 1 0x6f]]
+                         ['typed-map-entry-at "kotoba:typed" "map-entry-at" [0x60 3 0x7f 0x6f 0x7e 1 0x6f]]
+                         ['typed-map-assoc-ii "kotoba:typed" "map-assoc-ii" [0x60 4 0x7f 0x6f 0x7e 0x7e 1 0x6f]]
+                         ['typed-map-assoc-ir "kotoba:typed" "map-assoc-ir" [0x60 4 0x7f 0x6f 0x7e 0x6f 1 0x6f]]
+                         ['typed-map-assoc-ri "kotoba:typed" "map-assoc-ri" [0x60 4 0x7f 0x6f 0x6f 0x7e 1 0x6f]]
+                         ['typed-map-assoc-rr "kotoba:typed" "map-assoc-rr" [0x60 4 0x7f 0x6f 0x6f 0x6f 1 0x6f]]
+                         ['typed-map-dissoc-i64 "kotoba:typed" "map-dissoc-i64" [0x60 3 0x7f 0x6f 0x7e 1 0x6f]]
+                         ['typed-map-dissoc-ref "kotoba:typed" "map-dissoc-ref" [0x60 3 0x7f 0x6f 0x6f 1 0x6f]]])
+        imports (vec (concat typed-imports
                       (when has-cap? [['cap-call "kotoba:cap" "call"
                                        [0x60 2 0x7e 0x7e 1 0x7e]]])
                       (when (seq heap-ops)
@@ -159,7 +558,8 @@
         intrinsic-indices (into {} (map-indexed (fn [index [op]] [op index]) imports))
         indices (into {} (map-indexed (fn [i f] [(:name f) (+ i shift)]) functions))
         types (concat (uleb (+ (count functions) shift))
-                      (mapcat #(nth % 3) imports) (mapcat function-type functions))
+                      (mapcat #(nth % 3) imports)
+                      (mapcat (if typed? typed-function-type function-type) functions))
         import-sec (when (seq imports)
                      (concat (uleb shift)
                              (mapcat (fn [[_ module field _] index]
@@ -173,16 +573,31 @@
         global-sec [1 0x7e 1 0x42 0x80 0x02 0x0b]
         ;; Pure functions are exported with their source names. This makes
         ;; runtime parameters observable and testable without host authority.
-        export-sec (concat (uleb (count functions))
-                           (mapcat (fn [[index function]]
+        export-sec (concat (uleb (count exported-functions))
+                           (mapcat (fn [function]
                                      (concat (name-bytes (name (:name function))) [0]
-                                             (uleb (+ index shift))))
-                                   (map-indexed vector functions)))
-        code-sec (concat (uleb (count functions))
-                         (mapcat #(function-body % indices intrinsic-indices) functions))
+                                             (uleb (get indices (:name function)))))
+                                   exported-functions))
+        descriptor-indices (when typed? (typed/descriptor-indices kir))
+        literal-indices (when typed? (typed/literal-indices kir))
+        signatures (when typed? (typed-function-signatures functions))
+        code-sec (concat
+                  (uleb (count functions))
+                  (mapcat #(if typed?
+                             (emit-typed-function-body % indices intrinsic-indices
+                                                       descriptor-indices literal-indices signatures)
+                             (function-body % indices intrinsic-indices))
+                          functions))
         target-sec (concat (name-bytes "kotoba.target")
-                           (utf8 (name target)))]
+                           (utf8 (name target)))
+        typed-sec (when (= :kotoba.kir/v4 (:format kir))
+                    (concat (name-bytes typed/custom-section-name)
+                            (typed/metadata-bytes kir)))
+        compatibility-sec (concat (name-bytes compatibility-section-name)
+                                  (compatibility-bytes kir target))]
     (let [bytes (concat [0 0x61 0x73 0x6d 1 0 0 0] (section 0 target-sec)
+                        (section 0 compatibility-sec)
+                        (when typed-sec (section 0 typed-sec))
                         (section 1 types) (when (seq imports) (section 2 import-sec))
                         (section 3 function-sec) (section 6 global-sec)
                         (section 7 export-sec) (section 10 code-sec))]

@@ -6,7 +6,8 @@
   ;; is conditional and the branch doesn't match -- fails ns-form spec
   ;; validation ("Extra input spec: :clojure.core.specs.alpha/ns-form",
   ;; confirmed live).
-  #?(:cljs (:require [kotoba.compiler.cljs-i64 :as i64])))
+  (:require [kotoba.compiler.value :as value]
+            #?@(:cljs [[kotoba.compiler.cljs-i64 :as i64]])))
 
 (def ^:private default-fuel 256)
 (def ^:private default-pair-capacity 4096)
@@ -22,6 +23,65 @@
   (let [remaining (vswap! fuel dec)]
     (when (neg? remaining)
       (trap! :fuel-exhausted {:limit default-fuel}))))
+
+(defn- validate-runtime-value! [runtime-value type position]
+  (case type
+    :i64
+    (when-not #?(:clj (and (integer? runtime-value)
+                            (<= Long/MIN_VALUE runtime-value Long/MAX_VALUE))
+                 :cljs (and (i64/bigint-value? runtime-value)
+                            (i64/in-i64-range? runtime-value)))
+      (trap! :value-type-mismatch {:expected :i64 :position position}))
+
+    :string
+    (try
+      (value/bounded-string! runtime-value value/string-value-byte-limit)
+      (catch #?(:clj Exception :cljs :default) error
+        (trap! :invalid-string-value {:position position :message (ex-message error)})))
+
+    :keyword
+    (try
+      (value/bounded-keyword! runtime-value value/keyword-value-byte-limit)
+      (catch #?(:clj Exception :cljs :default) error
+        (trap! :invalid-keyword-value {:position position :message (ex-message error)})))
+
+    :map
+    (try
+      (value/bounded-map! runtime-value)
+      (catch #?(:clj Exception :cljs :default) error
+        (trap! :invalid-map-value {:position position :message (ex-message error)})))
+
+    :bool
+    (when-not (boolean? runtime-value)
+      (trap! :value-type-mismatch {:expected :bool :position position}))
+
+    :option-i64
+    (try
+      (value/bounded-option-i64! runtime-value)
+      (catch #?(:clj Exception :cljs :default) error
+        (trap! :invalid-option-i64-value
+               {:position position :message (ex-message error)})))
+
+    :result-i64
+    (try
+      (value/bounded-result-i64! runtime-value)
+      (catch #?(:clj Exception :cljs :default) error
+        (trap! :invalid-result-i64-value
+               {:position position :message (ex-message error)})))
+
+    :vector-i64
+    (try
+      (value/bounded-vector-i64! runtime-value)
+      (catch #?(:clj Exception :cljs :default) error
+        (trap! :invalid-vector-i64-value
+               {:position position :message (ex-message error)})))
+
+    (try
+      (value/bounded-typed-value! type runtime-value)
+      (catch #?(:clj Exception :cljs :default) error
+        (trap! :invalid-parametric-value
+               {:type type :position position :message (ex-message error)}))))
+  runtime-value)
 
 ;; #?(:cljs ...): every i64 arithmetic op coerces both operands via
 ;; `i64/->bigint` first (cheap no-op if already bigint) rather than relying
@@ -54,10 +114,17 @@
     (trap! :arity-mismatch {:function (:name function)
                             :expected (count (:params function))
                             :actual (count values)}))
+  (let [param-types (or (:param-types function)
+                        (vec (repeat (count (:params function)) :i64)))]
+    (doseq [[parameter runtime-value type] (map vector (:params function) values param-types)]
+      (validate-runtime-value! runtime-value type {:function (:name function)
+                                                   :parameter parameter})))
   ;; Backends charge once on function entry, not once per expression.
   (charge! fuel)
-  (eval-expr (:body function) (zipmap (:params function) values) functions
-             fuel heap (conj call-stack (:name function)) cap-call))
+  (let [result (eval-expr (:body function) (zipmap (:params function) values) functions
+                          fuel heap (conj call-stack (:name function)) cap-call)]
+    (validate-runtime-value! result (or (:result function) :i64)
+                             {:function (:name function) :result true})))
 
 (defn- allocate-pair! [heap left right]
   (let [{:keys [cells capacity]} heap
@@ -98,6 +165,11 @@
        ;; every downstream op in this file assumes.
        :cljs (or (i64/bigint-value? form) (integer? form)))
     #?(:clj (long form) :cljs (i64/->bigint form))
+    (string? form)
+    (value/bounded-string! form value/string-literal-byte-limit)
+    (keyword? form)
+    (value/bounded-keyword! form value/keyword-value-byte-limit)
+    (boolean? form) form
     (symbol? form) (if (contains? env form)
                      (get env form)
                      (trap! :unbound-symbol {:symbol form}))
@@ -114,9 +186,14 @@
         (= op 'if)
         (let [[test then else] args
               test-value (eval-expr test env functions fuel heap call-stack cap-call)]
-          (eval-expr (if #?(:clj (zero? test-value) :cljs (i64/k-zero? test-value))
+          (eval-expr (if (if (boolean? test-value)
+                           (not test-value)
+                           #?(:clj (zero? test-value) :cljs (i64/k-zero? test-value)))
                        else then)
                      env functions fuel heap call-stack cap-call))
+
+        (= op 'do)
+        (last (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args))
 
         (= op 'cap-call)
         (let [[cap-id value] args]
@@ -135,8 +212,440 @@
         (= op 'pair-second)
         (read-pair heap (eval-expr (first args) env functions fuel heap call-stack cap-call) 1)
 
+        (= op 'string-byte-length)
+        (let [bytes (value/utf8-byte-count!
+                     (eval-expr (first args) env functions fuel heap call-stack cap-call))]
+          #?(:clj (long bytes) :cljs (i64/->bigint bytes)))
+
+        (= op 'string=?)
+        (let [[left right] (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
+          #?(:clj (if (= left right) 1 0)
+             :cljs (if (= left right) i64/one i64/zero)))
+
+        (= op 'string-concat)
+        (let [[left right] (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
+          (value/bounded-string! (str left right) value/string-value-byte-limit))
+
+        (= op 'map-new)
+        (let [values (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)
+              result (into (sorted-map) (map vec (partition 2 values)))]
+          (when-not (= (quot (count values) 2) (count result))
+            (trap! :duplicate-map-key {}))
+          (value/bounded-map! result))
+
+        (= op 'map-get)
+        (let [[map-form key-form default-form] args
+              map-value (eval-expr map-form env functions fuel heap call-stack cap-call)
+              key-value (eval-expr key-form env functions fuel heap call-stack cap-call)]
+          (value/bounded-map! map-value)
+          (value/bounded-keyword! key-value value/keyword-value-byte-limit)
+          (if (contains? map-value key-value)
+            (get map-value key-value)
+            (eval-expr default-form env functions fuel heap call-stack cap-call)))
+
+        (= op 'map-assoc)
+        (let [map-value (eval-expr (first args) env functions fuel heap call-stack cap-call)
+              values (mapv #(eval-expr % env functions fuel heap call-stack cap-call)
+                           (rest args))
+              result (reduce (fn [current [key item]] (assoc current key item))
+                             (value/bounded-map! map-value) (partition 2 values))]
+          (value/bounded-map! result))
+
+        (= op 'bool-not)
+        (not (eval-expr (first args) env functions fuel heap call-stack cap-call))
+
+        (= op 'option-some)
+        [true (eval-expr (first args) env functions fuel heap call-stack cap-call)]
+
+        (= op 'option-none) [false]
+
+        (= op 'option-some?)
+        (let [option (value/bounded-option-i64!
+                      (eval-expr (first args) env functions fuel heap call-stack cap-call))]
+          (true? (first option)))
+
+        (= op 'option-value)
+        (let [[option-form fallback-form] args
+              option (value/bounded-option-i64!
+                      (eval-expr option-form env functions fuel heap call-stack cap-call))]
+          (if (first option)
+            (second option)
+            (eval-expr fallback-form env functions fuel heap call-stack cap-call)))
+
+        (= op 'result-ok)
+        [true (eval-expr (first args) env functions fuel heap call-stack cap-call)]
+
+        (= op 'result-err)
+        [false (eval-expr (first args) env functions fuel heap call-stack cap-call)]
+
+        (= op 'result-ok?)
+        (let [result (value/bounded-result-i64!
+                      (eval-expr (first args) env functions fuel heap call-stack cap-call))]
+          (true? (first result)))
+
+        (contains? '#{result-value result-error} op)
+        (let [[result-form fallback-form] args
+              result (value/bounded-result-i64!
+                      (eval-expr result-form env functions fuel heap call-stack cap-call))
+              selected? (if (= op 'result-value) (first result) (not (first result)))]
+          (if selected?
+            (second result)
+            (eval-expr fallback-form env functions fuel heap call-stack cap-call)))
+
+        (contains? '#{result-ok-of result-err-of} op)
+        (let [[type payload-form] args
+              tag (= op 'result-ok-of)]
+          (value/bounded-typed-value!
+           type [tag (eval-expr payload-form env functions fuel heap call-stack cap-call)]))
+
+        (= op 'result-ok?-of)
+        (let [[type result-form] args
+              result (value/bounded-typed-value!
+                      type (eval-expr result-form env functions fuel heap call-stack cap-call))]
+          (true? (first result)))
+
+        (contains? '#{result-value-of result-error-of} op)
+        (let [[type result-form fallback-form] args
+              result (value/bounded-typed-value!
+                      type (eval-expr result-form env functions fuel heap call-stack cap-call))
+              selected? (if (= op 'result-value-of) (first result) (not (first result)))
+              payload-type (if (= op 'result-value-of) (second type) (nth type 2))]
+          (if selected?
+            (second result)
+            (value/bounded-typed-value!
+             payload-type
+             (eval-expr fallback-form env functions fuel heap call-stack cap-call))))
+
+        (= op 'result-match-of)
+        (let [[type result-form ok-name ok-body err-name err-body] args
+              result (value/bounded-typed-value!
+                      type (eval-expr result-form env functions fuel heap call-stack cap-call))]
+          (if (first result)
+            (eval-expr ok-body (assoc env ok-name (second result))
+                       functions fuel heap call-stack cap-call)
+            (eval-expr err-body (assoc env err-name (second result))
+                       functions fuel heap call-stack cap-call)))
+
+        (= op 'variant-new)
+        (let [[type tag payload-form] args]
+          (value/bounded-typed-value!
+           type [type tag (eval-expr payload-form env functions fuel heap call-stack cap-call)]))
+
+        (= op 'variant-match)
+        (let [[type value-form branches] args
+              variant (value/bounded-typed-value!
+                       type (eval-expr value-form env functions fuel heap call-stack cap-call))
+              tag (second variant)
+              [_ binder body] (some #(when (= tag (first %)) %) branches)]
+          (when-not binder (trap! :unknown-variant-case {:tag tag}))
+          (eval-expr body (assoc env binder (nth variant 2))
+                     functions fuel heap call-stack cap-call))
+
+        (= op 'option-some-of)
+        (let [[type payload-form] args]
+          (value/bounded-typed-value!
+           type [type true (eval-expr payload-form env functions fuel heap call-stack cap-call)]))
+
+        (= op 'option-none-of)
+        (let [[type] args]
+          (value/bounded-typed-value! type [type false]))
+
+        (= op 'option-some?-of)
+        (let [[type option-form] args
+              option (value/bounded-typed-value!
+                      type (eval-expr option-form env functions fuel heap call-stack cap-call))]
+          (true? (second option)))
+
+        (= op 'option-value-of)
+        (let [[type option-form fallback-form] args
+              option (value/bounded-typed-value!
+                      type (eval-expr option-form env functions fuel heap call-stack cap-call))]
+          (if (true? (second option))
+            (nth option 2)
+            (value/bounded-typed-value!
+             (second type)
+             (eval-expr fallback-form env functions fuel heap call-stack cap-call))))
+
+        (= op 'option-match)
+        (let [[type option-form none-body some-name some-body] args
+              option (value/bounded-typed-value!
+                      type (eval-expr option-form env functions fuel heap call-stack cap-call))]
+          (if (true? (second option))
+            (eval-expr some-body (assoc env some-name (nth option 2))
+                       functions fuel heap call-stack cap-call)
+            (eval-expr none-body env functions fuel heap call-stack cap-call)))
+
+        (= op 'hetero-vector-new)
+        (let [[type & item-forms] args
+              items (mapv #(eval-expr % env functions fuel heap call-stack cap-call)
+                          item-forms)]
+          (value/bounded-typed-value! type (into [type] items)))
+
+        (= op 'hetero-vector-count)
+        (let [[type value-form] args
+              items (value/bounded-typed-value!
+                     type (eval-expr value-form env functions fuel heap call-stack cap-call))]
+          #?(:clj (long (dec (count items)))
+             :cljs (i64/->bigint (dec (count items)))))
+
+        (= op 'hetero-vector-at)
+        (let [[type value-form index] args
+              items (value/bounded-typed-value!
+                     type (eval-expr value-form env functions fuel heap call-stack cap-call))
+              host-index #?(:clj (long index) :cljs (js/Number index))]
+          (nth items (inc host-index)))
+
+        (= op 'hetero-vector-assoc)
+        (let [[type value-form index item-form] args
+              items (value/bounded-typed-value!
+                     type (eval-expr value-form env functions fuel heap call-stack cap-call))
+              item (eval-expr item-form env functions fuel heap call-stack cap-call)
+              host-index #?(:clj (long index) :cljs (js/Number index))]
+          (value/bounded-typed-value! type (assoc items (inc host-index) item)))
+
+        (= op 'hetero-vector-equal)
+        (let [[type left-form right-form] args
+              left (value/bounded-typed-value!
+                    type (eval-expr left-form env functions fuel heap call-stack cap-call))
+              right (value/bounded-typed-value!
+                     type (eval-expr right-form env functions fuel heap call-stack cap-call))]
+          #?(:clj (if (= left right) 1 0)
+             :cljs (if (= left right) i64/one i64/zero)))
+
+        (= op 'typed-set-new)
+        (let [[type & item-forms] args
+              items (mapv #(eval-expr % env functions fuel heap call-stack cap-call)
+                          item-forms)]
+          (value/bounded-typed-value! type [type items]))
+
+        (= op 'typed-set-count)
+        (let [[type value-form] args
+              set-value (value/bounded-typed-value!
+                         type (eval-expr value-form env functions fuel heap call-stack cap-call))]
+          #?(:clj (long (count (second set-value)))
+             :cljs (i64/->bigint (count (second set-value)))))
+
+        (= op 'typed-set-contains)
+        (let [[type value-form item-form] args
+              set-value (value/bounded-typed-value!
+                         type (eval-expr value-form env functions fuel heap call-stack cap-call))
+              item (value/bounded-typed-value!
+                    (second type)
+                    (eval-expr item-form env functions fuel heap call-stack cap-call))]
+          (boolean (some #(zero? (value/compare-typed-values (second type) % item))
+                         (second set-value))))
+
+        (= op 'typed-set-conj)
+        (let [[type value-form item-form] args
+              set-value (value/bounded-typed-value!
+                         type (eval-expr value-form env functions fuel heap call-stack cap-call))
+              item (value/bounded-typed-value!
+                    (second type)
+                    (eval-expr item-form env functions fuel heap call-stack cap-call))]
+          (if (some #(zero? (value/compare-typed-values (second type) % item))
+                    (second set-value))
+            set-value
+            (do (when (>= (count (second set-value)) value/typed-set-item-limit)
+                  (trap! :set-too-large {:limit value/typed-set-item-limit}))
+                (value/bounded-typed-value!
+                 type [type (conj (second set-value) item)]))))
+
+        (= op 'typed-set-disj)
+        (let [[type value-form item-form] args
+              set-value (value/bounded-typed-value!
+                         type (eval-expr value-form env functions fuel heap call-stack cap-call))
+              item (value/bounded-typed-value!
+                    (second type)
+                    (eval-expr item-form env functions fuel heap call-stack cap-call))]
+          (value/bounded-typed-value!
+           type [type (filterv #(not (zero? (value/compare-typed-values
+                                             (second type) % item)))
+                               (second set-value))]))
+
+        (= op 'typed-set-equal)
+        (let [[type left-form right-form] args
+              left (value/bounded-typed-value!
+                    type (eval-expr left-form env functions fuel heap call-stack cap-call))
+              right (value/bounded-typed-value!
+                     type (eval-expr right-form env functions fuel heap call-stack cap-call))]
+          #?(:clj (if (= left right) 1 0)
+             :cljs (if (= left right) i64/one i64/zero)))
+
+        (= op 'typed-map-new)
+        (let [[type & entry-forms] args
+              evaluated (mapv #(eval-expr % env functions fuel heap call-stack cap-call)
+                              entry-forms)
+              entries (mapv vec (partition 2 evaluated))]
+          (value/bounded-typed-value! type [type entries]))
+
+        (= op 'typed-map-count)
+        (let [[type value-form] args
+              map-value (value/bounded-typed-value!
+                         type (eval-expr value-form env functions fuel heap call-stack cap-call))]
+          #?(:clj (long (count (second map-value)))
+             :cljs (i64/->bigint (count (second map-value)))))
+
+        (contains? '#{typed-map-contains typed-map-get typed-map-dissoc} op)
+        (let [[type value-form key-form] args
+              map-value (value/bounded-typed-value!
+                         type (eval-expr value-form env functions fuel heap call-stack cap-call))
+              key (value/bounded-typed-value!
+                   (second type)
+                   (eval-expr key-form env functions fuel heap call-stack cap-call))
+              match (some (fn [[candidate item]]
+                            (when (zero? (value/compare-typed-values
+                                          (second type) candidate key))
+                              [candidate item]))
+                          (second map-value))]
+          (case op
+            typed-map-contains (boolean match)
+            typed-map-get (let [option-type [:option (nth type 2)]]
+                            (if match [option-type true (second match)]
+                                [option-type false]))
+            typed-map-dissoc
+            (value/bounded-typed-value!
+             type [type (filterv (fn [[candidate _]]
+                                   (not (zero? (value/compare-typed-values
+                                                (second type) candidate key))))
+                                 (second map-value))])))
+
+        (= op 'typed-map-entry-at)
+        (let [[type value-form index-form] args
+              map-value (value/bounded-typed-value!
+                         type (eval-expr value-form env functions fuel heap call-stack cap-call))
+              raw-index (eval-expr index-form env functions fuel heap call-stack cap-call)
+              index #?(:clj (long raw-index) :cljs (js/Number raw-index))
+              entry-type [:vector [(second type) (nth type 2)]]
+              option-type [:option entry-type]]
+          (if (or (neg? index) (>= index (count (second map-value))))
+            [option-type false]
+            (let [[key item] (nth (second map-value) index)]
+              [option-type true [entry-type key item]])))
+
+        (= op 'typed-map-assoc)
+        (let [[type value-form key-form item-form] args
+              map-value (value/bounded-typed-value!
+                         type (eval-expr value-form env functions fuel heap call-stack cap-call))
+              key (value/bounded-typed-value!
+                   (second type) (eval-expr key-form env functions fuel heap call-stack cap-call))
+              item (value/bounded-typed-value!
+                    (nth type 2) (eval-expr item-form env functions fuel heap call-stack cap-call))
+              remaining (filterv (fn [[candidate _]]
+                                   (not (zero? (value/compare-typed-values
+                                                (second type) candidate key))))
+                                 (second map-value))]
+          (when (and (= (count remaining) (count (second map-value)))
+                     (>= (count remaining) value/typed-map-entry-limit))
+            (trap! :map-too-large {:limit value/typed-map-entry-limit}))
+          (value/bounded-typed-value! type [type (conj remaining [key item])]))
+
+        (= op 'typed-map-equal)
+        (let [[type left-form right-form] args
+              left (value/bounded-typed-value!
+                    type (eval-expr left-form env functions fuel heap call-stack cap-call))
+              right (value/bounded-typed-value!
+                     type (eval-expr right-form env functions fuel heap call-stack cap-call))]
+          #?(:clj (if (= left right) 1 0)
+             :cljs (if (= left right) i64/one i64/zero)))
+
+        (= op 'record-new)
+        (let [[type & value-forms] args
+              values (mapv #(eval-expr % env functions fuel heap call-stack cap-call)
+                           value-forms)]
+          (value/bounded-typed-value! type (into [type] values)))
+
+        (= op 'record-get)
+        (let [[type value-form field] args
+              record-value (value/bounded-typed-value!
+                            type (eval-expr value-form env functions fuel heap call-stack cap-call))
+              field-index (first (keep-indexed (fn [index [declared-field _]]
+                                                 (when (= declared-field field) index))
+                                               (nth type 2)))]
+          (when (nil? field-index) (trap! :unknown-record-field {:field field}))
+          (nth record-value (inc field-index)))
+
+        (= op 'record-assoc)
+        (let [[type value-form field replacement-form] args
+              record-value (value/bounded-typed-value!
+                            type (eval-expr value-form env functions fuel heap call-stack cap-call))
+              replacement (eval-expr replacement-form env functions fuel heap call-stack cap-call)
+              field-index (first (keep-indexed (fn [index [declared-field _]]
+                                                 (when (= declared-field field) index))
+                                               (nth type 2)))]
+          (when (nil? field-index) (trap! :unknown-record-field {:field field}))
+          (value/bounded-typed-value! type
+                                      (assoc record-value (inc field-index) replacement)))
+
+        (= op 'record-equal)
+        (let [[type left-form right-form] args
+              left (value/bounded-typed-value!
+                    type (eval-expr left-form env functions fuel heap call-stack cap-call))
+              right (value/bounded-typed-value!
+                     type (eval-expr right-form env functions fuel heap call-stack cap-call))]
+          #?(:clj (if (= left right) 1 0)
+             :cljs (if (= left right) i64/one i64/zero)))
+
+        (= op 'vector-new)
+        (value/bounded-vector-i64!
+         (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args))
+
+        (= op 'vector-count)
+        (let [items (value/bounded-vector-i64!
+                     (eval-expr (first args) env functions fuel heap call-stack cap-call))]
+          #?(:clj (long (count items)) :cljs (i64/->bigint (count items))))
+
+        (= op 'vector-get)
+        (let [[items-form index-form fallback-form] args
+              items (value/bounded-vector-i64!
+                     (eval-expr items-form env functions fuel heap call-stack cap-call))
+              index (eval-expr index-form env functions fuel heap call-stack cap-call)]
+          (if (and #?(:clj (integer? index) :cljs (i64/bigint-value? index))
+                   (not (neg? index)) (< index (count items)))
+            (nth items #?(:clj index :cljs (js/Number index)))
+            (eval-expr fallback-form env functions fuel heap call-stack cap-call)))
+
+        (= op 'vector-at)
+        (let [[items-form index-form] args
+              items (value/bounded-vector-i64!
+                     (eval-expr items-form env functions fuel heap call-stack cap-call))
+              index (eval-expr index-form env functions fuel heap call-stack cap-call)]
+          (when-not (and (not (neg? index)) (< index (count items)))
+            (trap! :vector-index-out-of-range {:index index}))
+          (nth items #?(:clj index :cljs (js/Number index))))
+
+        (= op 'vector-drop)
+        (let [[items-form count-form] args
+              items (value/bounded-vector-i64!
+                     (eval-expr items-form env functions fuel heap call-stack cap-call))
+              drop-count (eval-expr count-form env functions fuel heap call-stack cap-call)]
+          (when-not (and (not (neg? drop-count)) (<= drop-count (count items)))
+            (trap! :vector-drop-out-of-range {:count drop-count}))
+          (value/bounded-vector-i64!
+           (subvec items #?(:clj drop-count :cljs (js/Number drop-count)))))
+
+        (= op 'vector-assoc)
+        (let [[items-form index-form item-form] args
+              items (value/bounded-vector-i64!
+                     (eval-expr items-form env functions fuel heap call-stack cap-call))
+              index (eval-expr index-form env functions fuel heap call-stack cap-call)
+              item (eval-expr item-form env functions fuel heap call-stack cap-call)]
+          (when-not (and (not (neg? index)) (< index (count items)))
+            (trap! :vector-index-out-of-range {:index index}))
+          (value/bounded-vector-i64!
+           (assoc items #?(:clj index :cljs (js/Number index)) item)))
+
+        (= op 'vector-conj)
+        (let [[items-form item-form] args
+              items (value/bounded-vector-i64!
+                     (eval-expr items-form env functions fuel heap call-stack cap-call))
+              item (eval-expr item-form env functions fuel heap call-stack cap-call)]
+          (when (>= (count items) value/vector-item-limit)
+            (trap! :vector-too-large {:limit value/vector-item-limit}))
+          (value/bounded-vector-i64! (conj items item)))
+
         (contains? '#{kernel-load-u8 kernel-load-u8-4k kernel-load-u8-16k
-                      kernel-store-u8 kernel-store-u8-4k} op)
+                      kernel-store-u8 kernel-store-u8-4k
+                      kernel-load-u32 kernel-store-u32} op)
         (trap! :kernel-memory-unavailable {:operation op})
 
         (contains? '#{kernel-boot-info kernel-read-cr2 kernel-read-cr3 kernel-write-cr3 kernel-invlpg
@@ -196,47 +705,85 @@
           (invoke-function (get functions op) values functions fuel heap call-stack cap-call))))))
 
 (defn execute
-  "Executes one KIR export using the normative i64 semantics. Add/subtract/
-  multiply wrap modulo 2^64; invalid division and resource exhaustion trap."
+  "Executes one KIR export using normative typed-value semantics. i64 math
+  wraps modulo 2^64; bounded strings preserve Unicode text; invalid values,
+  division, and resource exhaustion trap."
   ([kir function-name args] (execute kir function-name args {}))
   ([kir function-name args {:keys [fuel cap-call pair-capacity]
                             :or {fuel default-fuel pair-capacity default-pair-capacity}}]
+   (when (and (contains? kir :exports)
+              (not (some #{function-name} (:exports kir))))
+     (throw (ex-info "function is not exported" {:phase :ir :function function-name})))
    ;; fuel/pair-capacity are interpreter-internal config, never a `.kotoba`
    ;; value -- plain `integer?` is correct for both runtimes here.
    (when-not (and (integer? fuel) (pos? fuel))
      (throw (ex-info "fuel must be a positive integer" {:phase :ir :fuel fuel})))
-   (when-not (and (sequential? args)
-                  (every? (fn [arg]
-                            #?(:clj (and (integer? arg) (<= Long/MIN_VALUE arg Long/MAX_VALUE))
-                               :cljs (and (or (i64/bigint-value? arg) (integer? arg))
-                                          (i64/in-i64-range? arg))))
-                          args))
-     (throw (ex-info "arguments must be signed i64 integers" {:phase :ir :args args})))
    (when-not (and (integer? pair-capacity) (<= 0 pair-capacity default-pair-capacity))
      (throw (ex-info "pair capacity is outside runtime limits"
                      {:phase :ir :pair-capacity pair-capacity})))
-   (let [functions (into {} (map (juxt :name identity) (:functions kir)))]
-     (invoke-function (get functions function-name)
-                       (mapv #?(:clj long :cljs i64/->bigint) args) functions
-                      (volatile! fuel) {:cells (volatile! []) :capacity pair-capacity}
-                      [] cap-call))))
+   (let [functions (into {} (map (juxt :name identity) (:functions kir)))
+         function (get functions function-name)
+         param-types (or (:param-types function)
+                         (vec (repeat (count (:params function)) :i64)))]
+     (when-not (and (sequential? args) (= (count args) (count param-types)))
+       (throw (ex-info "arguments do not match function arity" {:phase :ir :args args})))
+     (doseq [[arg type] (map vector args param-types)]
+       (case type
+         :i64 (when-not #?(:clj (and (integer? arg) (<= Long/MIN_VALUE arg Long/MAX_VALUE))
+                          :cljs (and (or (i64/bigint-value? arg) (integer? arg))
+                                     (i64/in-i64-range? arg)))
+                (throw (ex-info "argument must be a signed i64" {:phase :ir :arg arg})))
+         :string (value/bounded-string! arg value/string-value-byte-limit)
+         :keyword (value/bounded-keyword! arg value/keyword-value-byte-limit)
+         :map (value/bounded-map! arg)
+         :bool (when-not (boolean? arg)
+                 (throw (ex-info "argument must be a boolean" {:phase :ir :arg arg})))
+         :option-i64 (value/bounded-option-i64! arg)
+         :result-i64 (value/bounded-result-i64! arg)
+         :vector-i64 (value/bounded-vector-i64! arg)
+         (value/bounded-typed-value! type arg)))
+     (let [invoke #(invoke-function function
+                                    (mapv (fn [arg type]
+                                            (if (= type :i64)
+                                              (#?(:clj long :cljs i64/->bigint) arg)
+                                              arg))
+                                          args param-types)
+                                    functions
+                                    (volatile! fuel) {:cells (volatile! []) :capacity pair-capacity}
+                                    [] cap-call)]
+       #?(:clj
+          ;; A host JVM with a small native stack can exhaust that stack just
+          ;; before the fixed Kotoba call budget does.  Host resource errors
+          ;; must never escape the language boundary: normalize this one
+          ;; precise failure to the same deterministic, fail-closed trap.
+          (try
+            (invoke)
+            (catch StackOverflowError _
+              (trap! :fuel-exhausted {:limit fuel :host-stack-exhausted true})))
+          :cljs
+          (invoke))))))
 
 (defn lower [hir]
   (let [kernel-operations '#{kernel-load-u8 kernel-load-u8-4k kernel-load-u8-16k
                              kernel-store-u8 kernel-store-u8-4k kernel-read-cr2
+                             kernel-load-u32 kernel-store-u32
                              kernel-boot-info kernel-read-cr3 kernel-write-cr3 kernel-invlpg
                              kernel-cli kernel-sti kernel-hlt kernel-pause
                              kernel-out-u8 kernel-out-u32}
         kernel-native? (some #(and (seq? %) (contains? kernel-operations (first %)))
                              (tree-seq coll? seq (:functions hir)))
-        base {:format :kotoba.kir/v3
+        typed-values? (= :kotoba.hir/v3 (:format hir))
+        base {:format (if typed-values? :kotoba.kir/v4 :kotoba.kir/v3)
               :entry (:entry hir)
-              :signature {:params [] :result :i64}
+              :exports (:exports hir)
+              :signature (when (:entry hir) {:params [] :result (:result hir)})
               :effects (:effects hir)
-              :functions (mapv #(select-keys % [:name :params :result :effects :body])
+              :functions (mapv #(select-keys % (cond-> [:name :params :result :effects :body]
+                                                 typed-values? (conj :param-types)))
                                (:functions hir))}
         ;; Effectful results require host authority and cannot be constant-oracled.
-        value (when (and (empty? (:effects hir)) (not kernel-native?))
+        value (when (and (:entry hir) (= :i64 (:result hir))
+                         (empty? (:effects hir)) (not kernel-native?))
                 (execute base (:entry hir) []))]
     (assoc base
            :oracle-value value

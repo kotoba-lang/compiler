@@ -11,6 +11,13 @@ Every artifact records its target, KIR digest, declared effects, limits, and
 code bytes. A structurally independent target verifier decodes all emitted
 instructions before admission.
 
+The shared value policy is `:kotoba.floating-point/forbidden-v1`. Source and
+KIR admit no floating literal, type, operation, parameter, result, or boundary
+value, and the Web artifact seals the same policy explicitly. This prevents a
+backend host's NaN, infinity, signed-zero, rounding, or coercion behavior from
+silently becoming language semantics. Any future float support requires a new
+policy/ABI version and cross-backend conformance evidence.
+
 Native verification does not trust a sealed KIR merely because its hash is
 valid. Before re-emission, an independent KIR profile checker validates exact
 module/function shapes, i64 AST operations and arities, lexical bindings, call
@@ -93,8 +100,8 @@ recursion, top-level form count is capped, expression validation is capped at
 256, and literals must fit signed i64. Host reader failures are normalized into
 the compiler's `:read` error phase.
 
-The safe profile additionally caps functions (1,024), parameters per exported
-function (5), bindings per `let` (4,096), symbol length (128), and total
+The safe profile additionally caps functions (1,024), parameters per function
+(5), bindings per `let` (4,096), symbol length (128), and total
 expression nodes (50,000). A separate symbolic cost pass caps the `let`-elided
 program at 100,000 nodes before native substitution occurs, preventing compact
 source from causing exponential code generation. The five-argument limit is a
@@ -117,7 +124,12 @@ The public command boundary normalizes expected failures into one
 `kotoba.cli-error/v1` EDN line with a stable phase-derived exit code. Only an
 allowlist of safe diagnostic fields crosses that boundary; source forms, local
 paths, causes, stack traces, and unexpected host exception messages are
-redacted. Unexpected throwables become a generic exit-70 internal failure.
+redacted. Every envelope additionally contains `kotoba.diagnostic/v1` with a
+stable phase code, error severity, source basename (never its local directory),
+and a bounded one-based source span when the reader can associate the rejected
+form. The JVM tools.reader and JVM-free nbb reader preserve the same locations
+through constant substitution and desugaring. Unexpected throwables become a
+generic exit-70 internal failure without a source span.
 
 ## Current maturity
 
@@ -274,8 +286,114 @@ The first typed effect is `[:cap/call id]`, authored only as
 `(cap-call <literal-u8> value)`. Dynamic IDs are rejected rather than widened to
 ambient authority. The frontend derives direct effects and call edges, closes
 them to a fixpoint (including mutual recursion), and assigns effects to every
-function. Because all pure functions are currently exported, module admission
-uses the union across all functions, not only `main` reachability.
+function. A bounded `ns` `(:export [name ...])` clause defines the host
+boundary; `defn-` and compiler-generated helpers remain internal in JS, Wasm,
+ClojureScript, and native artifacts. Imports and every other namespace clause
+still fail closed. Authority admission deliberately uses the union across all
+declared functions—including private ones—so changing visibility cannot alter
+the authority claimed by otherwise identical code.
+
+Project compilation is the sole exception to the single-source import rule.
+`compile-project` accepts a closed namespace-to-source map and supports only
+`[namespace :as alias]` dependencies. It links exported dependency functions
+into one private call graph before the ordinary frontend and KIR passes; there
+is no runtime module lookup. Missing, cyclic, private, undeclared, and non-alias
+imports fail before lowering. The manifest seals the reachable module order,
+each exact source SHA-256, and the canonical module graph digest. See ADR 0005.
+The public JVM CLI exposes the same linker as
+`compile <root> --source-path <directory>`. It resolves only the root's
+transitive closure, maps namespace segments to directories and hyphens to
+underscores, and selects `.kotoba`, then `.cljk`, then `.cljc`. Every dependency
+real path must remain below the explicit directory and its declared namespace
+must match the requested namespace; symlink escape and path substitution fail
+closed. The explicitly selected root may live beside the source directory
+because it is not discovered ambiently. This filesystem discovery does not run in the compiled program and
+does not widen runtime authority.
+
+An explicit, non-empty export clause also admits a library without `main`, but
+only for `:js-kotoba-v1`. Its KIR has a nil entry and signature and is handed to
+`kotoba-script` as a restricted ESM library. All executable and non-JavaScript
+targets reject an entryless module. This target gate prevents a library-shaped
+source unit from silently acquiring different execution semantics across
+native, Wasm, or ClojureScript backends.
+
+Typed string, keyword, bounded-map, boolean, option-i64, or result-i64 source advances HIR to `kotoba.hir/v3` and KIR to
+`kotoba.kir/v4`. Function `:param-types` and `:result` are checked before
+lowering and checked again by kotoba-script; the artifact seals the
+`kotoba.value/typed-v1` profile and its 4 KiB literal / 64 KiB module and value
+limits, plus 512-byte keywords and maps of at most 128 unique keyword-to-i64
+entries. Strict booleans and a fixed one-or-two-slot tagged option-i64 ABI add
+no unbounded allocation; none and some are represented as frozen `[false]`
+and `[true, bigint]` values, never host null/undefined or integer sentinels.
+A fixed two-slot result-i64 tagged union similarly carries one signed-i64
+payload for both ok and err, with lazy opposite-variant fallbacks. It is the
+bounded monomorphic foundation for later generic ADTs, not a recursive value
+container.
+The parametric extension represents a result type canonically as
+`[:result ok-type err-type]`. Type trees and runtime payload validation share
+fixed depth-8/node-64 limits; every generic constructor and projection embeds
+the descriptor in KIR, and the reference/Web runtimes validate it identically.
+Result elimination is owned by the exhaustive `match-result` form: source
+requires one canonical ok branch and one canonical err branch, KIR preserves
+their typed binders, and both reference and Web evaluate only the selected
+branch after validating the tagged value.
+User-defined finite variants extend the descriptor graph with
+`[:variant :qualified/type [[:case payload-type] ...]]`. The full descriptor
+is part of runtime identity, case counts are capped at 32, and generalized
+matching requires exact declaration-order coverage with typed payload binders.
+Generic options use `[:option payload-type]` and carry that full descriptor in
+both none and some runtime values. None is never represented by null,
+undefined, or an untyped sentinel. Construction, projection, lazy fallback,
+and exhaustive none/some matching revalidate exact descriptor identity and
+the bounded payload at every reference/Web boundary.
+Fixed heterogeneous vectors use `[:vector [item-type ...]]` with at most 32
+positions. The runtime value carries the descriptor before its exact item
+sequence; boundary validation checks descriptor identity, length, and each
+position recursively. Projection and persistent replacement admit only a
+statically in-range literal index, and equality is validated structural
+equality rather than host object identity.
+Typed sets use `[:set item-type]` with at most 32 recursively validated unique
+items. A language-owned total order canonicalizes the item vector independently
+of construction order. Boundaries reject duplicate, oversized, malformed and
+cross-descriptor values; membership and persistent insert/remove operate only
+on the canonical representation.
+Nominal bounded records use
+`[:record :qualified/type [[:field field-type] ...]]`. The complete nominal
+descriptor precedes the declaration-ordered field values in the runtime ABI;
+boundaries validate exact schema, arity, and every field recursively. Static
+keyword projection, persistent replacement, and structural equality never
+delegate to host object keys, prototypes, mutation, or identity.
+One versioned EDN conformance corpus now owns positive and negative vectors for
+generic options, parametric results, closed variants, heterogeneous vectors,
+typed sets, nominal records, and the forbidden floating-point policy. Reference
+and restricted Web execute that same data today. Future Wasm qualification must
+consume it directly and produce the same values or trap classes. `.cljk`
+changes source discovery only; it does not introduce a JVM runtime or a second
+typed-value ABI. The shared corpus now executes on reference, restricted Web,
+and Wasm.
+Wasm typed-value qualification uses a distinct, versioned `kotoba.typed`
+custom section. Version 1 encodes bounded descriptors and literals as canonical
+binary data rather than executable host text. The browser/Kototama host rejects
+duplicate sections, unknown versions or tags, malformed UTF-8, trailing bytes,
+and descriptors outside the same depth/node/member budgets before
+instantiation. `kotoba.typed/externref-v1` consumes the table through frozen
+canonical host values. Every reference parameter and result is revalidated;
+forged descriptors and cross-schema substitution trap before the function body
+can observe them. Compilation seals `:reference-types` as a required Wasm
+feature. Operations outside the qualified algebraic corpus remain fail-closed
+at typed Wasm lowering.
+The first sequential collection profile is an explicitly constructed,
+128-item `vector<i64>` with signed-i64 element checks, frozen Web host values,
+lazy out-of-range lookup fallback, and persistent assoc/conj updates.
+Ordinary vector literals and flat vector destructuring now lower into this
+profile. Required destructured positions use a trapping access operation;
+`& rest` returns a new bounded vector suffix. Explicit lists remain pair-arena
+values, so vectors and lists are no longer silently type-erased together.
+Only the restricted JavaScript target currently admits that profile.
+Other targets fail at target selection, before backend emission, rather than
+type-erasing strings, keywords, maps, booleans, or options into i64 hashes,
+sentinels, or pointers with
+unspecified ownership.
 
 Policy is deny-by-default: `{:allow #{...}}`. Admission reports missing effects,
 the exact minimal policy, and unused grants. This stage deliberately separates

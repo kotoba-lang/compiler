@@ -26,7 +26,8 @@
   instead of losing precision the moment it's read -- required for
   `kotoba.compiler.ir`'s compile-time oracle (constant-folds a pure `main`
   by literally *executing* it) to match the JVM path's `Long` wraparound
-  arithmetic bit-for-bit, not just within the JS safe-integer range.")
+  arithmetic bit-for-bit, not just within the JS safe-integer range."
+  (:require [clojure.string :as str]))
 
 (defn- whitespace-char? [ch]
   (or (= ch \space) (= ch \tab) (= ch \newline) (= ch \return) (= ch \,)))
@@ -45,6 +46,19 @@
     (when (< (inc position) length) (nth source (inc position)))))
 
 (defn- advance [st] (update st :position inc))
+
+(defn- source-location [st]
+  (let [prefix (subs (:source st) 0 (:position st))
+        lines (str/split prefix #"\n" -1)]
+    {:line (count lines)
+     :column (inc (count (last lines)))
+     :offset (:position st)}))
+
+(defn- located [value start end]
+  (if (or (coll? value) (symbol? value))
+    (with-meta value (merge (meta value) (source-location start)
+                            {:end-offset (:position end)}))
+    value))
 
 (declare read-form)
 
@@ -155,20 +169,21 @@
   matching feature (nothing to splice in) so the caller omits it entirely."
   [st]
   (let [st (skip-ws+comments st)
+        start st
         ch (peek-ch st)]
     (cond
       (nil? ch) (reject! "unexpected end of input" {})
 
       (= ch \() (let [[st forms] (read-delimited (advance st) \))]
-                  [st (apply list forms) false])
+                  [st (located (apply list forms) start st) false])
 
       (= ch \[) (let [[st forms] (read-delimited (advance st) \])]
-                  [st (vec forms) false])
+                  [st (located (vec forms) start st) false])
 
       (= ch \{) (let [[st forms] (read-delimited (advance st) \})]
                   (when (odd? (count forms))
                     (reject! "map literal must contain an even number of forms" {}))
-                  [st (apply hash-map forms) false])
+                  [st (located (apply hash-map forms) start st) false])
 
       (= ch \") (let [[st s] (read-string-literal st)] [st s false])
 
@@ -178,7 +193,7 @@
       (let [ch2 (peek-ch2 st)]
         (cond
           (= ch2 \{) (let [[st forms] (read-delimited (advance (advance st)) \})]
-                       [st (set forms) false])
+                       [st (located (set forms) start st) false])
           (= ch2 \?) (let [st (advance (advance st))
                            st (skip-ws+comments st)]
                        (when-not (= (peek-ch st) \()
@@ -192,7 +207,8 @@
       (= ch \]) (reject! "unmatched `]`" {})
       (= ch \}) (reject! "unmatched `}`" {})
 
-      :else (let [[st form] (read-symbol-or-number st)] [st form false]))))
+      :else (let [[st form] (read-symbol-or-number st)]
+              [st (located form start st) false]))))
 
 (defn read-forms
   "Reads every top-level form in SOURCE, returning a vector -- mirrors

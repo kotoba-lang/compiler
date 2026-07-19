@@ -1,15 +1,19 @@
 (ns kotoba.compiler.cli-test
   (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
-            [kotoba.compiler.cli :as cli])
+            [kotoba.compiler.cli :as cli]
+            [kotoba.compiler.frontend :as frontend])
   (:import [java.io StringWriter]))
 
-(defn- temp-kotoba-source! [contents]
-  (let [file (doto (java.io.File/createTempFile "kotoba-cli-test-" ".kotoba")
+(defn- temp-kotoba-source!
+  ([contents] (temp-kotoba-source! contents ".kotoba"))
+  ([contents extension]
+  (let [file (doto (java.io.File/createTempFile "kotoba-cli-test-" extension)
                (.deleteOnExit))]
     (spit file contents)
-    (.getPath file)))
+    (.getPath file))))
 
 (deftest phase-exit-codes-are-stable
   (is (= 64 (cli/exit-code :usage)))
@@ -24,11 +28,28 @@
                 (ex-info "rejected" {:phase :subset :limit 10
                                      :form '(secret payload) :path "/private/path"}))]
     (is (= {:format :kotoba.cli-error/v1 :ok false :error :subset
+            :diagnostic {:format :kotoba.diagnostic/v1
+                         :code :kotoba/source-rejected :severity :error}
             :message "rejected" :details {:phase :subset :limit 10}}
            report)))
   (is (= {:format :kotoba.cli-error/v1 :ok false :error :internal
+          :diagnostic {:format :kotoba.diagnostic/v1
+                       :code :kotoba/internal-error :severity :error}
           :message "internal compiler error"}
          (cli/error-report (ex-info "sensitive host failure" {:secret "value"})))))
+
+(deftest structured-diagnostic-has-stable-code-and-bounded-source-span
+  (let [error (try
+                (frontend/analyze
+                 "(defn main []\n  (forbidden-call 1))")
+                nil
+                (catch clojure.lang.ExceptionInfo error error))
+        report (cli/error-report error "program.cljk")]
+    (is (= :kotoba/source-rejected (get-in report [:diagnostic :code])))
+    (is (= "program.cljk" (get-in report [:diagnostic :source])))
+    (is (= {:line 2 :column 3}
+           (select-keys (get-in report [:diagnostic :span]) [:line :column])))
+    (is (not (contains? report :form)))))
 
 (deftest unknown-command-emits-one-machine-readable-line-without-stack
   (let [status (atom nil)
@@ -47,7 +68,7 @@
 
 (deftest compile-and-check-require-kotoba-source-files
   (doseq [command ["compile" "check"]
-          path ["program.clj" "program.cljc" "program.KOTOBA" "program"]]
+          path ["program.clj" "program.cljs" "program.KOTOBA" "program"]]
     (let [status (atom nil)
           writer (StringWriter.)]
       (binding [cli/*exit* #(reset! status %)
@@ -56,7 +77,78 @@
       (let [report (edn/read-string (str writer))]
         (is (= 64 @status))
         (is (= :usage (:error report)))
-        (is (= "source input must use the .kotoba extension" (:message report)))))))
+        (is (= "source input must use .kotoba, .cljk, or .cljc" (:message report)))))))
+
+(deftest admitted-extensions-select-the-requested-backend
+  (doseq [[extension target expected-format]
+          [[".cljk" "js" :javascript/esm]
+           [".cljk" "wasm32" :wasm/v1]
+           [".cljc" "js" :javascript/esm]
+           [".cljc" "wasm32" :wasm/v1]]]
+    (let [source (temp-kotoba-source! "(defn main [] 42)" extension)
+          output (.getPath (doto (java.io.File/createTempFile "kotoba-target-selection-" ".out")
+                             (.deleteOnExit)))
+          out (StringWriter.)]
+      (binding [*out* out]
+        (cli/-main "compile" source "--target" target "--output" output))
+      (let [report (edn/read-string (str out))]
+        (is (:ok report))
+        (is (= output (:output report)))
+        (is (= :kotoba.provenance/v1
+               (:format (edn/read-string (slurp (:provenance-output report))))))
+        (if (= expected-format :wasm/v1)
+          (is (= [0 0x61 0x73 0x6d]
+                 (mapv #(bit-and % 0xff)
+                       (take 4 (java.nio.file.Files/readAllBytes
+                                (.toPath (java.io.File. output)))))))
+          (is (str/includes? (slurp output) "export")))))))
+
+(deftest compile-source-path-loads-only-a-closed-qualified-project
+  (let [directory (.toFile (java.nio.file.Files/createTempDirectory
+                            "kotoba-cli-project-" (make-array java.nio.file.attribute.FileAttribute 0)))
+        source-directory (io/file directory "src")
+        dependency (io/file source-directory "example/text.kotoba")
+        root (io/file directory "main.kotoba")
+        output (io/file directory "app.mjs")
+        out (StringWriter.)]
+    (.mkdirs (.getParentFile dependency))
+    (spit dependency
+          "(ns example.text (:export [answer])) (defn answer [] 42)")
+    (spit root
+          "(ns example.app (:require [example.text :as text]) (:export [main]))
+           (defn main [] (text/answer))")
+    (binding [*out* out]
+      (cli/-main "compile" (.getPath root) "--source-path" (.getPath source-directory)
+                 "--target" "js" "--output" (.getPath output)))
+    (let [report (edn/read-string (str out))
+          manifest (edn/read-string (slurp (str output ".manifest.edn")))]
+      (is (:ok report))
+      (is (.isFile output))
+      (is (= #{'example.app 'example.text}
+             (set (keys (:kotoba.artifact/module-source-digests manifest))))))))
+
+(deftest compile-source-path-rejects-namespace-path-substitution
+  (let [directory (.toFile (java.nio.file.Files/createTempDirectory
+                            "kotoba-cli-project-reject-"
+                            (make-array java.nio.file.attribute.FileAttribute 0)))
+        dependency (io/file directory "example/text.kotoba")
+        root (io/file directory "example/app.kotoba")
+        status (atom nil)
+        err (StringWriter.)]
+    (.mkdirs (.getParentFile dependency))
+    (spit dependency
+          "(ns attacker.substitute (:export [answer])) (defn answer [] 42)")
+    (spit root
+          "(ns example.app (:require [example.text :as text]) (:export [main]))
+           (defn main [] (text/answer))")
+    (binding [cli/*exit* #(reset! status %)
+              *err* err]
+      (cli/-main "compile" (.getPath root) "--source-path" (.getPath directory)
+                 "--target" "js"))
+    (let [report (edn/read-string (str err))]
+      (is (= 65 @status))
+      (is (= :project-link (:error report)))
+      (is (= "resolved path namespace does not match requirement" (:message report))))))
 
 (deftest compile-cljs-target-writes-real-source-not-a-corrupted-nil-artifact
   (testing "regression test for a real bug found live: `compile --target

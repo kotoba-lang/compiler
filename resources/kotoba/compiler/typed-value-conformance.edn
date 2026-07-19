@@ -1,0 +1,48 @@
+{:kotoba.typed-value-conformance/version 1
+ :abi :kotoba.typed-value/canonical-v1
+ :positive
+ [{:id :generic-option
+   :source "(defn main [] (match-option (option-some-of [:option :i64] 7) [:option :i64] (none 0) (some value (+ value 1))))"
+   :expect 8}
+  {:id :parametric-result
+   :source "(defn main [] (match-result (result-ok-of [:result :i64 :string] 7) [:result :i64 :string] (ok value (+ value 2)) (err message (string-byte-length message))))"
+   :expect 9}
+  {:id :closed-variant
+   :source "(defn main [] (match-variant (variant-new [:variant :conformance/status [[:ready :i64] [:failed :string]]] :ready 7) [:variant :conformance/status [[:ready :i64] [:failed :string]]] (:ready value (+ value 3)) (:failed message (string-byte-length message))))"
+   :expect 10}
+  {:id :heterogeneous-vector
+   :source "(defn main [] (hetero-vector-at [:vector [:i64 :string :bool]] (hetero-vector [:vector [:i64 :string :bool]] 7 \"safe\" true) 0))"
+   :expect 7}
+  {:id :typed-set
+   :source "(defn main [] (typed-set-count [:set :i64] (typed-set [:set :i64] 3 1 2)))"
+   :expect 3}
+  {:id :typed-map
+   :source "(defn main [] (option-value-of [:option :i64] (typed-map-get [:map :keyword :i64] (typed-map-new [:map :keyword :i64] :b 7 :a 1) :b) 0))"
+   :expect 7}
+  {:id :typed-map-entry-iteration
+   :source "(defn main [] (match-option (typed-map-entry-at [:map :keyword :i64] (typed-map-new [:map :keyword :i64] :b 7 :a 1) 0) [:option [:vector [:keyword :i64]]] (none 0) (some entry (hetero-vector-at [:vector [:keyword :i64]] entry 1))))"
+   :expect 1}
+  {:id :nominal-record
+   :source "(defn main [] (record-get [:record :conformance/person [[:name :string] [:age :i64]]] (record [:record :conformance/person [[:name :string] [:age :i64]]] \"Kotoba\" 7) :age))"
+   :expect 7}]
+ :negative
+ [{:id :option-payload-mismatch
+   :source "(defn main [] [:option :string] (option-some-of [:option :string] 7))"}
+  {:id :result-non-exhaustive
+   :source "(defn main [value [:result :i64 :string]] (match-result value [:result :i64 :string] (ok x x)))"}
+  {:id :variant-non-exhaustive
+   :source "(defn main [value [:variant :conformance/status [[:ready :i64] [:failed :string]]]] (match-variant value [:variant :conformance/status [[:ready :i64] [:failed :string]]] (:ready x x)))"}
+  {:id :vector-wrong-position
+   :source "(defn main [] [:vector [:i64 :string]] (hetero-vector [:vector [:i64 :string]] \"wrong\" \"ok\"))"}
+  {:id :set-duplicate
+   :source "(defn main [] [:set :i64] (typed-set [:set :i64] 1 1))"
+   :phase :runtime}
+  {:id :map-duplicate-key
+   :source "(defn main [] [:map :keyword :i64] (typed-map-new [:map :keyword :i64] :a 1 :a 2))"
+   :phase :runtime}
+  {:id :record-unknown-field
+   :source "(defn main [value [:record :conformance/person [[:age :i64]]]] (record-get [:record :conformance/person [[:age :i64]]] value :missing))"}
+  {:id :floating-literal
+   :source "(defn main [] 1.5)"}
+  {:id :floating-descriptor
+   :source "(defn main [value :f64] :f64 value)"}]}

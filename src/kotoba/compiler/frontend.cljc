@@ -6,6 +6,7 @@
   ;; for the fuller explanation). `#?@` (splicing) rather than `#?` here
   ;; because each branch below is more than one require-spec.
   (:require [clojure.set :as set]
+            [kotoba.compiler.value :as value]
             #?@(:clj [[clojure.tools.reader :as reader]
                       [clojure.tools.reader.reader-types :as rt]]
                 :cljs [[kotoba.compiler.kotoba-reader :as kr]
@@ -33,49 +34,105 @@
            locking dosync atom ref volatile!}
         (load-catalog-forbidden)))
 
+;; ADR-2607182410: compiler-local capability NAME -> [0,255] id registry, so
+;; `.kotoba` source can write `(cap-call :identity/sign msg)` instead of a
+;; magic number. This is a DISTINCT numbering system from any other repo's
+;; capability table (in particular kotoba-core-contracts'
+;; capability_contract.edn -- see resources/kotoba/compiler/
+;; capability-registry.edn's header comment for why reuse was rejected).
+;; `:cljs` mirrors the resource file's content by hand: unlike `:clj`, `:cljs`
+;; here has no wired-up synchronous classpath-resource read (the same
+;; limitation `load-catalog-forbidden` above documents by falling back to
+;; `#{}` on `:cljs` -- this fallback is a full copy rather than an empty set
+;; only because keeping ~7 short entries in sync by hand is cheap; it MUST be
+;; kept byte-identical to the resource file whenever an entry is added,
+;; renamed, or removed there).
+(def ^:private capability-registry-cljs-fallback
+  '{:identity/sign 1 :identity/verify 2 :hash/sha256 3 :http/post 4
+    :log/read 5 :log/append 6 :clock/now 7})
+
+(defn- load-capability-registry []
+  #?(:clj
+     (try
+       (let [c (clojure.java.io/resource "kotoba/compiler/capability-registry.edn")]
+         (if c
+           (with-open [r (clojure.java.io/reader c)]
+             (clojure.edn/read (java.io.PushbackReader. r)))
+           capability-registry-cljs-fallback))
+       (catch Exception _ capability-registry-cljs-fallback))
+     :cljs capability-registry-cljs-fallback))
+
+(def capability-registry
+  "Compiler-local capability-name -> id map, loaded once at namespace-load
+  time (see load-capability-registry). A missing/unloadable resource falls
+  back to a small hand-maintained default rather than an empty map -- still
+  closed-world/deny-by-default for any name outside it, just with a non-empty
+  default set of names available even if the classpath resource is absent."
+  (load-capability-registry))
+
 (def arithmetic '#{+ - * quot bit-xor bit-and})
 (def comparisons '#{= < > <= >=})
 (def heap-operations '{pair 2 pair-first 1 pair-second 1})
 (def kernel-memory-operations
   '{kernel-load-u8 3 kernel-load-u8-4k 3 kernel-load-u8-16k 3
-    kernel-store-u8 4 kernel-store-u8-4k 4})
+    kernel-store-u8 4 kernel-store-u8-4k 4
+    kernel-load-u32 3 kernel-store-u32 4})
 (def kernel-privileged-operations
   '{kernel-boot-info 0 kernel-read-cr2 0 kernel-read-cr3 0 kernel-write-cr3 1 kernel-invlpg 1
     kernel-cli 0 kernel-sti 0 kernel-hlt 0 kernel-pause 0
     kernel-out-u8 2 kernel-out-u32 2})
 (def list-operations '#{list cons first second rest empty?})
-(def predicate-operations '#{not zero? pos? neg? string? symbol? keyword? string-length string=})
+(def predicate-operations '#{not zero? pos? neg?})
 ;; ADR-2607150000: and/or/when mirror kotoba-lang/kotoba's already-proven
 ;; desugar-and/desugar-or (runtime.clj) -- ported here rather than reinvented,
 ;; closing the divergence ADR-2607141600/2607150000 identified between the
-;; two independently-evolved grammars. get/assoc are new: map literals and
-;; keyword literals desugar entirely to the EXISTING heap-pair/list
-;; primitives (see desugar-map/keyword->i64 below) -- no backend/codegen
-;; change anywhere, since `pair`/`pair-first`/`pair-second` were already
-;; host-imported capabilities before this change (backend/wasm.clj), not
-;; WASM-linear-memory-managed by the guest itself.
+;; two independently-evolved grammars. Keyword literals are now owned typed
+;; values and are never reduced to probabilistic i64 hashes. The legacy
+;; untagged pair-map lowering therefore fails closed when it encounters a
+;; keyword key until the bounded typed-map ABI is implemented.
 (def logical-operations '#{and or when})
-(def map-operations '#{get assoc contains-key?})
-(def set-operations '#{contains? conj disj})
-(def higher-order-operations '#{map filter reduce})
-(def collection-operations '#{count nth peek pop keys vals dissoc})
-(def closure-operations '#{invoke apply fn-ref})
-(def lazy-sequence-operations '#{lazy-cons lazy-first lazy-rest lazy-empty? lazy-map lazy-filter take drop})
-;; ADR-2607180900 L2: `do` is surface sugar that desugars to nested `let`
-;; (discard non-final expressions by binding gensym temps). Admitted in
-;; reserved-function-names so authors cannot define a conflicting `do`.
+(def map-operations '#{get assoc})
+(def typed-map-operations '#{map-new map-get map-assoc})
+(def typed-safe-value-operations
+  '{bool-not 1 option-some 1 option-none 0 option-some? 1 option-value 2
+    result-ok 1 result-err 1 result-ok? 1 result-value 2 result-error 2})
+(def parametric-result-operations
+  '{result-ok-of 2 result-err-of 2 result-ok?-of 2 result-value-of 3 result-error-of 3
+    result-match-of 6})
+(def variant-operations '#{variant-new variant-match})
+(def generic-option-operations
+  '#{option-some-of option-none-of option-some?-of option-value-of option-match})
+(def heterogeneous-vector-operations
+  '#{hetero-vector-new hetero-vector-count hetero-vector-at
+     hetero-vector-assoc hetero-vector-equal})
+(def typed-set-operations
+  '#{typed-set-new typed-set-count typed-set-contains typed-set-conj
+     typed-set-disj typed-set-equal})
+(def canonical-typed-map-operations
+  '#{typed-map-new typed-map-count typed-map-contains typed-map-get
+     typed-map-entry-at typed-map-assoc typed-map-dissoc typed-map-equal})
+(def record-operations '#{record-new record-get record-assoc record-equal})
+(def typed-vector-operations
+  '{vector-count 1 vector-get 3 vector-at 2 vector-drop 2 vector-assoc 3 vector-conj 2})
 (def sequencing-operations '#{do})
+(def string-operations '{string-byte-length 1 string=? 2 string-concat 2})
 (def reserved-function-names
   (set/union forbidden-heads arithmetic comparisons (set (keys heap-operations))
              (set (keys kernel-memory-operations))
              (set (keys kernel-privileged-operations))
-             list-operations predicate-operations logical-operations map-operations set-operations
-             higher-order-operations
-             collection-operations
-             closure-operations
-             lazy-sequence-operations
-             sequencing-operations
-             '#{let if fn cap-call ns defn}))
+             list-operations predicate-operations logical-operations map-operations typed-map-operations
+             (set (keys typed-safe-value-operations))
+             (set (keys parametric-result-operations))
+             variant-operations
+             generic-option-operations
+             heterogeneous-vector-operations
+             typed-set-operations
+             canonical-typed-map-operations
+             record-operations
+             (set (keys typed-vector-operations))
+             (set (keys string-operations))
+             '#{let if cap-call ns defn defn- some some? nil? vector-i64 vector-new
+                hetero-vector typed-set record match-result match-variant match-option}))
 (def max-functions 1024)
 (def max-expression-nodes 50000)
 (def max-lowered-nodes 100000)
@@ -83,7 +140,114 @@
 (def max-parameters 5)
 (def max-symbol-chars 128)
 (def max-list-items 128)
-(def max-set-items 16)
+(def max-namespace-docstring-chars 4096)
+(def max-function-docstring-chars 4096)
+(def max-type-depth 8)
+(def max-type-nodes 64)
+(def max-variant-cases 32)
+(def max-heterogeneous-vector-items 32)
+(def max-typed-set-items 32)
+(def max-typed-map-entries 31)
+(def max-record-fields 32)
+;; ADR-2607182410: bounds an optional `ns` `:capabilities` declaration set.
+;; 256, not max-functions -- matches cap-call's own [0,255] id space (at
+;; most 256 distinct capabilities can ever exist), not the unrelated
+;; function-count limit.
+(def max-namespace-capabilities 256)
+(def value-types #{:i64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64})
+
+(declare reject!)
+
+(defn- parametric-result-type? [type]
+  (and (vector? type) (= 3 (count type)) (= :result (first type))))
+
+(defn- variant-type? [type]
+  (and (vector? type) (= 3 (count type)) (= :variant (first type))))
+
+(defn- generic-option-type? [type]
+  (and (vector? type) (= 2 (count type)) (= :option (first type))))
+
+(defn- heterogeneous-vector-type? [type]
+  (and (vector? type) (= 2 (count type)) (= :vector (first type))))
+
+(defn- typed-set-type? [type]
+  (and (vector? type) (= 2 (count type)) (= :set (first type))))
+
+(defn- canonical-typed-map-type? [type]
+  (and (vector? type) (= 3 (count type)) (= :map (first type))))
+
+(defn- record-type? [type]
+  (and (vector? type) (= 3 (count type)) (= :record (first type))))
+
+(defn- structured-type? [type]
+  (or (parametric-result-type? type) (variant-type? type) (generic-option-type? type)
+      (heterogeneous-vector-type? type) (typed-set-type? type)
+      (canonical-typed-map-type? type) (record-type? type)))
+
+(defn- validate-value-type!
+  ([type] (validate-value-type! type 0 (volatile! 0)))
+  ([type depth nodes]
+   (vswap! nodes inc)
+   (when (> @nodes max-type-nodes)
+     (reject! "value type exceeds node limit" type))
+   (when (> depth max-type-depth)
+     (reject! "value type exceeds depth limit" type))
+   (cond
+     (contains? value-types type) type
+     (parametric-result-type? type)
+     (do (validate-value-type! (second type) (inc depth) nodes)
+         (validate-value-type! (nth type 2) (inc depth) nodes)
+         type)
+     (generic-option-type? type)
+     (do (validate-value-type! (second type) (inc depth) nodes)
+         type)
+     (heterogeneous-vector-type? type)
+     (let [item-types (second type)]
+       (when-not (and (vector? item-types)
+                      (<= (count item-types) max-heterogeneous-vector-items))
+         (reject! "heterogeneous vector types must be a bounded vector" type))
+       (vswap! nodes inc)
+       (when (> @nodes max-type-nodes)
+         (reject! "value type exceeds node limit" type))
+       (doseq [item-type item-types]
+         (validate-value-type! item-type (inc depth) nodes))
+       type)
+     (typed-set-type? type)
+     (do (validate-value-type! (second type) (inc depth) nodes)
+         type)
+     (canonical-typed-map-type? type)
+     (do (validate-value-type! (second type) (inc depth) nodes)
+         (validate-value-type! (nth type 2) (inc depth) nodes)
+         type)
+     (record-type? type)
+     (let [[_ type-id fields] type]
+       (when-not (and (keyword? type-id) (namespace type-id))
+         (reject! "record type id must be a qualified keyword" type))
+       (when-not (and (vector? fields) (seq fields) (<= (count fields) max-record-fields)
+                      (every? #(and (vector? %) (= 2 (count %)) (keyword? (first %))) fields)
+                      (= (count fields) (count (distinct (map first fields)))))
+         (reject! "record fields must be a non-empty unique bounded vector" type))
+       (vswap! nodes + (+ 2 (* 2 (count fields))))
+       (when (> @nodes max-type-nodes)
+         (reject! "value type exceeds node limit" type))
+       (doseq [[_ field-type] fields]
+         (validate-value-type! field-type (inc depth) nodes))
+       type)
+     (variant-type? type)
+     (let [[_ type-id cases] type]
+       (when-not (and (keyword? type-id) (namespace type-id))
+         (reject! "variant type id must be a qualified keyword" type))
+       (when-not (and (vector? cases) (seq cases) (<= (count cases) max-variant-cases)
+                      (every? #(and (vector? %) (= 2 (count %)) (keyword? (first %))) cases)
+                      (= (count cases) (count (distinct (map first cases)))))
+         (reject! "variant cases must be a non-empty unique bounded vector" type))
+       (vswap! nodes + (+ 2 (* 2 (count cases))))
+       (when (> @nodes max-type-nodes)
+         (reject! "value type exceeds node limit" type))
+       (doseq [[_ payload-type] cases]
+         (validate-value-type! payload-type (inc depth) nodes))
+       type)
+     :else (reject! "value type is outside the safe profile" type))))
 
 (defn- kotoba-integer?
   "True for a value that is (or stands for) a `.kotoba` integer literal --
@@ -99,6 +263,17 @@
   (confirmed live), so this checks both forms explicitly."
   [form]
   #?(:clj (integer? form) :cljs (or (i64/bigint-value? form) (integer? form))))
+
+(defn- heterogeneous-vector-index!
+  [index item-types form]
+  (when-not (kotoba-integer? index)
+    (reject! "heterogeneous vector index must be an integer literal" form))
+  (let [host-index #?(:clj index
+                      :cljs (if (i64/bigint-value? index) (js/Number index) index))]
+    (when-not (and (integer? host-index) (<= 0 host-index)
+                   (< host-index (count item-types)))
+      (reject! "heterogeneous vector index must be in range" form))
+    #?(:clj (long host-index) :cljs host-index)))
 
 (defn- check-reader-depth! [source]
   (loop [index 0 depth 0 in-string? false escaped? false in-comment? false]
@@ -129,7 +304,7 @@
     (throw (ex-info "reader evaluation is forbidden" {:phase :read})))
   (check-reader-depth! source)
   #?(:clj
-     (let [r (rt/string-push-back-reader source)]
+     (let [r (rt/indexing-push-back-reader source)]
        (loop [out []]
          (when (> (count out) 10000)
            (throw (ex-info "too many top-level forms" {:phase :read})))
@@ -156,11 +331,79 @@
          (throw (ex-info "too many top-level forms" {:phase :read})))
        out)))
 
-(defn- reject! [message form]
-  (throw (ex-info message {:phase :subset :form form})))
+(defn- form-span [form]
+  (let [{:keys [line column end-line end-column offset end-offset]} (meta form)]
+    (when (and (integer? line) (integer? column))
+      (cond-> {:line line :column column}
+        (integer? end-line) (assoc :end-line end-line)
+        (integer? end-column) (assoc :end-column end-column)
+        (integer? offset) (assoc :offset offset)
+        (integer? end-offset) (assoc :end-offset end-offset)))))
 
-(declare desugar-expr desugar-list form-free-symbols nth-pair-second
-         replace-recur valid-name?)
+(defn- reject! [message form]
+  (throw (ex-info message (cond-> {:phase :subset :form form}
+                            (form-span form) (assoc :span (form-span form))))))
+
+(declare valid-name?)
+
+(defn- namespace-parts
+  "Parse the bounded namespace header. `:export` and `:capabilities`
+  (ADR-2607182410) are the only admitted clauses, each at most once (in
+  either order): `:export` grants host visibility but no ambient authority
+  or module loading; `:capabilities` optionally declares the closed set of
+  named capabilities (see capability-registry) the namespace's `cap-call`
+  forms may use -- `analyze`'s `check-namespace-capabilities!` then requires
+  this declared set to exactly match what's actually used (declare-then-
+  check, mirroring the `:aiueos/imports` pattern). Import/require clauses
+  remain fail-closed."
+  [form]
+  (let [[op namespace-symbol & tail] form]
+    (when-not (and (= 'ns op) (symbol? namespace-symbol)
+                   (nil? (namespace namespace-symbol))
+                   (pos? (count (str namespace-symbol)))
+                   (<= (count (str namespace-symbol)) max-symbol-chars))
+      (reject! "invalid bounded namespace symbol" form))
+    (let [[docstring tail] (if (string? (first tail))
+                             [(first tail) (rest tail)] [nil tail])]
+      (when (and docstring (> (count docstring) max-namespace-docstring-chars))
+        (reject! "namespace docstring exceeds admission limit" docstring))
+      (when (> (count tail) 2)
+        (reject! "namespace admits at most an :export clause and a :capabilities clause" form))
+      ;; ADR-2607182410: `:export`'s original (pre-existing, test-asserted)
+      ;; rejection message is preserved VERBATIM for every clause shape it
+      ;; already covered pre-`:capabilities` -- a non-`seq?` clause, an
+      ;; unrecognized clause head, or a malformed `(:export ...)` -- so
+      ;; existing callers/tests asserting on that exact string are
+      ;; unaffected. Only a recognized-but-malformed `(:capabilities ...)`
+      ;; clause gets the new, `:capabilities`-specific message (a shape no
+      ;; pre-existing source could ever have produced).
+      (doseq [clause tail]
+        (when-not (seq? clause)
+          (reject! "only a bounded :export vector is admitted in namespace clauses" clause))
+        (case (first clause)
+          :export (when-not (and (= 2 (count clause)) (vector? (second clause)))
+                    (reject! "only a bounded :export vector is admitted in namespace clauses" clause))
+          :capabilities (when-not (and (= 2 (count clause)) (set? (second clause)))
+                          (reject! "only a bounded :capabilities set is admitted in namespace clauses" clause))
+          (reject! "only a bounded :export vector is admitted in namespace clauses" clause)))
+      (when (not= (count tail) (count (distinct (map first tail))))
+        (reject! "namespace admits each of :export/:capabilities at most once" form))
+      (let [export-clause (first (filter #(= :export (first %)) tail))
+            capabilities-clause (first (filter #(= :capabilities (first %)) tail))
+            exports (when export-clause (vec (second export-clause)))
+            capabilities (when capabilities-clause (set (second capabilities-clause)))]
+        (when (and exports
+                   (or (> (count exports) max-functions)
+                       (not= (count exports) (count (distinct exports)))
+                       (not-every? valid-name? exports)))
+          (reject! "namespace exports must be unique bounded function names" exports))
+        (when (and capabilities
+                   (or (> (count capabilities) max-namespace-capabilities)
+                       (not-every? #(and (keyword? %) (namespace %)) capabilities)))
+          (reject! "namespace :capabilities must be a bounded set of namespaced keywords" capabilities))
+        {:namespace namespace-symbol :exports exports :capabilities capabilities}))))
+
+(declare desugar-expr form-free-symbols replace-recur)
 
 ;; ADR-2607150000: bound (via `binding`) around each top-level defn's
 ;; desugaring pass in `analyze`, to an atom `loop`'s desugar-expr case
@@ -188,394 +431,36 @@
 ;; encounters `loop` forms in the same left-to-right desugaring order and
 ;; always assigns the same names.
 (def ^:dynamic *loop-counter* nil)
-(def ^:dynamic *hof-counter* nil)
-(def ^:dynamic *pending-hof-helpers* nil)
-(def ^:dynamic *multi-arity-dispatch* {})
-(def ^:dynamic *function-arities* {})
-(def ^:dynamic *lambda-counter* nil)
-(def ^:dynamic *pending-lambdas* nil)
-(def ^:dynamic *uses-apply?* nil)
-(def ^:dynamic *uses-lazy?* nil)
-(def ^:dynamic *lifting-lazy-thunk?* false)
 
-(defn- invoke-dispatcher-name [arity]
-  (symbol (str "__kotoba_invoke$arity" arity)))
+;; ADR-2607182410: bound (via `binding`, once per `analyze` call, same
+;; lifetime as `*loop-counter*` above -- not per-defn) to a `volatile!` set
+;; that `resolve-capability-keyword!` conjoins each named capability onto as
+;; `(cap-call :some/name ...)` forms are desugared. `analyze` derefs it once
+;; all defns are desugared to check an optional `ns` `:capabilities`
+;; declaration (declared-but-unused / used-but-undeclared) -- see
+;; `check-namespace-capabilities!`. `nil` outside `analyze` (e.g. from a
+;; direct unit-test call to `desugar-expr`) means "don't track," not "reject
+;; every keyword": tracking is a purely additional ns-level lint, never part
+;; of resolving the keyword to its id.
+(def ^:dynamic *used-capability-keywords* nil)
 
-(defn- lift-lambda [form]
-  (let [[_ params-or-clause & tail] form
-        raw-clauses (if (vector? params-or-clause)
-                      [[params-or-clause (first tail)]]
-                      (mapv (fn [clause]
-                              (when-not (and (seq? clause) (vector? (first clause))
-                                             (= 2 (count clause)))
-                                (reject! "multi-arity fn requires ([params] body) clauses" clause))
-                              [(first clause) (second clause)])
-                            (cons params-or-clause tail)))
-        parsed (mapv (fn [[params body :as clause]]
-                       (let [amp-index (first (keep-indexed #(when (= '& %2) %1) params))]
-                         (if amp-index
-                           (do
-                             (when-not (and (= amp-index (- (count params) 2))
-                                            (<= amp-index 4)
-                                            (every? valid-name? (subvec params 0 amp-index))
-                                            (valid-name? (peek params)))
-                               (reject! "variadic fn clause requires [fixed ... & rest]" clause))
-                             {:kind :variadic :fixed (subvec params 0 amp-index)
-                              :rest-name (peek params) :body body :min-arity amp-index})
-                           {:kind :fixed :params params :body body :arity (count params)})))
-                     raw-clauses)
-        fixed (filter #(= :fixed (:kind %)) parsed)
-        variadics (filter #(= :variadic (:kind %)) parsed)
-        _ (when (or (> (count variadics) 1)
-                    (not= (count fixed) (count (distinct (map :arity fixed)))))
-            (reject! "fn requires unique fixed arities and at most one variadic clause" form))
-        fixed-by-arity (into {} (map (juxt :arity identity) fixed))
-        variadic (first variadics)
-        arities (sort (set/union (set (keys fixed-by-arity))
-                                 (if variadic (set (range (:min-arity variadic) 5)) #{})))
-        clauses (mapv (fn [arity]
-                        (if-let [{:keys [params body]} (get fixed-by-arity arity)]
-                          [params body]
-                          (let [{:keys [fixed rest-name body]} variadic
-                                extras (mapv #(symbol (str "__kotoba_lambda_rest_arg_" %))
-                                             (range (- arity (count fixed))))]
-                            [(into (vec fixed) extras)
-                             (list 'let [rest-name (apply list 'list extras)] body)])))
-                      arities)]
-    (when-not (and (seq clauses)
-                   (every? (fn [[params body]]
-                             (and (some? body) (<= (count params) 4)
-                                  (every? valid-name? params)
-                                  (= (count params) (count (distinct params)))))
-                           clauses)
-                   (= (count clauses) (count (distinct (map (comp count first) clauses)))))
-      (reject! "fn value requires unique arities with zero to four unique parameters" form))
-    (when (and (vector? params-or-clause) (not= 1 (count tail)))
-      (reject! "single-arity fn value requires exactly one body" form))
-    (let [lowered (mapv (fn [[params body]]
-                          {:params params :body (desugar-expr body)})
-                        clauses)
-          captures (vec (sort-by str
-                                 (apply set/union #{}
-                                        (map (fn [{:keys [params body]}]
-                                               (form-free-symbols body (set params)))
-                                             lowered))))
-          id (vswap! *lambda-counter* inc)]
-      (doseq [{:keys [params]} lowered]
-        (when (> (+ (count captures) (count params)) max-parameters)
-          (reject! "fn captures plus parameters exceed ABI-supported arity" form)))
-      (when *pending-lambdas*
-        (swap! *pending-lambdas* into
-               (mapv (fn [{:keys [params body]}]
-                       (let [arity (count params)
-                             helper-name (symbol (str "__kotoba_lambda_" id "_arity" arity))]
-                          {:id id :arity arity :captures captures
-                          :helper {:name helper-name :params (into captures params)
-                                   :result :i64 :effects #{} :body body
-                                   :lazy-thunk? *lifting-lazy-thunk?*}}))
-                     lowered)))
-      (list 'pair id (desugar-list captures form)))))
-
-(defn- lambda-dispatchers [lambda-infos force-all-arities?]
-  (mapv
-   (fn [arity]
-     (let [closure (symbol (str "__kotoba_closure_" arity))
-           args (mapv #(symbol (str "__kotoba_invoke_arg_" %)) (range arity))
-           candidates (filter #(= arity (:arity %)) lambda-infos)
-           body
-           (reduce
-            (fn [fallback {:keys [id captures helper]}]
-              (let [capture-chain (list 'pair-second closure)
-                    capture-values
-                    (map-indexed (fn [index _]
-                                   (list 'pair-first (nth-pair-second capture-chain index)))
-                                 captures)]
-                (list 'if (list '= (list 'pair-first closure) id)
-                      (apply list (:name helper) (concat capture-values args))
-                      fallback)))
-            0 (reverse candidates))]
-       {:name (invoke-dispatcher-name arity) :params (into [closure] args)
-        :result :i64 :effects #{} :body body}))
-   (if force-all-arities?
-     (range 5)
-     (sort (distinct (map :arity lambda-infos))))))
-
-(def ^:private closure-apply-helper-name '__kotoba_closure_apply)
-
-(def ^:private closure-apply-helper
-  {:name closure-apply-helper-name
-   :params '[__kotoba_apply_closure __kotoba_apply_args]
-   :result :i64 :effects #{}
-   :body
-   '(if (= __kotoba_apply_args 0)
-      (__kotoba_invoke$arity0 __kotoba_apply_closure)
-      (let [__kotoba_apply_a0 (pair-first __kotoba_apply_args)
-            __kotoba_apply_tail1 (pair-second __kotoba_apply_args)]
-        (if (= __kotoba_apply_tail1 0)
-          (__kotoba_invoke$arity1 __kotoba_apply_closure __kotoba_apply_a0)
-          (let [__kotoba_apply_a1 (pair-first __kotoba_apply_tail1)
-                __kotoba_apply_tail2 (pair-second __kotoba_apply_tail1)]
-            (if (= __kotoba_apply_tail2 0)
-              (__kotoba_invoke$arity2 __kotoba_apply_closure __kotoba_apply_a0 __kotoba_apply_a1)
-              (let [__kotoba_apply_a2 (pair-first __kotoba_apply_tail2)
-                    __kotoba_apply_tail3 (pair-second __kotoba_apply_tail2)]
-                (if (= __kotoba_apply_tail3 0)
-                  (__kotoba_invoke$arity3 __kotoba_apply_closure
-                                           __kotoba_apply_a0 __kotoba_apply_a1 __kotoba_apply_a2)
-                  (let [__kotoba_apply_a3 (pair-first __kotoba_apply_tail3)
-                        __kotoba_apply_tail4 (pair-second __kotoba_apply_tail3)]
-                    (if (= __kotoba_apply_tail4 0)
-                      (__kotoba_invoke$arity4 __kotoba_apply_closure
-                                               __kotoba_apply_a0 __kotoba_apply_a1
-                                               __kotoba_apply_a2 __kotoba_apply_a3)
-                      0)))))))))})
-
-(def ^:private lazy-take-helper-name '__kotoba_lazy_take)
-(def ^:private lazy-take-helper
-  {:name lazy-take-helper-name :params '[n lazy-seq] :result :i64 :effects #{}
-   :body '(if (<= n 0) 0
-            (if (= lazy-seq 0) 0
-              (let [cell (__kotoba_invoke$arity0 lazy-seq)]
-                (if (= cell 0) 0
-                  (pair (__kotoba_invoke$arity0 (pair-first cell))
-                        (__kotoba_lazy_take
-                         (- n 1)
-                         (__kotoba_invoke$arity0 (pair-second cell))))))))})
-
-(def ^:private lazy-drop-helper-name '__kotoba_lazy_drop)
-(def ^:private lazy-drop-helper
-  {:name lazy-drop-helper-name :params '[n lazy-seq] :result :i64 :effects #{}
-   :body '(if (<= n 0) lazy-seq
-            (if (= lazy-seq 0) 0
-              (let [cell (__kotoba_invoke$arity0 lazy-seq)]
-                (if (= cell 0) 0
-                  (__kotoba_lazy_drop
-                   (- n 1)
-                   (__kotoba_invoke$arity0 (pair-second cell)))))))})
-
-(defn- callback-value [callback arity]
-  (cond
-    (and (symbol? callback)
-         (or (contains? *function-arities* callback)
-             (contains? *multi-arity-dispatch* callback)))
-    (let [params (mapv #(symbol (str "__kotoba_callback_arg_" %)) (range arity))]
-      (lift-lambda (list 'fn params (apply list callback params))))
-
-    (and (seq? callback) (= 'fn (first callback)))
-    (lift-lambda callback)
-
-    :else (desugar-expr callback)))
-
-(defn- synthesize-lazy-map [callback colls]
-  (let [helper-name (symbol (str "__kotoba_lazy_map_" (vswap! *hof-counter* inc)))
-        callback-param (symbol (str helper-name "_callback"))
-        coll-params (mapv #(symbol (str helper-name "_coll_" %)) (range (count colls)))
-        callback-value (callback-value callback (count colls))
-        body (binding [*lifting-lazy-thunk?* true]
-               (lift-lambda
-                (list 'fn []
-                      (list 'if (apply list 'or (map #(list 'lazy-empty? %) coll-params)) 0
-                            (list 'pair
-                                  (list 'fn []
-                                        (apply list 'invoke callback-param
-                                               (map #(list 'lazy-first %) coll-params)))
-                                  (list 'fn []
-                                        (apply list helper-name callback-param
-                                               (map #(list 'lazy-rest %) coll-params))))))))
-        helper {:name helper-name :params (into [callback-param] coll-params)
-                :result :i64 :effects #{} :body body}]
-    (when *pending-hof-helpers* (swap! *pending-hof-helpers* conj helper))
-    (apply list helper-name callback-value (map desugar-expr colls))))
-
-(defn- synthesize-lazy-filter [callback coll]
-  (let [helper-name (symbol (str "__kotoba_lazy_filter_" (vswap! *hof-counter* inc)))
-        callback-param (symbol (str helper-name "_callback"))
-        coll-param (symbol (str helper-name "_coll"))
-        value (symbol (str helper-name "_value"))
-        callback-value (callback-value callback 1)
-        body (binding [*lifting-lazy-thunk?* true]
-               (lift-lambda
-                (list 'fn []
-                      (list 'if (list 'lazy-empty? coll-param) 0
-                            (list 'let [value (list 'lazy-first coll-param)]
-                                  (list 'if (list 'invoke callback-param value)
-                                        (list 'pair
-                                              (list 'fn [] value)
-                                              (list 'fn []
-                                                    (list helper-name callback-param
-                                                          (list 'lazy-rest coll-param))))
-                                        (list 'invoke
-                                              (list helper-name callback-param
-                                                    (list 'lazy-rest coll-param)))))))))
-        helper {:name helper-name :params [callback-param coll-param]
-                :result :i64 :effects #{} :body body}]
-    (when *pending-hof-helpers* (swap! *pending-hof-helpers* conj helper))
-    (list helper-name callback-value (desugar-expr coll))))
-
-(defn- synthesize-reduce-no-init [callback coll]
-  (let [named-arities (and (symbol? callback) (get *multi-arity-dispatch* callback))]
-    (cond
-      named-arities
-      (let [zero-name (get named-arities 0)
-            binary-name (get named-arities 2)]
-        (when-not (and zero-name binary-name)
-          (reject! "named no-init reduce callback must define 0 and 2 arities" callback))
-        (let [helper-name (symbol (str "__kotoba_hof_" (vswap! *hof-counter* inc)))
-              acc (symbol (str helper-name "_acc"))
-              items (symbol (str helper-name "_coll"))
-              helper {:name helper-name :params [acc items] :result :i64 :effects #{}
-                      :body (list 'if (list '= items 0) acc
-                                  (list helper-name
-                                        (list binary-name acc (list 'pair-first items))
-                                        (list 'pair-second items)))}
-              coll-sym (gensym "reduce-coll__")]
-          (when *pending-hof-helpers* (swap! *pending-hof-helpers* conj helper))
-          (list 'let [coll-sym (desugar-expr coll)]
-                (list 'if (list '= coll-sym 0)
-                      (list zero-name)
-                      (list helper-name (list 'pair-first coll-sym)
-                            (list 'pair-second coll-sym))))))
-
-      (and (seq? callback) (= 'fn (first callback)))
-        (let [clauses (rest callback)
-              parsed (into {}
-                           (map (fn [clause]
-                                  (when-not (and (seq? clause) (vector? (first clause))
-                                                 (= 2 (count clause))
-                                                 (every? valid-name? (first clause))
-                                                 (= (count (first clause))
-                                                    (count (distinct (first clause)))))
-                                    (reject! "invalid multi-arity fn clause in no-init reduce" clause))
-                                  [(count (first clause))
-                                   {:params (first clause) :body (desugar-expr (second clause))}]))
-                           clauses)
-              zero-clause (get parsed 0)
-              binary-clause (get parsed 2)]
-          (when-not (and (= (count parsed) (count clauses))
-                         (= #{0 2} (set (keys parsed))) zero-clause binary-clause)
-            (reject! "no-init reduce callback must define exactly [] and [acc value] arities" callback))
-          (let [captures (vec (sort-by str
-                                       (set/union
-                                        (form-free-symbols (:body zero-clause) #{})
-                                        (form-free-symbols (:body binary-clause)
-                                                           (set (:params binary-clause))))))
-                helper-name (symbol (str "__kotoba_hof_" (vswap! *hof-counter* inc)))
-                acc (symbol (str helper-name "_acc"))
-                items (symbol (str helper-name "_coll"))
-                [acc-param value-param] (:params binary-clause)
-                invoke-binary (list 'let [acc-param acc value-param (list 'pair-first items)]
-                                    (:body binary-clause))
-                helper {:name helper-name :params (into captures [acc items]) :result :i64 :effects #{}
-                        :body (list 'if (list '= items 0) acc
-                                    (apply list helper-name
-                                           (concat captures
-                                                   [invoke-binary (list 'pair-second items)])))}
-                coll-sym (gensym "reduce-coll__")]
-            (when (> (count (:params helper)) max-parameters)
-              (reject! "callback captures plus reduce state exceed ABI-supported arity" callback))
-            (when *pending-hof-helpers* (swap! *pending-hof-helpers* conj helper))
-          (list 'let [coll-sym (desugar-expr coll)]
-                (list 'if (list '= coll-sym 0)
-                      (:body zero-clause)
-                      (apply list helper-name
-                             (concat captures
-                                     [(list 'pair-first coll-sym)
-                                      (list 'pair-second coll-sym)]))))))
-
-      :else
-      (let [helper-name (symbol (str "__kotoba_hof_" (vswap! *hof-counter* inc)))
-            closure-param (symbol (str helper-name "_callback"))
-            acc (symbol (str helper-name "_acc"))
-            items (symbol (str helper-name "_coll"))
-            helper {:name helper-name :params [closure-param acc items] :result :i64 :effects #{}
-                    :body (list 'if (list '= items 0) acc
-                                (list helper-name closure-param
-                                      (list (invoke-dispatcher-name 2) closure-param acc
-                                            (list 'pair-first items))
-                                      (list 'pair-second items)))}
-            closure-sym (gensym "reduce-callback__")
-            coll-sym (gensym "reduce-coll__")]
-        (when *pending-hof-helpers* (swap! *pending-hof-helpers* conj helper))
-        (list 'let [closure-sym (desugar-expr callback)
-                    coll-sym (desugar-expr coll)]
-              (list 'if (list '= coll-sym 0)
-                    (list (invoke-dispatcher-name 0) closure-sym)
-                    (list helper-name closure-sym (list 'pair-first coll-sym)
-                          (list 'pair-second coll-sym))))))))
-
-(defn- synthesize-hof-call [kind callback colls init]
-  (let [expected-arity (if (= kind :reduce) 2 (count colls))
-        helper-name (symbol (str "__kotoba_hof_" (vswap! *hof-counter* inc)))
-        callback-info
-        (cond
-          (and (symbol? callback)
-               (or (contains? *function-arities* callback)
-                   (contains? *multi-arity-dispatch* callback)))
-          {:captures [] :initial-captures []
-           :invoke (fn [args] (apply list callback args))}
-
-          (and (seq? callback) (= 'fn (first callback)))
-          (let [[_ params & body] callback]
-            (when-not (and (vector? params) (= expected-arity (count params))
-                           (every? valid-name? params)
-                           (= (count params) (count (distinct params)))
-                           (= 1 (count body)))
-              (reject! (str (name kind) " fn callback has invalid parameters/body") callback))
-            (let [desugared-body (desugar-expr (first body))
-                  captures (vec (sort-by str (form-free-symbols desugared-body (set params))))]
-              {:captures captures
-               :initial-captures captures
-               :invoke (fn [args] (list 'let (vec (mapcat vector params args)) desugared-body))}))
-
-          :else
-          (let [closure-param (symbol (str helper-name "_callback"))]
-            {:captures [closure-param]
-             :initial-captures [(desugar-expr callback)]
-             :invoke (fn [args]
-                       (apply list (invoke-dispatcher-name expected-arity)
-                              closure-param args))}))
-        captures (:captures callback-info)
-        initial-captures (:initial-captures callback-info)
-        invoke (:invoke callback-info)
-        internal (fn [suffix]
-                   (let [candidate (symbol (str helper-name "_" suffix))]
-                     (when (contains? (set captures) candidate)
-                       (reject! "closure capture collides with compiler helper local" candidate))
-                     candidate))
-        helper (case kind
-                 :map (let [params (mapv #(internal (str "coll" %)) (range (count colls)))
-                            step (list 'pair
-                                       (invoke (map #(list 'pair-first %) params))
-                                       (apply list helper-name
-                                              (concat captures (map #(list 'pair-second %) params))))
-                            body (reduce (fn [else coll]
-                                           (list 'if (list '= coll 0) 0 else))
-                                         step (reverse params))]
-                        {:name helper-name :params (into captures params)
-                         :result :i64 :effects #{} :body body})
-                 :filter (let [coll (internal "coll")]
-                           {:name helper-name :params (conj captures coll) :result :i64 :effects #{}
-                            :body (list 'if (list '= coll 0) 0
-                                        (list 'if (invoke [(list 'pair-first coll)])
-                                              (list 'pair (list 'pair-first coll)
-                                                    (apply list helper-name
-                                                           (concat captures [(list 'pair-second coll)])))
-                                              (apply list helper-name
-                                                     (concat captures [(list 'pair-second coll)]))))})
-                 :reduce (let [acc (internal "acc") coll (internal "coll")]
-                           {:name helper-name :params (into captures [acc coll]) :result :i64 :effects #{}
-                            :body (list 'if (list '= coll 0) acc
-                                        (apply list helper-name
-                                               (concat captures
-                                                       [(invoke [acc (list 'pair-first coll)])
-                                                        (list 'pair-second coll)])))}))]
-    (when (> (count (:params helper)) max-parameters)
-      (reject! "callback captures plus collection state exceed ABI-supported arity" callback))
-    (when *pending-hof-helpers* (swap! *pending-hof-helpers* conj helper))
-    (if (= kind :reduce)
-      (apply list helper-name (concat initial-captures
-                                      [(desugar-expr init) (desugar-expr (first colls))]))
-      (apply list helper-name (concat initial-captures (map desugar-expr colls))))))
+(defn- resolve-capability-keyword!
+  "Resolve a `cap-call` NAME argument (a namespaced keyword, e.g.
+  `:identity/sign`) against `capability-registry` to its [0,255] int id, at
+  desugar time -- strictly before HIR/KIR construction, so every downstream
+  consumer (validate-expr's arity/range check, direct-facts'
+  effect-extraction, ir.cljc, every backend, admission.cljc, verifier.clj)
+  sees the EXACT SAME plain-integer `cap-call` shape the pre-existing
+  `(cap-call <int> value)` form has always produced -- none of them are
+  aware a keyword was ever written. An unregistered keyword is a hard
+  parse-time rejection (closed-world/deny-by-default for names, mirroring
+  the existing [0,255]-range check for the integer form)."
+  [kw form]
+  (if-let [id (get capability-registry kw)]
+    (do (when *used-capability-keywords*
+          (vswap! *used-capability-keywords* conj kw))
+        id)
+    (reject! (str "cap-call names an unregistered capability: " kw) form)))
 
 (defn- desugar-list [args form]
   (when (> (count args) max-list-items)
@@ -607,11 +492,24 @@
             (list 'let [tmp (desugar-expr (first args))]
                   (list 'if tmp tmp (desugar-or (rest args)))))))
 
+(defn- desugar-cond-thread [args form]
+  (when (or (empty? args) (odd? (count (rest args))))
+    (reject! "cond-> requires an initial value followed by test/form pairs" form))
+  (reduce (fn [value [test step]]
+            (when-not (and (seq? step) (symbol? (first step)))
+              (reject! "cond-> update must be a non-empty call form" step))
+            (let [tmp (gensym "cond-thread__")
+                  threaded (list* (first step) tmp (rest step))]
+              (list 'let [tmp value]
+                    (list 'if (desugar-expr test)
+                          (desugar-expr threaded)
+                          tmp))))
+          (desugar-expr (first args))
+          (partition 2 (rest args))))
+
+
 (defn- desugar-do
-  "ADR-2607180900 L2: `(do a b c)` -> nested `let` that evaluates each
-  non-final expression for effects (none in pure KIR today) and returns
-  the last. No new backend op — pure desugar to `let`/`if` primitives.
-  `(do)` is 0; `(do a)` is a."
+  "ADR-2607180900 L2: `(do a b c)` -> nested `let` returning last expression."
   [args]
   (cond
     (empty? args) 0
@@ -620,121 +518,18 @@
             (list 'let [tmp (desugar-expr (first args))]
                   (desugar-do (rest args))))))
 
-(defn- fnv1a-i64
-  "Deterministic 64-bit FNV-1a hash of S's UTF-8 bytes, used to intern
-  keyword literals as distinct i64 constants (ADR-2607150000). Not
-  Clojure's own `hash` -- FNV-1a is a fixed, dependency-free algorithm
-  whose output is reproducible forever, matching this compiler's byte-
-  for-byte reproducibility gates (coverage_evidence.clj/release.clj).
-  Collision probability for the realistically small keyword vocabulary of
-  one .kotoba module is astronomically low but not proven zero -- a known,
-  documented limitation, not eliminated."
-  [s]
-  #?(:clj
-     (let [bs (.getBytes ^String s "UTF-8")
-           offset-basis -3750763034362895579  ; 0xcbf29ce484222325 as signed i64
-           prime 1099511628211]                ; 0x100000001b3
-       (reduce (fn [h b] (unchecked-multiply (bit-xor h (bit-and (long b) 0xff)) prime))
-               offset-basis bs))
-     :cljs
-     ;; Same FNV-1a algorithm, over JS bigint instead of JVM long, so a
-     ;; keyword interned on this path hashes to the IDENTICAL i64 constant
-     ;; the JVM path would emit for the same keyword (this compiler's own
-     ;; reproducible-build gates require byte-for-byte identical output).
-     (let [bs (js/TextEncoder.)
-           bytes (.encode bs s)
-           offset-basis (js/BigInt "-3750763034362895579")
-           prime (js/BigInt "1099511628211")]
-       (reduce (fn [h b]
-                 (i64/wrap-i64 (* (i64/wrap-i64 (bit-xor h (js/BigInt b))) prime)))
-               offset-basis (js/Array.from bytes)))))
-
-(def ^:private value-tag-mask 0xf0000000)
-(def ^:private string-value-tag 0x50000000)
-(def ^:private keyword-value-tag 0x60000000)
-(def ^:private symbol-value-tag 0x70000000)
-
-(defn- fnv1a-i32-value [s]
-  #?(:clj
-     (let [bs (.getBytes ^String s "UTF-8")
-           basis (unchecked-int 0x811c9dc5)
-           prime (unchecked-int 0x01000193)]
-       (reduce (fn [h b]
-                 (unchecked-multiply-int
-                  (unchecked-int (bit-xor h (bit-and (int b) 0xff))) prime))
-               basis bs))
-     :cljs
-     (let [bytes (.encode (js/TextEncoder.) s)]
-       (reduce (fn [h b]
-                 (bit-or 0 (* (bit-xor h b) 0x01000193)))
-               (bit-or 0 0x811c9dc5) (js/Array.from bytes)))))
-
-(defn- tagged-value [tag text bits]
-  (bit-or tag (bit-and (fnv1a-i32-value text) (dec (bit-shift-left 1 bits)))))
-
-(defn- keyword->i64 [kw] (tagged-value keyword-value-tag (str kw) 28))
-
-(defn- utf8-length [s]
-  #?(:clj (count (.getBytes ^String s "UTF-8"))
-     :cljs (.-length (.encode (js/TextEncoder.) s))))
-
-(defn- string->i64 [s]
-  (let [length (utf8-length s)]
-    (when (> length 127)
-      (reject! "portable string literal exceeds 127 UTF-8 bytes" s))
-    (bit-or string-value-tag (bit-shift-left length 21)
-            (bit-and (fnv1a-i32-value s) 0x1fffff))))
-
-(defn- symbol-value->i64 [sym]
-  (tagged-value symbol-value-tag (str sym) 28))
-
-(defn- validate-portable-value-ids! [forms]
-  (let [seen (atom {})]
-    (letfn [(visit [node]
-              (let [[kind source id]
-                    (cond
-                      (string? node) [:string node (string->i64 node)]
-                      (keyword? node) [:keyword node (keyword->i64 node)]
-                      (and (seq? node) (= 'quote (first node))
-                           (= 2 (count node)) (symbol? (second node)))
-                      [:symbol (second node) (symbol-value->i64 (second node))]
-                      :else nil)]
-                (when id
-                  (if-let [[other-kind other-source] (get @seen id)]
-                    (when-not (= [kind source] [other-kind other-source])
-                      (reject! "portable value ID collision"
-                               {:id id :left [other-kind other-source]
-                                :right [kind source]}))
-                    (swap! seen assoc id [kind source])))
-                (cond
-                  (map? node) (doseq [[k v] node] (visit k) (visit v))
-                  (coll? node) (doseq [item node] (visit item)))))]
-      (doseq [form forms] (visit form)))
-    true))
-
 (defn- desugar-map
-  "`{:k1 v1 :k2 v2 ...}` -> a cons-list of `(pair key value)` pairs, reusing
-  the EXISTING heap-pair/list primitives (`pair`/`pair-first`/`pair-second`)
-  entirely -- no backend/codegen change (ADR-2607150000). Entries are
-  sorted by the SOURCE TEXT of their key (`pr-str`, not the interned i64,
-  which isn't computable for non-literal keys) for deterministic codegen
-  regardless of Clojure's own map-literal iteration order (unspecified for
-  >8 entries) -- required by this compiler's reproducible-build gates."
+  "Lower a bounded literal into the owned typed-map KIR operation. Keys are
+  canonical keywords only; values are checked i64 expressions. Sorting by
+  canonical keyword text makes KIR reproducible without hashing identity."
   [form]
   (when (> (count form) max-list-items)
     (reject! "map entry count exceeds admission limit" form))
-  ;; #?(:cljs ...): a plain `pr-str` on a `bigint` key prints as
-  ;; "#object[BigInt 5]" (confirmed live), not "5" like the JVM path's Long
-  ;; -- diverging sort order between an integer key and e.g. a keyword key
-  ;; in the same map literal. `.toString()` on bigint gives the identical
-  ;; plain-digit form Long's own `pr-str` produces, so entries sort
-  ;; byte-identically to the JVM path regardless of key type mix.
-  (let [entries (sort-by (fn [[k _]]
-                            #?(:clj (pr-str k)
-                               :cljs (if (i64/bigint-value? k) (.toString k) (pr-str k))))
-                          (seq form))
-        pairs (map (fn [[k v]] (list 'pair (desugar-expr k) (desugar-expr v))) entries)]
-    (reduce (fn [tail item] (list 'pair item tail)) 0 (reverse pairs))))
+  (when-not (every? keyword? (keys form))
+    (reject! "map keys must be bounded keywords" form))
+  (apply list 'map-new
+         (mapcat (fn [[k v]] [k (desugar-expr v)])
+                 (sort-by (comp str key) form))))
 
 (def ^:private map-get-helper-name '__kotoba_map_get)
 
@@ -763,18 +558,6 @@
     (seq? form) (or (= map-get-helper-name (first form)) (some uses-map-get? (rest form)))
     (coll? form) (some uses-map-get? form)
     :else false))
-
-(def ^:private map-contains-key-helper-name '__kotoba_map_contains_key)
-(def ^:private map-contains-key-helper
-  {:name map-contains-key-helper-name
-   :params '[m k]
-   :result :i64
-   :effects #{}
-   :body '(if (= m 0)
-            0
-            (if (= (pair-first (pair-first m)) k)
-              1
-              (__kotoba_map_contains_key (pair-second m) k)))})
 
 (def ^:private map-without-helper-name '__kotoba_map_without)
 
@@ -808,154 +591,52 @@
     (coll? form) (some uses-map-without? form)
     :else false))
 
-(def ^:private set-contains-helper-name '__kotoba_set_contains)
-(def ^:private set-contains-helper
-  {:name set-contains-helper-name :params '[s value] :result :i64 :effects #{}
-   :body '(if (= s 0) 0
-            (if (= (pair-first s) value) 1
-              (__kotoba_set_contains (pair-second s) value)))})
-
-(def ^:private set-without-helper-name '__kotoba_set_without)
-(def ^:private set-without-helper
-  {:name set-without-helper-name :params '[s value] :result :i64 :effects #{}
-   :body '(if (= s 0) 0
-            (if (= (pair-first s) value)
-              (__kotoba_set_without (pair-second s) value)
-              (pair (pair-first s) (__kotoba_set_without (pair-second s) value))))})
-
-(defn- uses-helper? [helper-name form]
-  (cond
-    (seq? form) (or (= helper-name (first form))
-                    (some #(uses-helper? helper-name %) (rest form)))
-    (coll? form) (some #(uses-helper? helper-name %) form)
-    :else false))
-
-(defn- stable-form-text [form]
-  #?(:clj (pr-str form)
-     :cljs (if (i64/bigint-value? form) (.toString form) (pr-str form))))
-
-(defn- set-conj-form [set-expr value-expr]
-  (let [value-sym (gensym "set-value__")]
-    (list 'let [value-sym value-expr]
-          (list 'pair value-sym
-                (list set-without-helper-name set-expr value-sym)))))
-
-(defn- desugar-set [form]
-  (when (> (count form) max-set-items)
-    (reject! "set item count exceeds admission limit" form))
-  ;; EDN sets have no iteration-order contract. Sorting the source forms makes
-  ;; lowering reproducible; set-conj-form also removes runtime-equal values.
-  (reduce (fn [set-expr item]
-            (set-conj-form set-expr (desugar-expr item)))
-          0 (sort-by stable-form-text form)))
-
-(def ^:private coll-count-helper-name '__kotoba_coll_count)
-(def ^:private coll-count-helper
-  {:name coll-count-helper-name :params '[coll acc] :result :i64 :effects #{}
-   :body '(if (= coll 0) acc (__kotoba_coll_count (pair-second coll) (+ acc 1)))})
-
-(def ^:private coll-nth-helper-name '__kotoba_coll_nth)
-(def ^:private coll-nth-helper
-  {:name coll-nth-helper-name :params '[coll index default] :result :i64 :effects #{}
-   :body '(if (= coll 0) default
-            (if (= index 0) (pair-first coll)
-              (if (< index 0) default
-                (__kotoba_coll_nth (pair-second coll) (- index 1) default))))})
-
-(def ^:private map-keys-helper-name '__kotoba_map_keys)
-(def ^:private map-keys-helper
-  {:name map-keys-helper-name :params '[m] :result :i64 :effects #{}
-   :body '(if (= m 0) 0
-            (pair (pair-first (pair-first m)) (__kotoba_map_keys (pair-second m))))})
-
-(def ^:private map-vals-helper-name '__kotoba_map_vals)
-(def ^:private map-vals-helper
-  {:name map-vals-helper-name :params '[m] :result :i64 :effects #{}
-   :body '(if (= m 0) 0
-            (pair (pair-second (pair-first m)) (__kotoba_map_vals (pair-second m))))})
-
-(defn- nth-pair-second
-  "N nested `pair-second`s around EXPR (0 => expr itself) -- the pair-chain
-  position N steps past the head, used by both vector destructuring
-  (below) and vector-as-data indexing."
-  [expr n]
-  (nth (iterate (fn [e] (list 'pair-second e)) expr) n))
-
 (defn- destructure-binding
-  "Expand one let/parameter binding pattern into sequential plain-symbol
-  bindings. Collection values are first captured in a fresh temp, so nested
-  vector/map patterns, defaults, and :as never re-evaluate their source.
-  Supported map forms are :keys, :or, :as, and explicit keyword-to-pattern
-  entries. :strs/:syms remain rejected because the guest value model has no
-  portable symbol/string-key identity contract yet."
+  "Expands ONE `[pattern value-expr]` `let`/`defn`-param binding into a flat
+  seq of `[symbol expr]` pairs (ADR-2607150000). PATTERN is a plain symbol
+  (kept as-is, 1 pair), a positional vector `[a b & rest]` (bounded
+  vector-i64 destructuring via trapping vector-at/vector-drop),
+  or a map `{:keys [a b]}` (association-list destructuring via the `get`
+  special form, 1 pair per key). VALUE-EXPR must already be desugared --
+  callers desugar it once; every pattern binds a single gensym'd temp to it
+  first so it's never re-evaluated. One level only: a pattern NESTED inside
+  a vector/map pattern is not itself recursively destructured -- a real,
+  documented scope limit, not silently ignored (rejected below if written)."
   [pattern value-expr]
-  (letfn [(expand [p expr]
-            (cond
-              (symbol? p) [[p expr]]
+  (cond
+    (symbol? pattern) [[pattern value-expr]]
 
-              (vector? p)
-              (let [amp-index (first (keep-indexed #(when (= '& %2) %1) p))
-                    positional (if amp-index (subvec p 0 amp-index) p)
-                    rest-part (when amp-index (subvec p amp-index))
-                    _ (when (and rest-part (not= 2 (count rest-part)))
-                        (reject! "`&` in vector destructuring must be followed by exactly one binding pattern" p))
-                    tmp (gensym "destr-vec__")]
-                (into [[tmp expr]]
-                      (concat
-                       (mapcat (fn [i child]
-                                 (expand child (list 'pair-first (nth-pair-second tmp i))))
-                               (range) positional)
-                       (when rest-part
-                         (expand (second rest-part)
-                                 (nth-pair-second tmp (count positional)))))))
+    (vector? pattern)
+    (let [tmp (gensym "destr-vec__")
+          [positional rest-part] (split-with (complement #{'&}) pattern)]
+      (when-not (every? symbol? positional)
+        (reject! "vector destructuring supports only flat (one-level) symbol patterns" pattern))
+      (when (and (seq rest-part) (or (not= 2 (count rest-part)) (not (symbol? (second rest-part)))))
+        (reject! "`&` in vector destructuring must be followed by exactly one rest-binding symbol" pattern))
+      (into [[tmp value-expr]]
+            (concat
+             (map-indexed (fn [i name] [name (list 'vector-at tmp i)]) positional)
+             (when-let [rest-name (second rest-part)]
+               [[rest-name (list 'vector-drop tmp (count positional))]]))))
 
-              (map? p)
-              (let [keys-vec (:keys p)
-                    strs-vec (:strs p)
-                    syms-vec (:syms p)
-                    defaults (or (:or p) {})
-                    as-pattern (:as p)
-                    explicit (dissoc p :keys :strs :syms :or :as)
-                    _ (when-not (and (or (nil? keys-vec)
-                                         (and (vector? keys-vec) (every? symbol? keys-vec)))
-                                     (or (nil? strs-vec)
-                                         (and (vector? strs-vec) (every? symbol? strs-vec)))
-                                     (or (nil? syms-vec)
-                                         (and (vector? syms-vec) (every? symbol? syms-vec)))
-                                     (map? defaults)
-                                     (or (nil? as-pattern) (symbol? as-pattern))
-                                     (every? #(or (keyword? %) (string? %)
-                                                  (and (seq? %) (= 'quote (first %))
-                                                       (symbol? (second %))))
-                                             (keys explicit)))
-                        (reject! "invalid map destructuring pattern" p))
-                    tmp (gensym "destr-map__")
-                    lookup (fn [key default]
-                             (list map-get-helper-name tmp (desugar-expr key)
-                                   (desugar-expr default)))]
-                (into [[tmp expr]]
-                      (concat
-                       (mapcat (fn [name]
-                                 (expand name
-                                         (lookup (keyword name) (get defaults name 0))))
-                               keys-vec)
-                       (mapcat (fn [name]
-                                 (expand name
-                                         (lookup (clojure.core/name name)
-                                                 (get defaults name 0))))
-                               strs-vec)
-                       (mapcat (fn [name]
-                                 (expand name
-                                         (lookup (list 'quote name)
-                                                 (get defaults name 0))))
-                               syms-vec)
-                       (mapcat (fn [[key child]]
-                                 (expand child (lookup key 0)))
-                               (sort-by (comp str key) explicit))
-                       (when as-pattern [[as-pattern tmp]]))))
+    (map? pattern)
+    (let [keys-vec (:keys pattern)]
+      (when-not (and (= 1 (count pattern)) keys-vec (vector? keys-vec) (every? symbol? keys-vec))
+        (reject! "map destructuring supports only {:keys [...]} (no :or/:as/:strs)" pattern))
+      (let [tmp (gensym "destr-map__")]
+        (into [[tmp value-expr]]
+              ;; Builds the same ALREADY-DESUGARED shape as the `get` case
+              ;; in desugar-expr's case dispatch below
+              ;; (`(map-get-helper-name m k default)`), not the sugared
+              ;; `(get m k)` source form -- this generated call is never
+              ;; routed back through desugar-expr, so it must already be in
+              ;; its final form: both a bare `(get ...)` op (unresolvable,
+              ;; "operation has no admitted lowering") and a raw keyword key
+              ;; (unrepresentable at runtime) were caught live before this
+              ;; fix.
+              (map (fn [k] [k (list 'map-get tmp (keyword k) 0)]) keys-vec))))
 
-              :else (reject! "unsupported destructuring pattern" p)))]
-    (expand pattern value-expr)))
+    :else (reject! "unsupported destructuring pattern" pattern)))
 
 (defn- form-free-symbols
   "Symbols FORM references as VALUES (never call-heads) that aren't in
@@ -998,131 +679,29 @@
         (cons op (map #(replace-recur % helper-name loop-names captured) args))))
     :else form))
 
-(defn- desugar-expr [form]
+(defn- desugar-expr* [form]
   (cond
-    (keyword? form) (keyword->i64 form)
-    (string? form) (string->i64 form)
+    (keyword? form) form
+    (boolean? form) form
+    (nil? form) '(option-none)
     (map? form) (desugar-map form)
-    (set? form) (desugar-set form)
-    ;; ADR-2607150000: vector-as-data reuses desugar-list's pair-chain
-    ;; encoding verbatim -- a vector and a `(list ...)` call become
-    ;; identical runtime representations, matching this language's
-    ;; existing "no runtime type tags" design. Safe to dispatch generically
+    ;; Vector literals now enter the owned bounded vector-i64 profile rather
+    ;; than the legacy untagged pair arena. Binding and parameter vectors are
+    ;; consumed by their enclosing forms and never reach this branch.
     ;; here because `let`'s OWN bindings vector never reaches this branch:
     ;; the `let` case below fully owns processing it directly (via
     ;; destructure-binding) and never routes it back through desugar-expr
     ;; as a bare value. `defn` params are consumed entirely inside
     ;; `analyze`, before any desugar-expr call, for the same reason.
-    (vector? form) (desugar-list (seq form) form)
+    (vector? form)
+    (do (when (> (count form) value/vector-item-limit)
+          (reject! "vector literal exceeds item limit" form))
+        (apply list 'vector-new (map desugar-expr form)))
     (not (seq? form)) form
     :else
     (let [[op & args] form]
       (case op
-        quote (let [value (first args)]
-                (when-not (and (= 1 (count args)) (symbol? value))
-                  (reject! "quote only supports portable symbol values" form))
-                (symbol-value->i64 value))
         list (desugar-list args form)
-        fn (lift-lambda form)
-        fn-ref (do
-                 (when-not (and (= 1 (count args)) (symbol? (first args)))
-                   (reject! "fn-ref requires one top-level function symbol" form))
-                 (let [function-name (first args)
-                       arities (or (some-> (get *multi-arity-dispatch* function-name) keys set)
-                                   (get *function-arities* function-name))]
-                   (when-not (seq arities)
-                     (reject! "fn-ref requires a declared top-level function" function-name))
-                   (when (some #(> % 4) arities)
-                     (reject! "fn-ref target exceeds closure ABI arity four" function-name))
-                   (lift-lambda
-                    (cons 'fn
-                          (mapv (fn [arity]
-                                  (let [params (mapv #(symbol (str "__kotoba_fn_ref_arg_" %))
-                                                     (range arity))]
-                                    (list params (apply list function-name params))))
-                                (sort arities))))))
-        invoke (do
-                 (when-not (<= 1 (count args) (inc 4))
-                   (reject! "invoke requires a closure and zero to four arguments" form))
-                 (apply list (invoke-dispatcher-name (dec (count args)))
-                        (map desugar-expr args)))
-        apply (do
-                (when-not (<= 2 (count args) 6)
-                  (reject! "apply requires a closure, up to four fixed arguments, and a final argument collection" form))
-                (when *uses-apply?* (vreset! *uses-apply?* true))
-                (let [closure (first args)
-                      call-args (rest args)
-                      trailing (last call-args)
-                      fixed (butlast call-args)
-                      argument-list (reduce (fn [tail value]
-                                              (list 'pair (desugar-expr value) tail))
-                                            (desugar-expr trailing)
-                                            (reverse fixed))]
-                  (list closure-apply-helper-name (desugar-expr closure) argument-list)))
-        lazy-cons (do
-                    (when-not (= 2 (count args))
-                      (reject! "lazy-cons requires a head and lazy tail expression" form))
-                    (when *uses-lazy?* (vreset! *uses-lazy?* true))
-                    (binding [*lifting-lazy-thunk?* true]
-                      (lift-lambda
-                       (list 'fn []
-                                   (list 'pair
-                                   (list 'fn [] (first args))
-                                   (list 'fn [] (second args)))))))
-        lazy-first (do
-                     (when-not (= 1 (count args))
-                       (reject! "lazy-first requires one lazy sequence" form))
-                     (when *uses-lazy?* (vreset! *uses-lazy?* true))
-                     (let [lazy-seq (gensym "lazy-seq__")
-                           cell (gensym "lazy-cell__")]
-                       (list 'let [lazy-seq (desugar-expr (first args))]
-                             (list 'if (list '= lazy-seq 0) 0
-                                   (list 'let [cell (list (invoke-dispatcher-name 0) lazy-seq)]
-                                         (list 'if (list '= cell 0) 0
-                                               (list (invoke-dispatcher-name 0)
-                                                     (list 'pair-first cell))))))))
-        lazy-rest (do
-                    (when-not (= 1 (count args))
-                      (reject! "lazy-rest requires one lazy sequence" form))
-                    (when *uses-lazy?* (vreset! *uses-lazy?* true))
-                    (let [lazy-seq (gensym "lazy-seq__")
-                          cell (gensym "lazy-cell__")]
-                      (list 'let [lazy-seq (desugar-expr (first args))]
-                            (list 'if (list '= lazy-seq 0) 0
-                                  (list 'let [cell (list (invoke-dispatcher-name 0) lazy-seq)]
-                                        (list 'if (list '= cell 0) 0
-                                              (list (invoke-dispatcher-name 0)
-                                                    (list 'pair-second cell))))))))
-        lazy-empty? (do
-                      (when-not (= 1 (count args))
-                        (reject! "lazy-empty? requires one lazy sequence" form))
-                      (when *uses-lazy?* (vreset! *uses-lazy?* true))
-                      (let [lazy-seq (gensym "lazy-seq__")]
-                        (list 'let [lazy-seq (desugar-expr (first args))]
-                              (list 'if (list '= lazy-seq 0) 1
-                                    (list '= (list (invoke-dispatcher-name 0) lazy-seq) 0)))))
-        lazy-map (do
-                   (when-not (<= 2 (count args) 5)
-                     (reject! "lazy-map requires a callback and one to four lazy sequences" form))
-                   (when *uses-lazy?* (vreset! *uses-lazy?* true))
-                   (synthesize-lazy-map (first args) (vec (rest args))))
-        lazy-filter (do
-                      (when-not (= 2 (count args))
-                        (reject! "lazy-filter requires a unary predicate and lazy sequence" form))
-                      (when *uses-lazy?* (vreset! *uses-lazy?* true))
-                      (synthesize-lazy-filter (first args) (second args)))
-        take (do
-               (when-not (= 2 (count args))
-                 (reject! "take requires a count and lazy sequence" form))
-               (when *uses-lazy?* (vreset! *uses-lazy?* true))
-               (list lazy-take-helper-name
-                     (desugar-expr (first args)) (desugar-expr (second args))))
-        drop (do
-               (when-not (= 2 (count args))
-                 (reject! "drop requires a count and lazy sequence" form))
-               (when *uses-lazy?* (vreset! *uses-lazy?* true))
-               (list lazy-drop-helper-name
-                     (desugar-expr (first args)) (desugar-expr (second args))))
 
         ;; ADR-2607150000: `let` gets its own case (previously handled only
         ;; by the generic default case below) for two reasons: (1) bug fix
@@ -1164,6 +743,18 @@
                      ;; `uses-map-get?`'s post-analyze tree walk, long
                      ;; after `analyze`'s `binding` had already exited.
                      (mapv desugar-expr body)))
+
+        ;; `do` sequencing: evaluate each subexpression in order, discard all
+        ;; but the last (which is the value). Unlike `let`, a `do` subexpression
+        ;; is NOT substituted into a body -- so a side-effecting form here runs
+        ;; exactly once, in order, even if its result is unused (kernel MMIO
+        ;; ops). A single-expression `do` collapses to that expression. `do` is
+        ;; kept as a first-class head through desugaring (a nested-`let`
+        ;; desugaring would DCE-drop unused side-effecting subexprs).
+        do (do (when (empty? args) (reject! "do requires at least one expression" form))
+               (if (= 1 (count args))
+                 (desugar-expr (first args))
+                 (list* 'do (mapv desugar-expr args))))
 
         ;; ADR-2607150000: `loop`/`recur` desugars to a compiler-synthesized
         ;; recursive helper function (like `get`'s __kotoba_map_get, but
@@ -1215,117 +806,282 @@
                  (list '> (desugar-expr (first args)) 0))
         neg? (do (when-not (= 1 (count args)) (reject! "neg? requires one operand" form))
                  (list '< (desugar-expr (first args)) 0))
-        string? (do (when-not (= 1 (count args)) (reject! "string? requires one operand" form))
-                    (list '= (list 'bit-and (desugar-expr (first args)) value-tag-mask)
-                          string-value-tag))
-        symbol? (do (when-not (= 1 (count args)) (reject! "symbol? requires one operand" form))
-                    (list '= (list 'bit-and (desugar-expr (first args)) value-tag-mask)
-                          symbol-value-tag))
-        keyword? (do (when-not (= 1 (count args)) (reject! "keyword? requires one operand" form))
-                     (list '= (list 'bit-and (desugar-expr (first args)) value-tag-mask)
-                           keyword-value-tag))
-        string-length (do
-                        (when-not (= 1 (count args))
-                          (reject! "string-length requires one operand" form))
-                        (list 'bit-and (list 'quot (desugar-expr (first args)) 2097152) 127))
-        string= (do (when-not (= 2 (count args)) (reject! "string= requires two operands" form))
-                    (list '= (desugar-expr (first args)) (desugar-expr (second args))))
         and (desugar-and args)
         or (desugar-or args)
-        do (desugar-do args)
-        ;; Multi-body when is now admitted (ADR-2607180900): desugars via `do`.
+        cond-> (desugar-cond-thread args form)
         when (do (when (empty? args)
                    (reject! "when requires a test expression" form))
-                 (let [[test & body] args]
-                   (list 'if (desugar-expr test)
-                         (desugar-do body)
-                         0)))
+                 (let [[test & body] args
+                       then (if (= 1 (count body))
+                              (desugar-expr (first body))
+                              (list* 'do (mapv desugar-expr body)))]
+                   (list 'if (desugar-expr test) then 0)))
         get (do (when-not (<= 2 (count args) 3)
                   (reject! "get requires a map, a key, and an optional default" form))
                 (let [[m k default] args]
-                  (list map-get-helper-name (desugar-expr m) (desugar-expr k)
+                  (list 'map-get (desugar-expr m) (desugar-expr k)
                         (if (some? default) (desugar-expr default) 0))))
-        contains-key? (do
-                        (when-not (= 2 (count args))
-                          (reject! "contains-key? requires a map and key" form))
-                        (list map-contains-key-helper-name
-                              (desugar-expr (first args))
-                              (desugar-expr (second args))))
         assoc (do (when-not (and (>= (count args) 3) (odd? (count args)))
                     (reject! "assoc requires a map followed by one or more key/value pairs" form))
                   (let [[m & kvs] args]
-                    (reduce (fn [acc-map [k v]]
-                              ;; ADR-2607150000: remove any existing entry
-                              ;; for this key via __kotoba_map_without
-                              ;; BEFORE prepending the new pair, so re-
-                              ;; assoc-ing an existing key doesn't grow the
-                              ;; map unboundedly. k/v are let-bound once
-                              ;; (gensym'd LET-LOCAL temp names -- safe,
-                              ;; erased to WASM local indices, same
-                              ;; reasoning as and/or's temps) so the key
-                              ;; expression is evaluated exactly once
-                              ;; despite being referenced twice (removal
-                              ;; scan + the new pair itself).
-                              (let [k-sym (gensym "assoc-k__")
-                                    v-sym (gensym "assoc-v__")]
-                                (list 'let [k-sym (desugar-expr k) v-sym (desugar-expr v)]
-                                      (list 'pair (list 'pair k-sym v-sym)
-                                            (list map-without-helper-name acc-map k-sym)))))
-                            (desugar-expr m)
-                            (partition 2 kvs))))
-        contains? (do (when-not (= 2 (count args))
-                        (reject! "contains? requires a set and one value" form))
-                      (list set-contains-helper-name
-                            (desugar-expr (first args))
-                            (desugar-expr (second args))))
-        conj (do (when (< (count args) 2)
-                   (reject! "conj requires a set and at least one value" form))
-                 (reduce (fn [set-expr value]
-                           (set-conj-form set-expr (desugar-expr value)))
-                         (desugar-expr (first args)) (rest args)))
-        disj (do (when (empty? args)
-                   (reject! "disj requires a set" form))
-                 (reduce (fn [set-expr value]
-                           (let [value-sym (gensym "set-value__")]
-                             (list 'let [value-sym (desugar-expr value)]
-                                   (list set-without-helper-name set-expr value-sym))))
-                         (desugar-expr (first args)) (rest args)))
-        map (do (when-not (<= 2 (count args) (inc max-parameters))
-                  (reject! "map requires a named function and one to five collections" form))
-                (synthesize-hof-call :map (first args) (vec (rest args)) nil))
-        filter (do (when-not (= 2 (count args))
-                     (reject! "filter requires a named unary predicate and one collection" form))
-                   (synthesize-hof-call :filter (first args) [(second args)] nil))
-        reduce (case (count args)
-                 2 (synthesize-reduce-no-init (first args) (second args))
-                 3 (synthesize-hof-call :reduce (first args) [(nth args 2)] (second args))
-                 (reject! "reduce requires callback+collection or callback+init+collection" form))
-        count (do (when-not (= 1 (count args))
-                    (reject! "count requires one collection" form))
-                  (list coll-count-helper-name (desugar-expr (first args)) 0))
-        nth (do (when-not (<= 2 (count args) 3)
-                 (reject! "nth requires collection, index, and optional default" form))
-               (list coll-nth-helper-name
-                     (desugar-expr (first args))
-                     (desugar-expr (second args))
-                     (if (= 3 (count args)) (desugar-expr (nth args 2)) 0)))
-        peek (do (when-not (= 1 (count args)) (reject! "peek requires one collection" form))
-                 (let [coll (gensym "peek-coll__")]
-                   (list 'let [coll (desugar-expr (first args))]
-                         (list 'if (list '= coll 0) 0 (list 'pair-first coll)))))
-        pop (do (when-not (= 1 (count args)) (reject! "pop requires one collection" form))
-                (let [coll (gensym "pop-coll__")]
-                  (list 'let [coll (desugar-expr (first args))]
-                        (list 'if (list '= coll 0) 0 (list 'pair-second coll)))))
-        keys (do (when-not (= 1 (count args)) (reject! "keys requires one map" form))
-                 (list map-keys-helper-name (desugar-expr (first args))))
-        vals (do (when-not (= 1 (count args)) (reject! "vals requires one map" form))
-                 (list map-vals-helper-name (desugar-expr (first args))))
-        dissoc (do (when (empty? args) (reject! "dissoc requires a map" form))
-                   (reduce (fn [m k]
-                             (list map-without-helper-name m (desugar-expr k)))
-                           (desugar-expr (first args)) (rest args)))
+                    (apply list 'map-assoc (desugar-expr m)
+                           (mapcat (fn [[k v]] [(desugar-expr k) (desugar-expr v)])
+                                   (partition 2 kvs)))))
+        some (do (when-not (= 1 (count args)) (reject! "some requires one i64 operand" form))
+                 (list 'option-some (desugar-expr (first args))))
+        some? (do (when-not (= 1 (count args)) (reject! "some? requires one option operand" form))
+                  (list 'option-some? (desugar-expr (first args))))
+        nil? (do (when-not (= 1 (count args)) (reject! "nil? requires one option operand" form))
+                 (list 'bool-not (list 'option-some? (desugar-expr (first args)))))
+        vector-i64 (do (when (> (count args) value/vector-item-limit)
+                         (reject! "vector-i64 exceeds item limit" form))
+                       (apply list 'vector-new (map desugar-expr args)))
+        match-result
+        (do
+          (when-not (= 4 (count args))
+            (reject! "match-result requires value, type, ok branch, and err branch" form))
+          (let [[result type ok-branch err-branch] args]
+            (when-not (and (seq? ok-branch) (= 3 (count ok-branch))
+                           (= 'ok (first ok-branch)) (symbol? (second ok-branch)))
+              (reject! "match-result requires exactly one (ok binder body) branch" form))
+            (when-not (and (seq? err-branch) (= 3 (count err-branch))
+                           (= 'err (first err-branch)) (symbol? (second err-branch)))
+              (reject! "match-result requires exactly one (err binder body) branch" form))
+            (list 'result-match-of type (desugar-expr result)
+                  (second ok-branch) (desugar-expr (nth ok-branch 2))
+                  (second err-branch) (desugar-expr (nth err-branch 2)))))
+        result-match-of
+        (do (when-not (= 6 (count args))
+              (reject! "result-match-of requires type, value, and two bound branches" form))
+            (let [[type value ok-binder ok-body err-binder err-body] args]
+              (when-not (and (symbol? ok-binder) (symbol? err-binder))
+                (reject! "result-match-of requires symbol binders" form))
+              (list 'result-match-of type (desugar-expr value)
+                    ok-binder (desugar-expr ok-body)
+                    err-binder (desugar-expr err-body))))
+        variant-new
+        (do (when-not (= 3 (count args))
+              (reject! "variant-new requires type, case tag, and payload" form))
+            (list 'variant-new (first args) (second args) (desugar-expr (nth args 2))))
+        match-variant
+        (do (when (< (count args) 3)
+              (reject! "match-variant requires value, type, and exhaustive branches" form))
+            (let [[value type & branches] args]
+              (when-not (every? #(and (seq? %) (= 3 (count %))
+                                      (keyword? (first %)) (symbol? (second %))) branches)
+                (reject! "match-variant branches require (:case binder body)" form))
+              (list 'variant-match type (desugar-expr value)
+                    (mapv (fn [[tag binder body]] [tag binder (desugar-expr body)]) branches))))
+        variant-match
+        (do (when-not (= 3 (count args))
+              (reject! "variant-match requires type, value, and lowered branches" form))
+            (let [[type value branches] args]
+              (when-not (and (vector? branches)
+                             (every? #(and (vector? %) (= 3 (count %))
+                                           (keyword? (first %)) (symbol? (second %)))
+                                     branches))
+                (reject! "variant-match lowered branches are invalid" form))
+              (list 'variant-match type (desugar-expr value)
+                    (mapv (fn [[tag binder body]] [tag binder (desugar-expr body)]) branches))))
+        option-some-of
+        (do (when-not (= 2 (count args)) (reject! "option-some-of requires type and payload" form))
+            (list 'option-some-of (first args) (desugar-expr (second args))))
+        option-none-of
+        (do (when-not (= 1 (count args)) (reject! "option-none-of requires one type" form))
+            (list 'option-none-of (first args)))
+        option-some?-of
+        (do (when-not (= 2 (count args)) (reject! "option-some?-of requires type and value" form))
+            (list 'option-some?-of (first args) (desugar-expr (second args))))
+        option-value-of
+        (do (when-not (= 3 (count args)) (reject! "option-value-of requires type, value, and fallback" form))
+            (list 'option-value-of (first args) (desugar-expr (second args))
+                  (desugar-expr (nth args 2))))
+        ;; `match-option` lowers to this internal form. Nested matches cause
+        ;; the enclosing match's recursive desugaring to visit that lowered
+        ;; form again, so it must preserve the type descriptor and binder.
+        ;; Falling through to generic call desugaring turns descriptor vectors
+        ;; into runtime `vector-new` values and makes project linking
+        ;; non-idempotent.
+        option-match
+        (do (when-not (= 5 (count args))
+              (reject! "option-match requires type, value, none body, binder, and some body" form))
+            (let [[type value none-body binder some-body] args]
+              (when-not (symbol? binder)
+                (reject! "option-match requires a symbol binder" form))
+              (list 'option-match type (desugar-expr value)
+                    (desugar-expr none-body) binder (desugar-expr some-body))))
+        match-option
+        (do (when-not (= 4 (count args))
+              (reject! "match-option requires value, type, none branch, and some branch" form))
+            (let [[value type none-branch some-branch] args]
+              (when-not (and (seq? none-branch) (= 2 (count none-branch))
+                             (= 'none (first none-branch)))
+                (reject! "match-option requires exactly one (none body) branch" form))
+              (when-not (and (seq? some-branch) (= 3 (count some-branch))
+                             (= 'some (first some-branch)) (symbol? (second some-branch)))
+                (reject! "match-option requires exactly one (some binder body) branch" form))
+              (list 'option-match type (desugar-expr value)
+                    (desugar-expr (second none-branch)) (second some-branch)
+                    (desugar-expr (nth some-branch 2)))))
+        hetero-vector
+        (do (when (empty? args)
+              (reject! "hetero-vector requires a type descriptor" form))
+            (list* 'hetero-vector-new (first args) (map desugar-expr (rest args))))
+        hetero-vector-new
+        (do (when (empty? args)
+              (reject! "hetero-vector-new requires a type descriptor" form))
+            (list* 'hetero-vector-new (first args) (map desugar-expr (rest args))))
+        hetero-vector-count
+        (do (when-not (= 2 (count args))
+              (reject! "hetero-vector-count requires type and value" form))
+            (list 'hetero-vector-count (first args) (desugar-expr (second args))))
+        hetero-vector-at
+        (do (when-not (= 3 (count args))
+              (reject! "hetero-vector-at requires type, value, and literal index" form))
+            (list 'hetero-vector-at (first args) (desugar-expr (second args)) (nth args 2)))
+        hetero-vector-assoc
+        (do (when-not (= 4 (count args))
+              (reject! "hetero-vector-assoc requires type, value, literal index, and item" form))
+            (list 'hetero-vector-assoc (first args) (desugar-expr (second args))
+                  (nth args 2) (desugar-expr (nth args 3))))
+        hetero-vector-equal
+        (do (when-not (= 3 (count args))
+              (reject! "hetero-vector-equal requires type and two values" form))
+            (list 'hetero-vector-equal (first args) (desugar-expr (second args))
+                  (desugar-expr (nth args 2))))
+        typed-set
+        (do (when (empty? args)
+              (reject! "typed-set requires a type descriptor" form))
+            (list* 'typed-set-new (first args) (map desugar-expr (rest args))))
+        typed-set-new
+        (do (when (empty? args)
+              (reject! "typed-set-new requires a type descriptor" form))
+            (list* 'typed-set-new (first args) (map desugar-expr (rest args))))
+        typed-set-count
+        (do (when-not (= 2 (count args))
+              (reject! "typed-set-count requires type and value" form))
+            (list 'typed-set-count (first args) (desugar-expr (second args))))
+        typed-set-contains
+        (do (when-not (= 3 (count args))
+              (reject! "typed-set-contains requires type, value, and item" form))
+            (list 'typed-set-contains (first args) (desugar-expr (second args))
+                  (desugar-expr (nth args 2))))
+        typed-set-conj
+        (do (when-not (= 3 (count args))
+              (reject! "typed-set-conj requires type, value, and item" form))
+            (list 'typed-set-conj (first args) (desugar-expr (second args))
+                  (desugar-expr (nth args 2))))
+        typed-set-disj
+        (do (when-not (= 3 (count args))
+              (reject! "typed-set-disj requires type, value, and item" form))
+            (list 'typed-set-disj (first args) (desugar-expr (second args))
+                  (desugar-expr (nth args 2))))
+        typed-set-equal
+        (do (when-not (= 3 (count args))
+              (reject! "typed-set-equal requires type and two values" form))
+            (list 'typed-set-equal (first args) (desugar-expr (second args))
+                  (desugar-expr (nth args 2))))
+        typed-map-new
+        (do (when-not (and (seq args) (odd? (count args)))
+              (reject! "typed-map-new requires type and key/value pairs" form))
+            (list* 'typed-map-new (first args) (map desugar-expr (rest args))))
+        typed-map-count
+        (do (when-not (= 2 (count args))
+              (reject! "typed-map-count requires type and value" form))
+            (list 'typed-map-count (first args) (desugar-expr (second args))))
+        typed-map-contains
+        (do (when-not (= 3 (count args))
+              (reject! "typed-map-contains requires type, value, and key" form))
+            (list 'typed-map-contains (first args) (desugar-expr (second args))
+                  (desugar-expr (nth args 2))))
+        typed-map-get
+        (do (when-not (= 3 (count args))
+              (reject! "typed-map-get requires type, value, and key" form))
+            (list 'typed-map-get (first args) (desugar-expr (second args))
+                  (desugar-expr (nth args 2))))
+        typed-map-entry-at
+        (do (when-not (= 3 (count args))
+              (reject! "typed-map-entry-at requires type, value, and index" form))
+            (list 'typed-map-entry-at (first args) (desugar-expr (second args))
+                  (desugar-expr (nth args 2))))
+        typed-map-assoc
+        (do (when-not (= 4 (count args))
+              (reject! "typed-map-assoc requires type, value, key, and item" form))
+            (list 'typed-map-assoc (first args) (desugar-expr (second args))
+                  (desugar-expr (nth args 2)) (desugar-expr (nth args 3))))
+        typed-map-dissoc
+        (do (when-not (= 3 (count args))
+              (reject! "typed-map-dissoc requires type, value, and key" form))
+            (list 'typed-map-dissoc (first args) (desugar-expr (second args))
+                  (desugar-expr (nth args 2))))
+        typed-map-equal
+        (do (when-not (= 3 (count args))
+              (reject! "typed-map-equal requires type and two values" form))
+            (list 'typed-map-equal (first args) (desugar-expr (second args))
+                  (desugar-expr (nth args 2))))
+        record
+        (do (when (empty? args)
+              (reject! "record requires a type descriptor" form))
+            (list* 'record-new (first args) (map desugar-expr (rest args))))
+        record-new
+        (do (when (empty? args)
+              (reject! "record-new requires a type descriptor" form))
+            (list* 'record-new (first args) (map desugar-expr (rest args))))
+        record-get
+        (do (when-not (= 3 (count args))
+              (reject! "record-get requires type, value, and literal field" form))
+            (list 'record-get (first args) (desugar-expr (second args)) (nth args 2)))
+        record-assoc
+        (do (when-not (= 4 (count args))
+              (reject! "record-assoc requires type, value, literal field, and replacement" form))
+            (list 'record-assoc (first args) (desugar-expr (second args))
+                  (nth args 2) (desugar-expr (nth args 3))))
+        record-equal
+        (do (when-not (= 3 (count args))
+              (reject! "record-equal requires type and two values" form))
+            (list 'record-equal (first args) (desugar-expr (second args))
+                  (desugar-expr (nth args 2))))
+        result-ok-of (do (when-not (= 2 (count args)) (reject! "result-ok-of requires type and payload" form))
+                         (list 'result-ok-of (first args) (desugar-expr (second args))))
+        result-err-of (do (when-not (= 2 (count args)) (reject! "result-err-of requires type and payload" form))
+                          (list 'result-err-of (first args) (desugar-expr (second args))))
+        result-ok?-of (do (when-not (= 2 (count args)) (reject! "result-ok?-of requires type and result" form))
+                          (list 'result-ok?-of (first args) (desugar-expr (second args))))
+        result-value-of (do (when-not (= 3 (count args)) (reject! "result-value-of requires type, result, and fallback" form))
+                            (list 'result-value-of (first args)
+                                  (desugar-expr (second args)) (desugar-expr (nth args 2))))
+        result-error-of (do (when-not (= 3 (count args)) (reject! "result-error-of requires type, result, and fallback" form))
+                            (list 'result-error-of (first args)
+                                  (desugar-expr (second args)) (desugar-expr (nth args 2))))
+        ;; ADR-2607182410: `(cap-call :some/name value)` -> `(cap-call <int>
+        ;; (desugar-expr value))`, resolving the keyword against
+        ;; capability-registry BEFORE validate-expr/direct-facts ever see the
+        ;; form -- everything downstream keeps working exactly as it does
+        ;; for the pre-existing literal-int form, byte-for-byte. Only
+        ;; intercepts when the FIRST arg is actually a keyword; any other
+        ;; shape (correct int form, or a malformed call of any other arity)
+        ;; falls through to the identical generic case below, unchanged, so
+        ;; validate-expr's own existing arity/range check still fires with
+        ;; its original message for every case this desugar step doesn't
+        ;; specifically own. `(rest args)` (not a fixed `[value]`
+        ;; destructure) preserves whatever argument count followed the
+        ;; keyword, so a malformed `(cap-call :kw)` or `(cap-call :kw a b)`
+        ;; still reaches validate-expr's "requires ... one value" rejection
+        ;; instead of being silently coerced into a well-formed 2-arg call.
+        cap-call
+        (if (and (seq args) (keyword? (first args)))
+          (list* 'cap-call (resolve-capability-keyword! (first args) form)
+                 (map desugar-expr (rest args)))
+          (apply list op (map desugar-expr args)))
         (apply list op (map desugar-expr args))))))
+
+(defn- desugar-expr [form]
+  (let [result (desugar-expr* form)
+        location (select-keys (meta form)
+                              [:line :column :end-line :end-column :offset :end-offset])]
+    (if (and (seq location) (or (coll? result) (symbol? result)))
+      (with-meta result (merge (meta result) location))
+      result)))
 
 (defn- valid-name? [value]
   (and (simple-symbol? value) (<= (count (name value)) max-symbol-chars)))
@@ -1362,6 +1118,19 @@
                 (reject! "integer literal is outside i64" form))
        :cljs (if (i64/in-i64-range? form) form
                  (reject! "integer literal is outside i64" form)))
+    (string? form)
+    (try
+      (value/bounded-string! form value/string-literal-byte-limit)
+      form
+      (catch #?(:clj Exception :cljs :default) error
+        (reject! (ex-message error) form)))
+    (keyword? form)
+    (try
+      (value/bounded-keyword! form value/keyword-value-byte-limit)
+      form
+      (catch #?(:clj Exception :cljs :default) error
+        (reject! (ex-message error) form)))
+    (boolean? form) form
     (symbol? form) (if (contains? locals form) form
                        (reject! "unbound or dynamic symbol is forbidden" form))
     (seq? form)
@@ -1379,6 +1148,10 @@
 
         (= op 'if)
         (do (when-not (= 3 (count args)) (reject! "if requires test, then, else" form))
+            (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
+        (= op 'do)
+        (do (when (empty? args) (reject! "do requires at least one expression" form))
             (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
 
         (= op 'cap-call)
@@ -1401,6 +1174,285 @@
               (reject! "heap operation arity mismatch" form))
             (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
 
+        (contains? string-operations op)
+        (do (when-not (= (get string-operations op) (count args))
+              (reject! "string operation arity mismatch" form))
+            (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
+        (contains? typed-map-operations op)
+        (do (case op
+              map-new (when (odd? (count args))
+                        (reject! "map-new requires keyword/value pairs" form))
+              map-get (when-not (= 3 (count args))
+                        (reject! "map-get requires map, keyword, and default" form))
+              map-assoc (when-not (and (>= (count args) 3) (odd? (count args)))
+                          (reject! "map-assoc requires map and keyword/value pairs" form)))
+            (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
+        (contains? typed-safe-value-operations op)
+        (do (when-not (= (get typed-safe-value-operations op) (count args))
+              (reject! "typed safe-value operation arity mismatch" form))
+            (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
+        (= op 'typed-set-new)
+        (let [[type & items] args]
+          (validate-value-type! type)
+          (when-not (typed-set-type? type)
+            (reject! "typed set constructor requires [:set item-type]" form))
+          (when (> (count items) max-typed-set-items)
+            (reject! "typed set constructor exceeds item limit" form))
+          (doseq [item items]
+            (validate-expr item locals functions (inc depth) budget)))
+
+        (= op 'typed-set-count)
+        (let [[type value] args]
+          (when-not (= 2 (count args)) (reject! "typed set count shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (typed-set-type? type)
+            (reject! "typed set count requires [:set item-type]" form))
+          (validate-expr value locals functions (inc depth) budget))
+
+        (contains? '#{typed-set-contains typed-set-conj typed-set-disj} op)
+        (let [[type value item] args]
+          (when-not (= 3 (count args)) (reject! "typed set operation shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (typed-set-type? type)
+            (reject! "typed set operation requires [:set item-type]" form))
+          (validate-expr value locals functions (inc depth) budget)
+          (validate-expr item locals functions (inc depth) budget))
+
+        (= op 'typed-set-equal)
+        (let [[type left right] args]
+          (when-not (= 3 (count args)) (reject! "typed set equality shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (typed-set-type? type)
+            (reject! "typed set equality requires [:set item-type]" form))
+          (validate-expr left locals functions (inc depth) budget)
+          (validate-expr right locals functions (inc depth) budget))
+
+        (= op 'typed-map-new)
+        (let [[type & entries] args]
+          (validate-value-type! type)
+          (when-not (and (canonical-typed-map-type? type)
+                         (even? (count entries))
+                         (<= (/ (count entries) 2) max-typed-map-entries))
+            (reject! "typed map constructor shape or entry limit is invalid" form))
+          (doseq [entry entries]
+            (validate-expr entry locals functions (inc depth) budget)))
+
+        (= op 'typed-map-count)
+        (let [[type value] args]
+          (when-not (= 2 (count args)) (reject! "typed map count shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (canonical-typed-map-type? type)
+            (reject! "typed map count requires [:map key-type value-type]" form))
+          (validate-expr value locals functions (inc depth) budget))
+
+        (contains? '#{typed-map-contains typed-map-get typed-map-dissoc} op)
+        (let [[type value key] args]
+          (when-not (= 3 (count args)) (reject! "typed map operation shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (canonical-typed-map-type? type)
+            (reject! "typed map operation requires [:map key-type value-type]" form))
+          (validate-expr value locals functions (inc depth) budget)
+          (validate-expr key locals functions (inc depth) budget))
+
+        (= op 'typed-map-entry-at)
+        (let [[type value index] args]
+          (when-not (= 3 (count args)) (reject! "typed map entry projection shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (canonical-typed-map-type? type)
+            (reject! "typed map entry projection requires [:map key-type value-type]" form))
+          (validate-expr value locals functions (inc depth) budget)
+          (validate-expr index locals functions (inc depth) budget))
+
+        (= op 'typed-map-assoc)
+        (let [[type map-value key item] args]
+          (when-not (= 4 (count args)) (reject! "typed map assoc shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (canonical-typed-map-type? type)
+            (reject! "typed map assoc requires [:map key-type value-type]" form))
+          (doseq [item-form [map-value key item]]
+            (validate-expr item-form locals functions (inc depth) budget)))
+
+        (= op 'typed-map-equal)
+        (let [[type left right] args]
+          (when-not (= 3 (count args)) (reject! "typed map equality shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (canonical-typed-map-type? type)
+            (reject! "typed map equality requires [:map key-type value-type]" form))
+          (validate-expr left locals functions (inc depth) budget)
+          (validate-expr right locals functions (inc depth) budget))
+
+        (= op 'record-new)
+        (let [[type & values] args
+              fields (when (record-type? type) (nth type 2))]
+          (validate-value-type! type)
+          (when-not (and (record-type? type) (= (count fields) (count values)))
+            (reject! "record constructor must exactly match its descriptor" form))
+          (doseq [item values]
+            (validate-expr item locals functions (inc depth) budget)))
+
+        (= op 'record-get)
+        (let [[type value field] args
+              fields (when (record-type? type) (nth type 2))]
+          (when-not (= 3 (count args)) (reject! "record projection shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (and (record-type? type) (keyword? field) (some #{field} (map first fields)))
+            (reject! "record field must be a declared keyword literal" form))
+          (validate-expr value locals functions (inc depth) budget))
+
+        (= op 'record-assoc)
+        (let [[type value field replacement] args
+              fields (when (record-type? type) (nth type 2))]
+          (when-not (= 4 (count args)) (reject! "record replacement shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (and (record-type? type) (keyword? field) (some #{field} (map first fields)))
+            (reject! "record field must be a declared keyword literal" form))
+          (validate-expr value locals functions (inc depth) budget)
+          (validate-expr replacement locals functions (inc depth) budget))
+
+        (= op 'record-equal)
+        (let [[type left right] args]
+          (when-not (= 3 (count args)) (reject! "record equality shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (record-type? type)
+            (reject! "record equality requires a record descriptor" form))
+          (validate-expr left locals functions (inc depth) budget)
+          (validate-expr right locals functions (inc depth) budget))
+
+        (= op 'hetero-vector-new)
+        (let [[type & items] args
+              item-types (when (heterogeneous-vector-type? type) (second type))]
+          (validate-value-type! type)
+          (when-not (and (heterogeneous-vector-type? type)
+                         (= (count item-types) (count items)))
+            (reject! "heterogeneous vector constructor must exactly match its descriptor" form))
+          (doseq [item items]
+            (validate-expr item locals functions (inc depth) budget)))
+
+        (= op 'hetero-vector-count)
+        (let [[type value] args]
+          (when-not (= 2 (count args))
+            (reject! "heterogeneous vector count shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (heterogeneous-vector-type? type)
+            (reject! "heterogeneous vector count requires a vector descriptor" form))
+          (validate-expr value locals functions (inc depth) budget))
+
+        (contains? '#{hetero-vector-at hetero-vector-assoc} op)
+        (let [[type value index item] args
+              expected (if (= op 'hetero-vector-at) 3 4)
+              item-types (when (heterogeneous-vector-type? type) (second type))]
+          (when-not (= expected (count args))
+            (reject! "heterogeneous vector indexed operation shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (heterogeneous-vector-type? type)
+            (reject! "heterogeneous vector operation requires a vector descriptor" form))
+          (heterogeneous-vector-index! index item-types form)
+          (validate-expr value locals functions (inc depth) budget)
+          (when (= op 'hetero-vector-assoc)
+            (validate-expr item locals functions (inc depth) budget)))
+
+        (= op 'hetero-vector-equal)
+        (let [[type left right] args]
+          (when-not (= 3 (count args))
+            (reject! "heterogeneous vector equality shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (heterogeneous-vector-type? type)
+            (reject! "heterogeneous vector equality requires a vector descriptor" form))
+          (validate-expr left locals functions (inc depth) budget)
+          (validate-expr right locals functions (inc depth) budget))
+
+        (= op 'option-none-of)
+        (do (when-not (= 1 (count args)) (reject! "option-none-of shape is invalid" form))
+            (validate-value-type! (first args))
+            (when-not (generic-option-type? (first args))
+              (reject! "option-none-of requires [:option payload-type]" form)))
+
+        (contains? '#{option-some-of option-some?-of} op)
+        (let [[type value] args]
+          (when-not (= 2 (count args)) (reject! "generic option operation shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (generic-option-type? type)
+            (reject! "generic option operation requires [:option payload-type]" form))
+          (validate-expr value locals functions (inc depth) budget))
+
+        (= op 'option-value-of)
+        (let [[type value fallback] args]
+          (when-not (= 3 (count args)) (reject! "option-value-of shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (generic-option-type? type)
+            (reject! "option-value-of requires [:option payload-type]" form))
+          (validate-expr value locals functions (inc depth) budget)
+          (validate-expr fallback locals functions (inc depth) budget))
+
+        (= op 'option-match)
+        (let [[type value none-body some-name some-body] args]
+          (when-not (= 5 (count args)) (reject! "option-match shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (and (generic-option-type? type) (symbol? some-name)
+                         (nil? (namespace some-name)))
+            (reject! "option-match requires option type and unqualified some binder" form))
+          (validate-expr value locals functions (inc depth) budget)
+          (validate-expr none-body locals functions (inc depth) budget)
+          (validate-expr some-body (conj locals some-name) functions (inc depth) budget))
+
+        (= op 'variant-new)
+        (let [[type tag payload] args]
+          (when-not (= 3 (count args)) (reject! "variant-new shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (and (variant-type? type) (keyword? tag))
+            (reject! "variant-new requires variant descriptor and keyword tag" form))
+          (validate-expr payload locals functions (inc depth) budget))
+
+        (= op 'variant-match)
+        (let [[type value branches] args
+              cases (when (variant-type? type) (nth type 2))]
+          (when-not (= 3 (count args)) (reject! "variant-match shape is invalid" form))
+          (validate-value-type! type)
+          (when-not (and (variant-type? type) (vector? branches)
+                         (= (mapv first cases) (mapv first branches))
+                         (every? #(and (vector? %) (= 3 (count %))
+                                       (symbol? (second %)) (nil? (namespace (second %)))) branches))
+            (reject! "variant match must exactly cover declared cases in order" form))
+          (validate-expr value locals functions (inc depth) budget)
+          (doseq [[_ binder body] branches]
+            (validate-expr body (conj locals binder) functions (inc depth) budget)))
+
+        (= op 'result-match-of)
+        (let [[type result ok-name ok-body err-name err-body] args]
+          (when-not (= 6 (count args))
+            (reject! "result-match-of shape is invalid" form))
+          (when-not (parametric-result-type? type)
+            (reject! "result match requires [:result ok-type err-type]" form))
+          (validate-value-type! type)
+          (when-not (and (symbol? ok-name) (nil? (namespace ok-name))
+                         (symbol? err-name) (nil? (namespace err-name)))
+            (reject! "result match binders must be unqualified symbols" form))
+          (validate-expr result locals functions (inc depth) budget)
+          (validate-expr ok-body (conj locals ok-name) functions (inc depth) budget)
+          (validate-expr err-body (conj locals err-name) functions (inc depth) budget))
+
+        (contains? parametric-result-operations op)
+        (do (when-not (= (get parametric-result-operations op) (count args))
+              (reject! "parametric result operation arity mismatch" form))
+            (when-not (parametric-result-type? (first args))
+              (reject! "parametric result operation requires [:result ok-type err-type]" form))
+            (validate-value-type! (first args))
+            (doseq [arg (rest args)]
+              (validate-expr arg locals functions (inc depth) budget)))
+
+        (= op 'vector-new)
+        (do (when (> (count args) value/vector-item-limit)
+              (reject! "vector-new exceeds item limit" form))
+            (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
+        (contains? typed-vector-operations op)
+        (do (when-not (= (get typed-vector-operations op) (count args))
+              (reject! "typed vector operation arity mismatch" form))
+            (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
         (contains? kernel-memory-operations op)
         (do (when-not (= (get kernel-memory-operations op) (count args))
               (reject! "kernel memory operation arity mismatch" form))
@@ -1420,6 +1472,460 @@
         :else (reject! "operation has no admitted lowering" form))
       form)
     :else (reject! "value type is outside the safe profile" form)))
+
+(defn- require-expression-type! [actual expected form]
+  (when-not (= actual expected)
+    (let [type-text #(if (keyword? %) (name %) (pr-str %))]
+      (reject! (str "expression type mismatch: expected " (type-text expected)
+                    ", got " (type-text actual))
+               form))))
+
+(declare infer-expression-type)
+
+(defn- infer-call-type [op args locals signatures]
+  (let [types (mapv #(infer-expression-type % locals signatures) args)]
+    (cond
+      (contains? arithmetic op)
+      (do (doseq [[arg type] (map vector args types)]
+            (require-expression-type! type :i64 arg))
+          :i64)
+
+      (= op '=)
+      (do (when-not (= (first types) (second types))
+            (reject! "equality operands must have the same value type" args))
+          (when-not (or (contains? #{:i64 :keyword :bool :option-i64 :result-i64 :vector-i64} (first types))
+                        (parametric-result-type? (first types)))
+            (reject! "equality type is outside the safe value profile" args))
+          :i64)
+
+      (= op 'bool-not)
+      (do (require-expression-type! (first types) :bool (first args)) :bool)
+
+      (= op 'option-some)
+      (do (require-expression-type! (first types) :i64 (first args)) :option-i64)
+
+      (= op 'option-none) :option-i64
+
+      (= op 'option-some?)
+      (do (require-expression-type! (first types) :option-i64 (first args)) :bool)
+
+      (= op 'option-value)
+      (do (require-expression-type! (first types) :option-i64 (first args))
+          (require-expression-type! (second types) :i64 (second args))
+          :i64)
+
+      (contains? '#{result-ok result-err} op)
+      (do (require-expression-type! (first types) :i64 (first args)) :result-i64)
+
+      (= op 'result-ok?)
+      (do (require-expression-type! (first types) :result-i64 (first args)) :bool)
+
+      (contains? '#{result-value result-error} op)
+      (do (require-expression-type! (first types) :result-i64 (first args))
+          (require-expression-type! (second types) :i64 (second args))
+          :i64)
+
+      (= op 'vector-new)
+      (do (doseq [[arg type] (map vector args types)]
+            (require-expression-type! type :i64 arg))
+          :vector-i64)
+
+      (= op 'vector-count)
+      (do (require-expression-type! (first types) :vector-i64 (first args)) :i64)
+
+      (= op 'vector-get)
+      (do (require-expression-type! (nth types 0) :vector-i64 (nth args 0))
+          (require-expression-type! (nth types 1) :i64 (nth args 1))
+          (require-expression-type! (nth types 2) :i64 (nth args 2)) :i64)
+
+      (= op 'vector-at)
+      (do (require-expression-type! (nth types 0) :vector-i64 (nth args 0))
+          (require-expression-type! (nth types 1) :i64 (nth args 1)) :i64)
+
+      (= op 'vector-drop)
+      (do (require-expression-type! (nth types 0) :vector-i64 (nth args 0))
+          (require-expression-type! (nth types 1) :i64 (nth args 1)) :vector-i64)
+
+      (= op 'vector-assoc)
+      (do (require-expression-type! (nth types 0) :vector-i64 (nth args 0))
+          (require-expression-type! (nth types 1) :i64 (nth args 1))
+          (require-expression-type! (nth types 2) :i64 (nth args 2)) :vector-i64)
+
+      (= op 'vector-conj)
+      (do (require-expression-type! (nth types 0) :vector-i64 (nth args 0))
+          (require-expression-type! (nth types 1) :i64 (nth args 1)) :vector-i64)
+
+      (contains? (disj comparisons '=) op)
+      (do (doseq [[arg type] (map vector args types)]
+            (require-expression-type! type :i64 arg))
+          :i64)
+
+      (contains? heap-operations op)
+      (do (doseq [[arg type] (map vector args types)]
+            (require-expression-type! type :i64 arg))
+          :i64)
+
+      (or (contains? kernel-memory-operations op)
+          (contains? kernel-privileged-operations op))
+      (do (doseq [[arg type] (map vector args types)]
+            (require-expression-type! type :i64 arg))
+          :i64)
+
+      (= op 'cap-call)
+      (do (require-expression-type! (second types) :i64 (second args)) :i64)
+
+      (= op 'string-byte-length)
+      (do (require-expression-type! (first types) :string (first args)) :i64)
+
+      (= op 'string=?)
+      (do (doseq [[arg type] (map vector args types)]
+            (require-expression-type! type :string arg))
+          :i64)
+
+      (= op 'string-concat)
+      (do (doseq [[arg type] (map vector args types)]
+            (require-expression-type! type :string arg))
+          :string)
+
+      (= op 'map-new)
+      (do (doseq [[key-form value-form key-type value-type]
+                  (map (fn [[key-form value-form] [key-type value-type]]
+                         [key-form value-form key-type value-type])
+                       (partition 2 args) (partition 2 types))]
+            (require-expression-type! key-type :keyword key-form)
+            (require-expression-type! value-type :i64 value-form))
+          :map)
+
+      (= op 'map-get)
+      (do (require-expression-type! (nth types 0) :map (nth args 0))
+          (require-expression-type! (nth types 1) :keyword (nth args 1))
+          (require-expression-type! (nth types 2) :i64 (nth args 2))
+          :i64)
+
+      (= op 'map-assoc)
+      (do (require-expression-type! (first types) :map (first args))
+          (doseq [[key-form value-form key-type value-type]
+                  (map (fn [[key-form value-form] [key-type value-type]]
+                         [key-form value-form key-type value-type])
+                       (partition 2 (rest args)) (partition 2 (rest types)))]
+            (require-expression-type! key-type :keyword key-form)
+            (require-expression-type! value-type :i64 value-form))
+          :map)
+
+      (contains? signatures op)
+      (let [{expected :param-types result :result} (get signatures op)]
+        (doseq [[arg actual wanted] (map vector args types expected)]
+          (require-expression-type! actual wanted arg))
+        result)
+
+      :else (reject! "operation has no admitted type signature" op))))
+
+(defn- infer-expression-type [form locals signatures]
+  (cond
+    (kotoba-integer? form) :i64
+    (string? form) :string
+    (keyword? form) :keyword
+    (boolean? form) :bool
+    (symbol? form) (or (get locals form)
+                       (reject! "unbound symbol has no value type" form))
+    (seq? form)
+    (let [[op & args] form]
+      (case op
+        let (let [[bindings body] args]
+              (loop [pairs (partition 2 bindings) current locals]
+                (if-let [[name value] (first pairs)]
+                  (recur (next pairs)
+                         (assoc current name (infer-expression-type value current signatures)))
+                  (infer-expression-type body current signatures))))
+        if (let [[test then else] args
+                 test-type (infer-expression-type test locals signatures)
+                 then-type (infer-expression-type then locals signatures)
+                 else-type (infer-expression-type else locals signatures)]
+             (when-not (contains? #{:i64 :bool} test-type)
+               (reject! "if test must be bool or legacy i64" test))
+             (when-not (= then-type else-type)
+               (reject! "if branches must have the same value type" form))
+             then-type)
+        do (last (mapv #(infer-expression-type % locals signatures) args))
+        result-ok-of
+        (let [[type payload] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type payload locals signatures)
+                                    (second type) payload)
+          type)
+        result-err-of
+        (let [[type payload] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type payload locals signatures)
+                                    (nth type 2) payload)
+          type)
+        result-ok?-of
+        (let [[type result] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type result locals signatures) type result)
+          :bool)
+        result-value-of
+        (let [[type result fallback] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type result locals signatures) type result)
+          (require-expression-type! (infer-expression-type fallback locals signatures)
+                                    (second type) fallback)
+          (second type))
+        result-error-of
+        (let [[type result fallback] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type result locals signatures) type result)
+          (require-expression-type! (infer-expression-type fallback locals signatures)
+                                    (nth type 2) fallback)
+          (nth type 2))
+        result-match-of
+        (let [[type result ok-name ok-body err-name err-body] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type result locals signatures) type result)
+          (let [ok-type (infer-expression-type ok-body (assoc locals ok-name (second type)) signatures)
+                err-type (infer-expression-type err-body (assoc locals err-name (nth type 2)) signatures)]
+            (when-not (= ok-type err-type)
+              (reject! "result match branches must have the same value type" form))
+            ok-type))
+        variant-new
+        (let [[type tag payload] args
+              payload-type (some (fn [[case-tag case-type]]
+                                   (when (= case-tag tag) case-type))
+                                 (nth type 2))]
+          (validate-value-type! type)
+          (when-not payload-type (reject! "variant constructor tag is not declared" form))
+          (require-expression-type! (infer-expression-type payload locals signatures)
+                                    payload-type payload)
+          type)
+        variant-match
+        (let [[type value branches] args
+              cases (nth type 2)]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          (let [branch-types
+                (mapv (fn [[[tag payload-type] [_ binder body]]]
+                        (infer-expression-type body (assoc locals binder payload-type) signatures))
+                      (map vector cases branches))]
+            (when-not (apply = branch-types)
+              (reject! "variant match branches must have the same value type" form))
+            (first branch-types)))
+        option-some-of
+        (let [[type payload] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type payload locals signatures)
+                                    (second type) payload)
+          type)
+        option-none-of
+        (let [[type] args] (validate-value-type! type) type)
+        option-some?-of
+        (let [[type value] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          :bool)
+        option-value-of
+        (let [[type value fallback] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          (require-expression-type! (infer-expression-type fallback locals signatures)
+                                    (second type) fallback)
+          (second type))
+        option-match
+        (let [[type value none-body some-name some-body] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          (let [none-type (infer-expression-type none-body locals signatures)
+                some-type (infer-expression-type some-body
+                                                 (assoc locals some-name (second type)) signatures)]
+            (when-not (= none-type some-type)
+              (reject! "option match branches must have the same value type" form))
+            none-type))
+        hetero-vector-new
+        (let [[type & items] args
+              item-types (second type)]
+          (validate-value-type! type)
+          (doseq [[item item-type] (map vector items item-types)]
+            (require-expression-type! (infer-expression-type item locals signatures)
+                                      item-type item))
+          type)
+        hetero-vector-count
+        (let [[type value] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          :i64)
+        hetero-vector-at
+        (let [[type value index] args
+              item-types (second type)
+              host-index (heterogeneous-vector-index! index item-types form)]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          (nth item-types host-index))
+        hetero-vector-assoc
+        (let [[type value index item] args
+              item-types (second type)
+              host-index (heterogeneous-vector-index! index item-types form)]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          (require-expression-type! (infer-expression-type item locals signatures)
+                                    (nth item-types host-index) item)
+          type)
+        hetero-vector-equal
+        (let [[type left right] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type left locals signatures) type left)
+          (require-expression-type! (infer-expression-type right locals signatures) type right)
+          :i64)
+        typed-set-new
+        (let [[type & items] args]
+          (validate-value-type! type)
+          (doseq [item items]
+            (require-expression-type! (infer-expression-type item locals signatures)
+                                      (second type) item))
+          type)
+        typed-set-count
+        (let [[type value] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          :i64)
+        typed-set-contains
+        (let [[type value item] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          (require-expression-type! (infer-expression-type item locals signatures)
+                                    (second type) item)
+          :bool)
+        typed-set-conj
+        (let [[type value item] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          (require-expression-type! (infer-expression-type item locals signatures)
+                                    (second type) item)
+          type)
+        typed-set-disj
+        (let [[type value item] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          (require-expression-type! (infer-expression-type item locals signatures)
+                                    (second type) item)
+          type)
+        typed-set-equal
+        (let [[type left right] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type left locals signatures) type left)
+          (require-expression-type! (infer-expression-type right locals signatures) type right)
+          :i64)
+        typed-map-new
+        (let [[type & entries] args
+              [key-type value-type] (rest type)]
+          (validate-value-type! type)
+          (doseq [[key item] (partition 2 entries)]
+            (require-expression-type! (infer-expression-type key locals signatures)
+                                      key-type key)
+            (require-expression-type! (infer-expression-type item locals signatures)
+                                      value-type item))
+          type)
+        typed-map-count
+        (let [[type value] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          :i64)
+        typed-map-contains
+        (let [[type value key] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          (require-expression-type! (infer-expression-type key locals signatures)
+                                    (second type) key)
+          :bool)
+        typed-map-get
+        (let [[type value key] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          (require-expression-type! (infer-expression-type key locals signatures)
+                                    (second type) key)
+          [:option (nth type 2)])
+        typed-map-entry-at
+        (let [[type value index] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          (require-expression-type! (infer-expression-type index locals signatures) :i64 index)
+          [:option [:vector [(second type) (nth type 2)]]])
+        typed-map-assoc
+        (let [[type value key item] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          (require-expression-type! (infer-expression-type key locals signatures)
+                                    (second type) key)
+          (require-expression-type! (infer-expression-type item locals signatures)
+                                    (nth type 2) item)
+          type)
+        typed-map-dissoc
+        (let [[type value key] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          (require-expression-type! (infer-expression-type key locals signatures)
+                                    (second type) key)
+          type)
+        typed-map-equal
+        (let [[type left right] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type left locals signatures) type left)
+          (require-expression-type! (infer-expression-type right locals signatures) type right)
+          :i64)
+        record-new
+        (let [[type & values] args
+              fields (nth type 2)]
+          (validate-value-type! type)
+          (doseq [[[field field-type] item] (map vector fields values)]
+            (require-expression-type! (infer-expression-type item locals signatures)
+                                      field-type field))
+          type)
+        record-get
+        (let [[type value field] args
+              field-type (some (fn [[declared-field declared-type]]
+                                 (when (= declared-field field) declared-type))
+                               (nth type 2))]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          field-type)
+        record-assoc
+        (let [[type value field replacement] args
+              field-type (some (fn [[declared-field declared-type]]
+                                 (when (= declared-field field) declared-type))
+                               (nth type 2))]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type value locals signatures) type value)
+          (require-expression-type! (infer-expression-type replacement locals signatures)
+                                    field-type replacement)
+          type)
+        record-equal
+        (let [[type left right] args]
+          (validate-value-type! type)
+          (require-expression-type! (infer-expression-type left locals signatures) type left)
+          (require-expression-type! (infer-expression-type right locals signatures) type right)
+          :i64)
+        (infer-call-type op args locals signatures)))
+    :else (reject! "value has no admitted type" form)))
+
+(defn- check-value-types! [functions]
+  (let [signatures (into {} (map (fn [{:keys [name params param-types result]}]
+                                   [name {:params params :param-types param-types
+                                          :result result}])
+                                 functions))]
+    (doseq [{:keys [name params param-types result body]} functions]
+      (let [actual (infer-expression-type body (zipmap params param-types) signatures)]
+        (require-expression-type! actual result name)))
+    (let [nodes (mapcat #(tree-seq coll? seq (:body %)) functions)
+          literal-bytes
+          (reduce + 0
+                  (map value/utf8-byte-count!
+                       (filter string? nodes)))
+          keyword-bytes
+          (reduce + 0
+                  (map (comp value/utf8-byte-count! str)
+                       (filter keyword? nodes)))]
+      (when (> literal-bytes value/string-value-byte-limit)
+        (reject! "module string literals exceed UTF-8 byte limit" literal-bytes))
+      (when (> keyword-bytes value/string-value-byte-limit)
+        (reject! "module keyword literals exceed UTF-8 byte limit" keyword-bytes)))))
 
 (defn- direct-facts [form function-names]
   (let [effects (volatile! #{}) calls (volatile! #{})]
@@ -1458,6 +1964,10 @@
 (defn- lowered-cost [form env]
   (cond
     (kotoba-integer? form) 1
+    (string? form) 1
+    (keyword? form) 1
+    (boolean? form) 1
+    (vector? form) (bounded-sum (cons 1 (map #(lowered-cost % env) form)))
     (symbol? form) (get env form 1)
     :else
     (let [[op & args] form]
@@ -1474,6 +1984,26 @@
     (when (> cost max-lowered-nodes)
       (reject! "lowered program budget exhausted" cost))))
 
+(defn- check-namespace-capabilities!
+  "ADR-2607182410 declare-then-check for an optional `ns` `:capabilities`
+  clause: DECLARED (namespace-parts' :capabilities) must equal exactly what
+  was actually USED via a named `(cap-call :some/name ...)` anywhere in the
+  namespace (collected into *used-capability-keywords* as each is resolved
+  during desugaring) -- both directions are rejected, mirroring the
+  `:aiueos/imports` declare-then-check convention this org already uses
+  elsewhere (orgs/kotoba-lang/aiueos/examples/apps/notes.edn). A no-arg-
+  cap-call-by-int module has an empty `used` set regardless -- this check
+  only ever fires when the `ns` form actually wrote a `:capabilities`
+  clause (`declared` is nil otherwise, see analyze's call site)."
+  [declared used]
+  (when declared
+    (let [undeclared (set/difference used declared)
+          unused (set/difference declared used)]
+      (when (seq undeclared)
+        (reject! "cap-call uses a capability not declared in namespace :capabilities" undeclared))
+      (when (seq unused)
+        (reject! "namespace :capabilities declares a capability never used via cap-call" unused)))))
+
 (defn- param-name+wrap
   "For one `defn` PARAM: a plain symbol is kept as-is (identity wrap). A
   vector/map destructuring pattern (ADR-2607150000) gets a fresh gensym'd
@@ -1489,397 +2019,208 @@
     (let [tmp (gensym "param-destr__")]
       [tmp (fn [body] (list 'let [param tmp] body))])))
 
-(defn- protocol-form->info [form]
-  (let [[_ protocol-name & methods] form]
-    (when-not (and (valid-name? protocol-name) (seq methods)
-                   (every? #(and (seq? %) (= 2 (count %))
-                                 (valid-name? (first %))
-                                 (vector? (second %))
-                                 (<= 1 (count (second %)) max-parameters)
-                                 (every? valid-name? (second %))) methods))
-      (reject! "defprotocol requires method signatures of (name [this ...])" form))
-    (let [method-map (into {} (map (fn [[name params]] [name params]) methods))]
-      (when-not (= (count methods) (count method-map))
-        (reject! "defprotocol method names must be unique" form))
-      {:name protocol-name :methods method-map})))
+(defn- type-alias-form? [value]
+  (and (vector? value) (= 2 (count value)) (= :alias (first value))
+       (symbol? (second value))))
 
-(defn- record-form->info [protocols form]
-  (let [[_ record-name fields & extra] form]
-    (when-not (and (valid-name? record-name) (vector? fields)
-                   (<= (count fields) max-parameters)
-                   (every? valid-name? fields)
-                   (= (count fields) (count (distinct fields))))
-      (reject! "defrecord requires a bounded name and unique field vector" form))
-    (let [ctor (symbol (str "->" record-name))
-          map-ctor (symbol (str "map->" record-name))
-          type-key :kotoba.record/type
-          type-value (keyword (name record-name))
-          record-map (into {type-key type-value}
-                           (map (fn [field] [(keyword (name field)) field]) fields))
-          groups (loop [remaining extra out []]
-                   (if (empty? remaining)
-                     out
-                     (let [protocol-name (first remaining)
-                           [method-forms tail] (split-with seq? (rest remaining))]
-                       (when-not (and (symbol? protocol-name) (seq method-forms))
-                         (reject! "defrecord protocol section requires a protocol name and methods" form))
-                       (recur tail (conj out [protocol-name method-forms])))))
-          implementations
-          (mapcat
-           (fn [[protocol-name method-forms]]
-             (let [protocol (get protocols protocol-name)]
-               (when-not protocol
-                 (reject! "defrecord references an undeclared protocol" protocol-name))
-               (map (fn [method-form]
-                      (let [[method-name params & body] method-form
-                            declared-params (get-in protocol [:methods method-name])]
-                        (when-not (and declared-params (vector? params) (= 1 (count body))
-                                       (= (count declared-params) (count params))
-                                       (every? valid-name? params))
-                          (reject! "record protocol method does not match its declaration" method-form))
-                        {:protocol protocol-name :method method-name :record record-name
-                         :params params :body (first body)}))
-                    method-forms)))
-           groups)]
-      {:name record-name
-       :defs [(list 'defn ctor fields record-map)
-              (list 'defn map-ctor '[m] (list 'assoc 'm type-key type-value))]
-       :implementations (vec implementations)})))
+(defn- resolve-type-alias! [type constants]
+  (if (type-alias-form? type)
+    (let [name (second type)]
+      (when-not (contains? constants name)
+        (reject! "type alias must name a declared constant" type))
+      (let [resolved (get constants name)]
+        (validate-value-type! resolved)
+        resolved))
+    type))
 
-(defn- protocol-dispatch-defs [protocols implementations]
-  (let [named-impls (mapv #(assoc % :impl-name (symbol (str "__kotoba_protocol_impl_" %2)))
-                          implementations (range))
-        impl-defs (mapv (fn [{:keys [impl-name params body]}]
-                          (list 'defn impl-name params body)) named-impls)
-        dispatch-defs
-        (mapcat
-         (fn [[protocol-name {:keys [methods]}]]
-           (map (fn [[method-name params]]
-                  (let [self (first params)
-                        candidates (filter #(and (= protocol-name (:protocol %))
-                                                 (= method-name (:method %))
-                                                 (not= 'default (:record %))) named-impls)
-                        default-impl (first (filter #(and (= protocol-name (:protocol %))
-                                                          (= method-name (:method %))
-                                                          (= 'default (:record %))) named-impls))
-                        fallback (if default-impl
-                                   (apply list (:impl-name default-impl) params)
-                                   0)
-                        body (reduce (fn [fallback {:keys [record impl-name]}]
-                                       (list 'if
-                                             (list '= (list 'get self :kotoba.record/type)
-                                                   (keyword (name record)))
-                                             (apply list impl-name params)
-                                             fallback))
-                                     fallback (reverse candidates))]
-                    (list 'defn method-name params body)))
-                (sort-by (comp str key) methods)))
-         (sort-by (comp str key) protocols))]
-    (concat impl-defs dispatch-defs)))
+(defn- defn-parts
+  "Parse Kotoba's bounded function declaration shape. A docstring is inert
+  metadata and is deliberately discarded before lowering. An optional result
+  keyword follows the parameter vector: `(defn f [s :string] :string s)`.
+  Attributes, pre/post maps, and multiple arities remain outside the profile."
+  [form constants]
+  (let [[_ name & declaration] form
+        [docstring declaration] (if (string? (first declaration))
+                                  [(first declaration) (rest declaration)]
+                                  [nil declaration])
+        raw-params (first declaration)
+        tail (rest declaration)
+        [result body] (if (or (keyword? (first tail))
+                              (structured-type? (first tail))
+                              (type-alias-form? (first tail)))
+                        [(resolve-type-alias! (first tail) constants) (rest tail)]
+                        [:i64 tail])]
+    (when (and docstring (> (count docstring) max-function-docstring-chars))
+      (reject! "function docstring exceeds admission limit" docstring))
+    (validate-value-type! result)
+    {:name name :raw-params raw-params :result result :body body}))
 
-(defn- extension-methods->implementations [protocols protocol-name type-name method-forms whole-form]
-  (let [protocol (get protocols protocol-name)]
-    (when-not (and protocol (valid-name? type-name) (seq method-forms))
-      (reject! "protocol extension requires declared protocol, type, and methods" whole-form))
-    (mapv (fn [method-form]
-            (let [[method-name params & body] method-form
-                  declared-params (get-in protocol [:methods method-name])]
-              (when-not (and declared-params (vector? params) (= 1 (count body))
-                             (= (count declared-params) (count params))
-                             (every? valid-name? params))
-                (reject! "protocol extension method does not match its declaration" method-form))
-              {:protocol protocol-name :method method-name :record type-name
-               :params params :body (first body)}))
-          method-forms)))
+(defn- typed-param-parts
+  "Legacy `[x y]` remains two i64 parameters. Once any type keyword appears,
+  the whole vector must be alternating `[name :type ...]`; this keeps the
+  source grammar deterministic and makes every non-i64 host boundary explicit."
+  [raw-params constants]
+  (let [raw-params (mapv (fn [index item]
+                           (if (and (odd? index) (type-alias-form? item))
+                             (resolve-type-alias! item constants)
+                             item))
+                         (range) raw-params)]
+  (if (or (some keyword? raw-params)
+          (and (even? (count raw-params))
+               (some structured-type? (map second (partition 2 raw-params)))))
+    (do
+      (when-not (even? (count raw-params))
+        (reject! "typed parameters require alternating name/type pairs" raw-params))
+      (mapv (fn [[pattern type]]
+              (validate-value-type! type)
+              (when (and (or (contains? #{:string :keyword :map :bool :option-i64 :result-i64 :vector-i64} type)
+                             (structured-type? type))
+                         (not (or (symbol? pattern)
+                                  (and (= type :map) (map? pattern))
+                                  (and (= type :vector-i64) (vector? pattern)))))
+                (reject! "typed values require plain-symbol bindings" pattern))
+              {:pattern pattern :type type})
+            (partition 2 raw-params)))
+    (mapv (fn [pattern] {:pattern pattern :type :i64}) raw-params))))
 
-(defn- extend-type-form->implementations [protocols form]
-  (let [[_ type-name protocol-name & method-forms] form]
-    (extension-methods->implementations protocols protocol-name type-name method-forms form)))
+(defn- binding-symbols [pattern]
+  (->> (tree-seq coll? seq pattern)
+       (filter symbol?)
+       (remove #{'&})
+       set))
 
-(defn- extend-protocol-form->implementations [protocols form]
-  (let [[_ protocol-name & sections] form]
-    (loop [remaining sections out []]
-      (if (empty? remaining)
-        out
-        (let [type-name (first remaining)
-              [method-forms tail] (split-with seq? (rest remaining))]
-          (when-not (symbol? type-name)
-            (reject! "extend-protocol requires type sections" form))
-          (recur tail (into out (extension-methods->implementations
-                                 protocols protocol-name type-name method-forms form))))))))
-
-(defn- multi-arity-defn? [form]
-  (and (seq? form) (= 'defn (first form))
-       (or (not (vector? (nth form 2 nil)))
-           (some #{'&} (nth form 2 nil)))))
-
-(defn- expand-multi-arity-defn [form]
-  (let [[_ function-name & raw-tail] form
-        clauses (if (vector? (first raw-tail))
-                  (do (when-not (= 2 (count raw-tail))
-                        (reject! "variadic defn requires one body" form))
-                      [(list (first raw-tail) (second raw-tail))])
-                  raw-tail)]
-    (when-not (and (valid-name? function-name) (seq clauses)
-                   (every? #(and (seq? %) (vector? (first %)) (= 2 (count %))) clauses))
-      (reject! "multi-arity defn requires ([params] body) clauses" form))
-    (let [parsed
-          (mapv (fn [[params body :as clause]]
-                  (let [amp-index (first (keep-indexed #(when (= '& %2) %1) params))]
-                    (if amp-index
-                      (do
-                        (when-not (and (= amp-index (- (count params) 2))
-                                       (every? valid-name? (subvec params 0 amp-index))
-                                       (valid-name? (peek params)))
-                          (reject! "variadic clause requires [fixed ... & rest]" clause))
-                        {:kind :variadic :fixed (subvec params 0 amp-index)
-                         :rest-name (peek params) :body body :min-arity amp-index})
-                      (do
-                        (when-not (and (<= (count params) max-parameters)
-                                       (every? valid-name? params))
-                          (reject! "fixed clause has invalid ABI parameters" clause))
-                        {:kind :fixed :params params :body body :arity (count params)}))))
-                clauses)
-          fixed (filter #(= :fixed (:kind %)) parsed)
-          variadics (filter #(= :variadic (:kind %)) parsed)
-          _ (when (or (> (count variadics) 1)
-                      (not= (count fixed) (count (distinct (map :arity fixed)))))
-              (reject! "multi-arity defn requires unique fixed arities and at most one variadic clause" form))
-          fixed-by-arity (into {} (map (juxt :arity identity) fixed))
-          variadic (first variadics)
-          supported-arities (set/union (set (keys fixed-by-arity))
-                                       (if variadic
-                                         (set (range (:min-arity variadic) (inc max-parameters)))
-                                         #{}))
-          expanded-name (fn [arity]
-                          (if (and (= function-name 'main) (zero? arity))
-                            'main
-                            (symbol (str function-name "$arity" arity))))
-          make-def
-          (fn [arity]
-            (if-let [{:keys [params body]} (get fixed-by-arity arity)]
-              (list 'defn (expanded-name arity) params body)
-              (let [{:keys [fixed rest-name body]} variadic
-                    extra-count (- arity (count fixed))
-                    extras (mapv #(symbol (str "__kotoba_rest_arg_" %)) (range extra-count))
-                    _ (when (some (set (conj (vec fixed) rest-name)) extras)
-                        (reject! "variadic parameters collide with compiler rest locals" form))
-                    params (into (vec fixed) extras)]
-                (list 'defn (expanded-name arity) params
-                      (list 'let [rest-name (apply list 'list extras)] body)))))]
-      (when (empty? supported-arities)
-        (reject! "multi-arity defn has no supported arity" form))
-      {:dispatch (into {} (map (fn [arity] [arity (expanded-name arity)]) supported-arities))
-       :defs (mapv make-def (sort supported-arities))})))
-
-(defn- rewrite-multi-arity-calls [dispatch form]
+(defn- constant-literal?
+  "Closed compile-time data admitted for top-level `def`. Constants are
+  substituted before desugaring, so they cannot allocate ambient mutable
+  state or execute code during compilation."
+  [value]
   (cond
+    (kotoba-integer? value) true
+    (string? value) (try
+                      (value/bounded-string! value value/string-literal-byte-limit)
+                      true
+                      (catch #?(:clj Exception :cljs :default) _ false))
+    (keyword? value) true
+    (boolean? value) true
+    (nil? value) true
+    (vector? value) (or (type-alias-form? value)
+                        (and (<= (count value) max-list-items)
+                             (every? constant-literal? value)))
+    (map? value) (and (<= (count value) max-list-items)
+                      (every? constant-literal? (mapcat identity value)))
+    :else false))
+
+(defn- def-parts [form]
+  (let [[_ name & declaration] form
+        [docstring declaration] (if (and (= 2 (count declaration))
+                                         (string? (first declaration)))
+                                  [(first declaration) (rest declaration)]
+                                  [nil declaration])]
+    (when (and docstring (> (count docstring) max-function-docstring-chars))
+      (reject! "constant docstring exceeds admission limit" docstring))
+    (when-not (= 1 (count declaration))
+      (reject! "constant must contain exactly one literal value" form))
+    (let [value-form (first declaration)
+          value (if (and (seq? value-form)
+                         (= 'keyword (first value-form))
+                         (= 2 (count value-form))
+                         (string? (second value-form)))
+                  (keyword (second value-form))
+                  value-form)]
+      (when-not (constant-literal? value)
+        (reject! "constant value must be closed bounded integer/string/keyword/boolean/nil/vector/map data" value))
+      {:name name :value value})))
+
+(defn- resolve-constant-aliases!
+  ([value constants] (resolve-constant-aliases! value constants #{}))
+  ([value constants resolving]
+   (cond
+     (type-alias-form? value)
+     (let [name (second value)]
+       (when-not (contains? constants name)
+         (reject! "constant alias must name a declared constant" value))
+       (when (contains? resolving name)
+         (reject! "constant aliases must be acyclic" value))
+       (resolve-constant-aliases! (get constants name) constants (conj resolving name)))
+     (vector? value) (mapv #(resolve-constant-aliases! % constants resolving) value)
+     (map? value) (into (empty value)
+                        (map (fn [[key item]]
+                               [(resolve-constant-aliases! key constants resolving)
+                                (resolve-constant-aliases! item constants resolving)]))
+                        value)
+     :else value)))
+
+(declare substitute-constants)
+
+(defn- substitute-bindings
+  [op bindings constants bound]
+  (when-not (and (vector? bindings) (even? (count bindings)))
+    (reject! (case op
+               let "let requires an even binding vector"
+               loop "loop requires an even binding vector")
+             bindings))
+  (loop [pairs (partition 2 bindings) bound bound out []]
+    (if-let [[pattern value] (first pairs)]
+      (recur (next pairs)
+             (into bound (binding-symbols pattern))
+             (conj out pattern (substitute-constants value constants bound)))
+      [out bound])))
+
+(defn- substitute-constants
+  "Lexically substitute closed top-level constants without replacing call
+  heads or names shadowed by params/let/loop bindings."
+  [form constants bound]
+  (cond
+    (symbol? form) (if (and (not (contains? bound form))
+                            (contains? constants form))
+                     (get constants form)
+                     form)
     (seq? form)
     (let [[op & args] form
-          rewritten-args (map #(rewrite-multi-arity-calls dispatch %) args)]
-      (if-let [arities (and (symbol? op) (get dispatch op))]
-        (if-let [target (get arities (count args))]
-          (apply list target rewritten-args)
-          (reject! "multi-arity function call has no matching arity" form))
-        (apply list op rewritten-args)))
-    (vector? form) (mapv #(rewrite-multi-arity-calls dispatch %) form)
-    (map? form) (into {} (map (fn [[k v]] [(rewrite-multi-arity-calls dispatch k)
-                                            (rewrite-multi-arity-calls dispatch v)]) form))
-    (set? form) (set (map #(rewrite-multi-arity-calls dispatch %) form))
+          result (case op
+                   quote form
+                   (let loop) (let [[bindings & body] args
+                                    [bindings' bound'] (substitute-bindings op bindings constants bound)]
+                                (list* op bindings'
+                                       (map #(substitute-constants % constants bound') body)))
+                   (list* op (map #(substitute-constants % constants bound) args)))]
+      (if (seq (meta form)) (with-meta result (meta form)) result))
+    (vector? form) (mapv #(substitute-constants % constants bound) form)
+    (map? form) (into (empty form)
+                      (map (fn [[k v]] [(substitute-constants k constants bound)
+                                       (substitute-constants v constants bound)]))
+                      form)
     :else form))
 
-(def ^:private pure-desugar-heads
-  '#{if do and or not = not= < > <= >= + - * quot rem mod
-     pair pair-first pair-second get assoc contains? contains-key? conj disj
-     count nth peek pop keys vals dissoc map filter reduce
-     lazy-cons lazy-first lazy-rest lazy-empty? lazy-map lazy-filter take drop
-     invoke apply fn-ref match})
-
-(defn- replace-desugar-params [replacements node]
-  (cond
-    (symbol? node) (get replacements node node)
-    (list? node) (apply list (map #(replace-desugar-params replacements %) node))
-    (vector? node) (mapv #(replace-desugar-params replacements %) node)
-    (map? node) (into {} (map (fn [[k v]] [(replace-desugar-params replacements k)
-                                            (replace-desugar-params replacements v)]) node))
-    (set? node) (set (map #(replace-desugar-params replacements %) node))
-    :else node))
-
-(defn- expand-pure-desugars [forms]
-  (let [definitions
-        (mapv (fn [[_ name params template :as form]]
-                (when-not (and (= 4 (count form)) (valid-name? name) (vector? params)
-                               (<= (count params) max-parameters)
-                               (every? valid-name? params)
-                               (= (count params) (count (distinct params))))
-                  (reject! "defdesugar requires name, unique parameter vector, and template" form))
-                [name {:params params :template template}])
-              (filter #(and (seq? %) (= 'defdesugar (first %))) forms))
-        registry (into {} definitions)
-        _ (when-not (= (count definitions) (count registry))
-            (reject! "duplicate defdesugar name" definitions))
-        allowed-heads (into pure-desugar-heads (keys registry))
-        validate-template
-        (fn validate-template [params node]
-          (cond
-            (symbol? node)
-            (when-not (contains? (set params) node)
-              (reject! "defdesugar template contains a free value symbol" node))
-            (seq? node)
-            (do
-              (when-not (contains? allowed-heads (first node))
-                (reject! "defdesugar template call head is not registered pure" (first node)))
-              (doseq [arg (rest node)] (validate-template params arg)))
-            (coll? node) (doseq [item node] (validate-template params item))))
-        _ (doseq [[_ {:keys [params template]}] registry]
-            (validate-template params template))
-        counter (volatile! 0)
-        expansion-count (volatile! 0)]
-    (letfn [(expand [form depth]
-              (when (> depth 32)
-                (reject! "defdesugar expansion depth exceeded" form))
-              (cond
-                (vector? form) (mapv #(expand % depth) form)
-                (map? form) (into {} (map (fn [[k v]] [(expand k depth) (expand v depth)]) form))
-                (set? form) (set (map #(expand % depth) form))
-                (not (seq? form)) form
-                :else
-                (let [[op & args] form]
-                  (if-let [{:keys [params template]} (get registry op)]
-                    (do
-                      (when-not (= (count params) (count args))
-                        (reject! "defdesugar call arity mismatch" form))
-                      (when (> (vswap! expansion-count inc) 256)
-                        (reject! "defdesugar expansion count exceeded" form))
-                      (let [temps (mapv (fn [_] (symbol (str "__kotoba_desugar_arg_"
-                                                             (vswap! counter inc)))) params)
-                            body (replace-desugar-params (zipmap params temps) template)]
-                        (list 'let (vec (mapcat vector temps (map #(expand % depth) args)))
-                              (expand body (inc depth)))))
-                    (apply list op (map #(expand % depth) args))))))]
-      (mapv #(expand % 0)
-            (remove #(and (seq? %) (= 'defdesugar (first %))) forms)))))
-
-(defn- expand-match-forms [forms]
-  (let [counter (volatile! 0)]
-    (letfn [(all-tests [tests] (reduce (fn [out test] (list 'and out test)) 1 tests))
-            (pattern-plan [pattern value]
-              (cond
-                (= '_ pattern) {:test 1 :bindings []}
-                (symbol? pattern) {:test 1 :bindings [pattern value]}
-                (or (kotoba-integer? pattern) (keyword? pattern) (string? pattern))
-                {:test (list '= value pattern) :bindings []}
-                (vector? pattern)
-                (let [amp (.indexOf pattern '&)
-                      positional (if (neg? amp) pattern (subvec pattern 0 amp))
-                      rest-pattern (when-not (neg? amp) (nth pattern (inc amp) nil))]
-                  (when (and (not (neg? amp))
-                             (or (not= amp (- (count pattern) 2))
-                                 (not (valid-name? rest-pattern))))
-                    (reject! "match vector & requires one trailing symbol" pattern))
-                  (let [children (map-indexed
-                                  (fn [index child]
-                                    (pattern-plan child (list 'nth value index 0))) positional)
-                        length-test (if (neg? amp)
-                                      (list '= (list 'count value) (count positional))
-                                      (list '>= (list 'count value) (count positional)))]
-                    {:test (all-tests (cons length-test (map :test children)))
-                     :bindings (vec (concat (mapcat :bindings children)
-                                            (when rest-pattern
-                                              [rest-pattern
-                                               (reduce (fn [tail _] (list 'pop tail))
-                                                       value positional)])))}))
-                (map? pattern)
-                (let [children (mapv (fn [[key child]]
-                                       (when-not (keyword? key)
-                                         (reject! "match map keys must be keywords" pattern))
-                                       (let [entry (pattern-plan child (list 'get value key 0))]
-                                         (update entry :test
-                                                 #(list 'and (list 'contains-key? value key) %))))
-                                     (sort-by (comp str key) pattern))]
-                  {:test (all-tests (map :test children))
-                   :bindings (vec (mapcat :bindings children))})
-                :else (reject! "unsupported match pattern" pattern)))
-            (expand [form]
-              (cond
-                (vector? form) (mapv expand form)
-                (map? form) (into {} (map (fn [[k v]] [(expand k) (expand v)]) form))
-                (set? form) (set (map expand form))
-                (not (seq? form)) form
-                :else
-                (let [[op & args] form]
-                  (if (= op 'match)
-                    (let [[value & clauses] args]
-                      (when-not (and value (even? (count clauses)) (seq clauses))
-                        (reject! "match requires value and pattern/result pairs" form))
-                      (let [temp (symbol (str "__kotoba_match_value_" (vswap! counter inc)))
-                            branch (reduce
-                                    (fn [otherwise [pattern result]]
-                                      (if (= :else pattern)
-                                        (expand result)
-                                        (let [{:keys [test bindings]} (pattern-plan pattern temp)]
-                                          (list 'if test
-                                                (if (seq bindings)
-                                                  (list 'let bindings (expand result))
-                                                  (expand result))
-                                                otherwise))))
-                                    0 (reverse (partition 2 clauses)))]
-                        (list 'let [temp (expand value)] branch)))
-                    (apply list op (map expand args))))))]
-      (mapv expand forms))))
-
 (defn analyze [source]
-  (let [source-forms (read-forms source)
-        _ (validate-portable-value-ids! source-forms)
-        forms (-> source-forms expand-pure-desugars expand-match-forms)
+  (let [forms (read-forms source)
         namespaces (filter #(and (seq? %) (= 'ns (first %))) forms)
-        protocol-forms (filter #(and (seq? %) (contains? '#{defprotocol definterface} (first %))) forms)
-        protocol-infos (mapv protocol-form->info protocol-forms)
-        protocols (into {} (map (juxt :name identity) protocol-infos))
-        _ (when-not (= (count protocol-infos) (count protocols))
-            (reject! "duplicate protocol name" protocol-forms))
-        records (filter #(and (seq? %) (= 'defrecord (first %))) forms)
-        record-infos (mapv (partial record-form->info protocols) records)
-        _ (when-not (= (count record-infos) (count (distinct (map :name record-infos))))
-            (reject! "duplicate record name" records))
-        extend-type-forms (filter #(and (seq? %) (= 'extend-type (first %))) forms)
-        extend-protocol-forms (filter #(and (seq? %) (= 'extend-protocol (first %))) forms)
-        implementations (concat (mapcat :implementations record-infos)
-                                (mapcat (partial extend-type-form->implementations protocols)
-                                        extend-type-forms)
-                                (mapcat (partial extend-protocol-form->implementations protocols)
-                                        extend-protocol-forms))
-        _ (when-not (= (count implementations)
-                       (count (distinct (map (juxt :protocol :method :record) implementations))))
-            (reject! "duplicate record protocol method implementation" records))
-        raw-defs (filter #(and (seq? %) (= 'defn (first %))) forms)
-        multi-expanded (mapv expand-multi-arity-defn (filter multi-arity-defn? raw-defs))
-        multi-dispatch (into {}
-                             (map (fn [form expansion] [(second form) (:dispatch expansion)])
-                                  (filter multi-arity-defn? raw-defs) multi-expanded))
-        _ (when-not (= (count multi-expanded) (count multi-dispatch))
-            (reject! "duplicate multi-arity function name" raw-defs))
-        defs (concat (remove multi-arity-defn? raw-defs)
-                     (mapcat :defs multi-expanded)
-                     (mapcat :defs record-infos)
-                     (protocol-dispatch-defs protocols implementations))
-        function-arities (reduce (fn [out [_ name params]]
-                                   (update out name (fnil conj #{}) (count params)))
-                                 {} defs)
+        defs (filter #(and (seq? %) (contains? '#{defn defn-} (first %))) forms)
+        constant-forms (filter #(and (seq? %) (= 'def (first %))) forms)
         other (remove #(or (and (seq? %) (= 'ns (first %)))
-                           (and (seq? %) (= 'defn (first %)))
-                           (and (seq? %) (= 'defrecord (first %)))
-                           (and (seq? %) (= 'defprotocol (first %)))
-                           (and (seq? %) (= 'definterface (first %)))
-                           (and (seq? %) (= 'extend-type (first %)))
-                           (and (seq? %) (= 'extend-protocol (first %)))) forms)
+                           (and (seq? %) (contains? '#{defn defn-} (first %)))
+                           (and (seq? %) (= 'def (first %)))) forms)
         _ (when (> (count defs) max-functions)
             (reject! "function count exceeds admission limit" (count defs)))
-        _ (when (or (> (count namespaces) 1)
-                    (some #(not (and (= 2 (count %)) (symbol? (second %))
-                                     (<= (count (str (second %))) max-symbol-chars)))
-                          namespaces))
-            (reject! "ns must contain exactly one namespace symbol" namespaces))
+        _ (when (> (count namespaces) 1)
+            (reject! "at most one namespace form is admitted" namespaces))
+        namespace-info (when-let [namespace-form (first namespaces)]
+                         (namespace-parts namespace-form))
+        raw-constants (into {}
+                        (map (fn [form]
+                               (let [{:keys [name value]} (def-parts form)]
+                                 (when-not (valid-name? name)
+                                   (reject! "invalid constant name" name))
+                                 (when (contains? reserved-function-names name)
+                                   (reject! "reserved constant name" name))
+                                 [name value])))
+                        constant-forms)
+        _ (when-not (= (count raw-constants) (count constant-forms))
+            (reject! "duplicate constant name" constant-forms))
+        constants (into {}
+                        (map (fn [[name value]]
+                               [name (resolve-constant-aliases! value raw-constants #{name})]))
+                        raw-constants)
         ;; ADR-2607150000: mapcat, not mapv -- a defn using `loop` may
         ;; expand into itself PLUS one or more synthesized loop-helper
         ;; functions (collected via *pending-loop-helpers*, bound fresh
@@ -1888,17 +2229,17 @@
         ;; (param-name+wrap above), not just plain symbols. *loop-counter*
         ;; is bound ONCE for the whole source (not per-defn) so loop-helper
         ;; names stay unique across every defn, not just within one.
-        lambda-infos (atom [])
-        uses-apply? (volatile! false)
-        uses-lazy? (volatile! false)
+        ;; ADR-2607182410: `used-capabilities` is created OUTSIDE the
+        ;; `binding` below (unlike *loop-counter*'s own fresh volatile,
+        ;; which only needs to live inside it) so `check-namespace-
+        ;; capabilities!` can still deref it once `parsed` is fully built
+        ;; and `binding`'s dynamic extent has ended -- the *var* rebinding
+        ;; ends with the `let`, but the volatile object itself, referenced
+        ;; here from outside, keeps whatever `resolve-capability-keyword!`
+        ;; conjoined onto it during desugaring.
+        used-capabilities (volatile! #{})
         parsed (binding [*loop-counter* (volatile! 0)
-                         *hof-counter* (volatile! 0)
-                         *lambda-counter* (volatile! 0)
-                         *pending-lambdas* lambda-infos
-                         *uses-apply?* uses-apply?
-                         *uses-lazy?* uses-lazy?
-                         *function-arities* function-arities
-                         *multi-arity-dispatch* multi-dispatch]
+                          *used-capability-keywords* used-capabilities]
                ;; `vec` (forcing) must stay INSIDE `binding`'s dynamic
                ;; extent: `mapcat` is lazy, so `(vec (binding [...]
                ;; (mapcat ...)))` would rebind *loop-counter* only around
@@ -1909,29 +2250,34 @@
                (vec
                      (mapcat
                      (fn [form]
-                       (let [[_ name raw-params & body] form]
+                       (let [{:keys [name raw-params result body]} (defn-parts form constants)]
                          (when-not (valid-name? name) (reject! "invalid function name" name))
                          (when (contains? reserved-function-names name)
                            (reject! "reserved function name" name))
                          (when-not (vector? raw-params)
                            (reject! "function parameters must be a vector" raw-params))
-                         (when (> (count raw-params) max-parameters)
-                           (reject! "function parameters exceed ABI-supported arity" raw-params))
                          (when-not (= 1 (count body))
                            (reject! "function must contain one result expression" body))
-                         (let [name+wraps (mapv param-name+wrap raw-params)
+                         (let [param-parts (typed-param-parts raw-params constants)
+                               _ (when (> (count param-parts) max-parameters)
+                                   (reject! "function parameters exceed ABI-supported arity" raw-params))
+                               name+wraps (mapv #(param-name+wrap (:pattern %)) param-parts)
                                params (mapv first name+wraps)
+                               param-types (mapv :type param-parts)
                                wrap-body (apply comp (map second name+wraps))]
                            (when-not (and (every? valid-name? params) (= (count params) (count (distinct params))))
                              (reject! "function parameters must be unique bounded symbols with ABI-supported arity" raw-params))
                            (let [loop-helpers (atom [])
-                                 hof-helpers (atom [])
-                                 desugared (binding [*pending-loop-helpers* loop-helpers
-                                                     *pending-hof-helpers* hof-helpers]
-                                             (desugar-expr (wrap-body (first body))))]
-                             (into [{:name name :params params :result :i64 :effects #{}
+                                 constant-bound (into #{} (mapcat #(binding-symbols (:pattern %)) param-parts))
+                                 source-body (substitute-constants
+                                              (wrap-body (first body))
+                                              constants constant-bound)
+                                 desugared (binding [*pending-loop-helpers* loop-helpers]
+                                             (desugar-expr source-body))]
+                             (into [{:name name :params params :param-types param-types
+                                     :result result :effects #{}
                                      :body desugared}]
-                                   (concat @loop-helpers @hof-helpers))))))
+                                   @loop-helpers)))))
                      defs)))
         ;; ADR-2607150000: inject the synthesized `get`/`assoc` helpers only
         ;; when a desugared body actually calls them -- keeps modules that
@@ -1940,42 +2286,75 @@
         ;; caught for free by the existing :duplicate-function-name check
         ;; below (signatures' map semantics silently drop one entry, count
         ;; mismatch trips it).
-        parsed (into parsed
-                     (concat (map :helper @lambda-infos)
-                             (lambda-dispatchers @lambda-infos (or @uses-apply? @uses-lazy?))
-                             (when @uses-apply? [closure-apply-helper])
-                             (when @uses-lazy? [lazy-take-helper lazy-drop-helper])))
-        parsed (mapv #(update % :body (partial rewrite-multi-arity-calls multi-dispatch)) parsed)
         parsed (cond-> parsed
                  (some #(uses-map-get? (:body %)) parsed) (conj map-get-helper)
-                 (some #(uses-helper? map-contains-key-helper-name (:body %)) parsed)
-                 (conj map-contains-key-helper)
-                 (some #(uses-map-without? (:body %)) parsed) (conj map-without-helper)
-                 (some #(uses-helper? set-contains-helper-name (:body %)) parsed) (conj set-contains-helper)
-                 (some #(uses-helper? set-without-helper-name (:body %)) parsed) (conj set-without-helper)
-                 (some #(uses-helper? coll-count-helper-name (:body %)) parsed) (conj coll-count-helper)
-                 (some #(uses-helper? coll-nth-helper-name (:body %)) parsed) (conj coll-nth-helper)
-                 (some #(uses-helper? map-keys-helper-name (:body %)) parsed) (conj map-keys-helper)
-                 (some #(uses-helper? map-vals-helper-name (:body %)) parsed) (conj map-vals-helper))
-        signatures (into {} (map (juxt :name :params) parsed))]
-    (when (seq other) (reject! "only ns and defn are allowed at top level" (first other)))
+                 (some #(uses-map-without? (:body %)) parsed) (conj map-without-helper))
+        parsed (mapv #(if (:param-types %)
+                        %
+                        (assoc % :param-types (vec (repeat (count (:params %)) :i64))))
+                     parsed)
+        signatures (into {} (map (juxt :name :params) parsed))
+        source-public (mapv second (filter #(= 'defn (first %)) defs))
+        exports (cond
+                  (some? (:exports namespace-info)) (:exports namespace-info)
+                  (some #(= 'defn- (first %)) defs) source-public
+                  :else (mapv :name parsed))
+        entry (when (contains? signatures 'main) 'main)]
+    (when (seq (set/intersection (set (keys constants)) (set (keys signatures))))
+      (reject! "constant and function names must be disjoint" forms))
+    (when (seq other) (reject! "only ns, def, defn, and defn- are allowed at top level" (first other)))
     (when (empty? parsed) (reject! "at least one defn is required" forms))
-    (when (> (count parsed) max-functions)
-      (reject! "function count exceeds admission limit after closure/helper lowering" (count parsed)))
     (when-not (= (count parsed) (count signatures)) (reject! "duplicate function name" defs))
-    (when-not (contains? signatures 'main) (reject! "main entrypoint is required" defs))
-    (when-not (empty? (get signatures 'main)) (reject! "main must take zero arguments" 'main))
+    (when (and (some? (:exports namespace-info))
+               (not-every? (set source-public) exports))
+      (reject! "namespace exports must name declared public functions" exports))
+    (when (and (nil? entry) (nil? (:exports namespace-info)))
+      (reject! "entryless library requires an explicit non-empty namespace export list" defs))
+    (when (and (nil? entry) (empty? exports))
+      (reject! "entryless library requires at least one exported function" exports))
+    (when (and entry (not (empty? (get signatures entry))))
+      (reject! "main must take zero arguments" 'main))
+    (when (and entry (not (some #{entry} exports)))
+      (reject! "main entrypoint must be exported" exports))
+    (check-namespace-capabilities! (:capabilities namespace-info) @used-capabilities)
     (let [budget (volatile! 0)]
       (doseq [{:keys [params body]} parsed]
         (validate-expr body (set params) signatures 0 budget)))
+    (check-value-types! parsed)
     (check-lowering-budget! parsed)
-    (let [function-effects (infer-effects parsed)
-          _ (doseq [{:keys [name lazy-thunk?]} parsed
-                    :when (and lazy-thunk? (seq (get function-effects name)))]
-              (reject! "lazy sequence thunks must be effect-free because forcing is non-memoized" name))
-          functions (mapv #(assoc % :effects (get function-effects (:name %))) parsed)]
-      {:format :kotoba.hir/v2 :entry 'main :result :i64
-       ;; Every function is exported by current backends, so admission covers
-       ;; the union rather than only effects reachable from main.
+    (let [typed-values? (boolean
+                         (some (fn [{:keys [param-types result body]}]
+                                 (or (some #(or (contains? #{:string :keyword :map :bool :option-i64 :result-i64 :vector-i64} %)
+                                                (structured-type? %)) param-types)
+                                     (or (contains? #{:string :keyword :map :bool :option-i64 :result-i64 :vector-i64} result)
+                                         (structured-type? result))
+                                     (some #(or (string? %) (keyword? %) (boolean? %)
+                                                (and (seq? %)
+                                                     (or (contains? typed-map-operations (first %))
+                                                         (contains? typed-safe-value-operations (first %))
+                                                         (contains? parametric-result-operations (first %))
+                                                         (contains? variant-operations (first %))
+                                                         (contains? generic-option-operations (first %))
+                                                         (contains? heterogeneous-vector-operations (first %))
+                                                         (contains? typed-set-operations (first %))
+                                                         (contains? canonical-typed-map-operations (first %))
+                                                         (contains? record-operations (first %))
+                                                         (= 'vector-new (first %))
+                                                         (contains? typed-vector-operations (first %)))))
+                                           (tree-seq coll? seq body))))
+                               parsed))
+          function-effects (infer-effects parsed)
+          functions (mapv (fn [function]
+                            (cond-> (assoc function :effects
+                                           (get function-effects (:name function)))
+                              (not typed-values?) (dissoc :param-types)))
+                          parsed)
+          main-result (some->> parsed (some #(when (= 'main (:name %)) (:result %))))]
+      {:format (if typed-values? :kotoba.hir/v3 :kotoba.hir/v2)
+       :namespace (:namespace namespace-info)
+       :entry entry :exports (vec exports)
+       :result (when entry main-result)
+       ;; Admission conservatively covers private functions too: changing an
+       ;; export boundary must never change the authority the module declares.
        :effects (reduce set/union #{} (vals function-effects))
        :functions functions})))

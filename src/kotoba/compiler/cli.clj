@@ -5,13 +5,17 @@
             [kotoba.compiler.core :as compiler]
             [kotoba.compiler.coverage :as coverage]
             [kotoba.compiler.coverage-evidence :as coverage-evidence]
+            [kotoba.compiler.diagnostic :as diagnostic]
             [kotoba.compiler.ios-aot :as ios-aot]
+            [kotoba.compiler.interface :as interface]
+            [kotoba.compiler.project-files :as project-files]
             [kotoba.compiler.native-executor :as native-executor]
             [kotoba.compiler.packaging.pe32plus :as pe32plus]
             [kotoba.compiler.receipt :as receipt]
             [kotoba.compiler.release :as release]
             [kotoba.compiler.runtime-identity :as runtime-identity]
             [kotoba.compiler.signing :as signing]
+            [kotoba.compiler.source-path :as source-path]
             [kotoba.compiler.target :as target-profile]
             [kotoba.compiler.verifier :as verifier]
             [clojure.data.json :as json]
@@ -40,30 +44,29 @@
 
 (def ^:dynamic *exit* (fn [status] (System/exit status)))
 
-(defn- kotoba-source! [path]
-  (when-not (and (string? path) (str/ends-with? path ".kotoba"))
-    (throw (ex-info "source input must use the .kotoba extension"
-                    {:phase :usage})))
-  path)
+(defn- kotoba-source! [path] (source-path/admit! path))
 
 (def ^:private detail-keys
   #{:phase :target :artifact-target :host-target :entry :arity :limit :status
     :reason :runtime-sha256 :not-before :expires :now})
 
-(defn error-report [error]
+(defn error-report
+  ([error] (error-report error nil))
+  ([error source-name]
   (let [data (ex-data error)
         phase (or (:phase data) :internal)
         details (select-keys data detail-keys)]
     (cond-> {:format :kotoba.cli-error/v1
              :ok false
              :error phase
+             :diagnostic (diagnostic/from-error error source-name)
              :message (if (= phase :internal) "internal compiler error" (ex-message error))}
-      (seq details) (assoc :details details))))
+      (seq details) (assoc :details details)))))
 
 (defn exit-code [phase]
   (case phase
     :usage 64
-    (:decode :read :subset :admission :ir :verify :coverage) 65
+    (:decode :read :subset :admission :ir :verify :coverage :project-link) 65
     (:signature :trust :runtime-identity) 77
     :output 74
     :execute 69
@@ -83,6 +86,13 @@
           output (or (option args "--output") "kotoba-verification-key.edn")]
       (atomic-output/write-edn! output public)
       (println (pr-str {:ok true :output output :signer (:signer public)})))
+    "inspect"
+    (let [input (kotoba-source! (second args))
+          inspected (interface/inspect-source (bounded-edn/read-text-file input))]
+      (if-let [output (option args "--output")]
+        (do (atomic-output/write-edn! output inspected)
+            (println (pr-str {:ok true :output output :sha256 (:sha256 inspected)})))
+        (println (pr-str inspected))))
     "trust-key"
     (let [key (bounded-edn/read-file (second args))
           signer (signing/trusted-signer-id! key)
@@ -247,6 +257,7 @@
                         :kernel-sha256 (:embedded-kernel-sha256 packaged)})))
     "compile"
     (let [input (kotoba-source! (second args))
+          source-root (option args "--source-path")
           target (parse-target (or (option args "--target") "wasm32"))
           output (or (option args "--output")
                      (str input (case (:execution (target-profile/profile target))
@@ -262,7 +273,10 @@
           _ (when-not (contains? #{nil "object" "image"} artifact-kind)
               (throw (ex-info "unknown native artifact kind"
                               {:phase :artifact-target :artifact artifact-kind})))
-          result (compiler/compile-source (bounded-edn/read-text-file input) target policy)]
+          result (if source-root
+                   (let [{:keys [sources root]} (project-files/load-closed-graph input source-root)]
+                     (compiler/compile-project sources root target policy))
+                   (compiler/compile-source (bounded-edn/read-text-file input) target policy))]
       (case (:format result)
         :wasm/v1 (atomic-output/write-bytes! output (:bytes result))
         ;; ADR-2607151500: the cljs backend emits SOURCE TEXT, not an
@@ -293,7 +307,10 @@
                     output (byte-array (map unchecked-byte (:bytes packaged))))
                    (atomic-output/write-edn! output (:artifact result)))
         (atomic-output/write-edn! output (:artifact result)))
-      (println (pr-str {:ok true :target target :output output})))
+      (let [provenance-output (str output ".provenance.edn")]
+        (atomic-output/write-edn! provenance-output (:provenance result))
+        (println (pr-str {:ok true :target target :output output
+                          :provenance-output provenance-output}))))
     "package-ios"
     (let [input (bounded-edn/read-file (second args))
           entry (symbol (or (option args "--entry") "main"))
@@ -350,7 +367,10 @@
   (try
     (apply dispatch! args)
     (catch clojure.lang.ExceptionInfo error
-      (let [report (error-report error)]
+      (let [source (second args)
+            source-name (when (source-path/source-kind source)
+                          (.getName (java.io.File. source)))
+            report (error-report error source-name)]
         (binding [*out* *err*] (println (pr-str report)))
         (*exit* (exit-code (:error report)))))
     (catch Throwable _

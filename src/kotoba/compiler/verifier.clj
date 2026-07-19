@@ -3,6 +3,7 @@
             [kotoba.compiler.artifact :as artifact]
             [kotoba.compiler.backend.aarch64 :as aarch64]
             [kotoba.compiler.backend.x86-64 :as x86-64]
+            [kotoba.compiler.compatibility :as compatibility-profile]
             [kotoba.compiler.ir :as ir]
             [kotoba.compiler.target :as target-profile]))
 
@@ -15,7 +16,7 @@
 
 (def ^:private artifact-fields
   #{:format :target :target-profile :value :kir-sha256 :lowering :fuel-abi :context-abi
-    :effects :limits :code :program :exports :sha256})
+    :effects :limits :code :program :exports :compatibility :sha256})
 
 (def max-functions 1024)
 (def max-expression-nodes 50000)
@@ -273,7 +274,7 @@
         (reject! "execution context ABI is not admitted"
                  {:target target :context-abi context-abi})))))
 
-(defn verify-artifact! [{:keys [format target code effects kir-sha256] :as kexe}]
+(defn verify-artifact! [{:keys [format target target-profile code effects kir-sha256 compatibility] :as kexe}]
   (when-not (and (map? kexe) (= artifact-fields (set (keys kexe))))
     (reject! "native artifact schema rejected" {}))
   (when-not (= :kotoba.kexe/v1 format) (reject! "unknown artifact format" {}))
@@ -292,6 +293,13 @@
   (when-not (= kir-sha256 (artifact/sha256 (:program kexe)))
     (reject! "runtime KIR identity mismatch" {}))
   (verify-runtime! kexe)
+  (let [expected (compatibility-profile/descriptor
+                  {:hir-format :kotoba.hir/v2
+                   :kir-format (get-in kexe [:program :format])
+                   :target target :target-profile target-profile
+                   :value-abi :kotoba.i64/direct-v1})]
+    (when-not (= expected compatibility)
+      (reject! "native compatibility metadata rejected" {:target target})))
   (let [kernel-operations '#{kernel-load-u8 kernel-load-u8-4k kernel-load-u8-16k
                              kernel-store-u8 kernel-store-u8-4k kernel-read-cr2
                              kernel-boot-info kernel-read-cr3 kernel-write-cr3 kernel-invlpg

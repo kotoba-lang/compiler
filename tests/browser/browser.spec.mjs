@@ -16,7 +16,11 @@ test("compiler-produced Wasm passes direct and Worker boundaries", async ({ page
   });
   expect(pageErrors).toEqual([]);
   const project = testInfo.project.name;
+  // "-beta-" projects are the same vendor-branded Chrome/Edge builds as "-stable-", just
+  // pinned to the beta release channel instead of stable (see playwright.config.mjs for
+  // why this is forward-looking pre-stable signal, not previous-version compatibility).
   const evidenceKind = project.includes("-stable-") ? "branded-browser"
+    : project.includes("-beta-") ? "branded-browser-beta"
     : project.includes("-emulation") ? "mobile-emulation" : "engine";
   testInfo.annotations.push({
     type: "kotoba-browser-identity",

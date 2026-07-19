@@ -5,6 +5,7 @@
             [kotoba.compiler.artifact :as artifact]
             [kotoba.compiler.core :as compiler]
             [kotoba.compiler.ir :as ir]
+            [kotoba.compiler.provenance :as provenance]
             [kotoba.compiler.verifier :as verifier]))
 
 (def source "(ns demo) (defn main [] (+ 40 2))")
@@ -14,10 +15,52 @@
    (defn score [x bonus] (let [m (* x 2) total (+ m bonus)] (abs total)))
    (defn main [] (score -20 -2))")
 
+(deftest compilation-provenance-binds-input-policy-pipeline-and-every-output
+  (doseq [target [:wasm32-kotoba-v1 :js-kotoba-v1 :cljs-kotoba-v1
+                  :x86_64-kotoba-v1 :x86_64-aiueos-kernel-v1]]
+    (let [policy {} result (compiler/compile-source source target policy)
+          statement (:provenance result)]
+      (is (= :kotoba.provenance/v1 (:format statement)))
+      (is (= target (:target statement)))
+      (is (= statement (provenance/verify! source policy result)))
+      (is (re-matches #"[0-9a-f]{64}" (:source-sha256 statement)))
+      (is (contains? (:outputs statement) :primary))
+      (when (:manifest result)
+        (is (= statement (get-in result [:manifest :kotoba.artifact/provenance]))))))
+  (let [result (compiler/compile-source source :wasm32-kotoba-v1 {})]
+    (doseq [[changed-source changed-policy changed-result]
+            [["(defn main [] 43)" {} result]
+             [source {:allow #{:ambient/network}} result]
+             [source {} result]
+             [source {} (assoc result :bytes
+                               (byte-array (cons (unchecked-byte 1)
+                                                 (drop 1 (:bytes result)))))]
+             [source {} (assoc-in result [:provenance :target] :wasm32-wasi-kotoba-v1)]]]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"provenance rejected"
+                            (if (identical? changed-result result)
+                              (provenance/verify! changed-source changed-policy
+                                                  {:package-lock-digest (apply str (repeat 64 "a"))}
+                                                  changed-result)
+                              (provenance/verify! changed-source changed-policy changed-result)))))))
+
 (deftest all-backends-share-one-kir
   (let [results (map #(compiler/compile-source source %) compiler/targets)]
     (is (= 1 (count (set (map :kir results)))))
     (is (every? #(= #{} (get-in % [:kir :effects])) results))))
+
+(deftest compatibility-metadata-is-target-specific-and-sealed
+  (let [wasm (compiler/compile-source source :wasm32-browser-kotoba-v1)
+        js (compiler/compile-source source :js-browser-kotoba-v1)
+        native (compiler/compile-source source :x86_64-linux-kotoba-v1)]
+    (doseq [compiled [wasm js native]]
+      (is (= :kotoba.compatibility/v1 (get-in compiled [:compatibility :format]))))
+    (is (= (:compatibility js)
+           (get-in js [:manifest :kotoba.artifact/compatibility])))
+    (is (= (:compatibility native)
+           (get-in native [:artifact :compatibility])))
+    (is (artifact/valid-seal? (:artifact native)))
+    (is (not= (get-in wasm [:compatibility :runtime])
+              (get-in js [:compatibility :runtime])))))
 
 (deftest explicit-platform-targets-bind-os-abi-and-runtime-profile
   (let [linux (:artifact (compiler/compile-source source :x86_64-linux-kotoba-v1))
@@ -96,6 +139,23 @@
         result (shell/sh "node" "--input-type=module" "-e" program)]
     (is (zero? (:exit result)) (:err result))
     (is (= (str expected) (str/trim (:out result))))))
+
+(deftest safe-source-identifiers-that-contain-ambient-names-compile-and-run
+  (let [source "(ns timing (:export [shot-hit]))
+                (defn shot-hit [delta-present delta-ms window-ms]
+                  (if delta-present
+                    (if (<= delta-ms window-ms) 1 0)
+                    0))"
+        compiled (compiler/compile-source source :js-kotoba-v1)
+        encoded (.encodeToString (java.util.Base64/getEncoder)
+                                 (.getBytes ^String (:source compiled) "UTF-8"))
+        program (str "import('data:text/javascript;base64," encoded
+                     "').then(m=>{const f=m.instantiateKotoba({})['shot-hit'];"
+                     "console.log(String(f(1n,150n,150n))+','+String(f(1n,151n,150n))+','+String(f(0n,0n,150n)))})")
+        result (shell/sh "node" "--input-type=module" "-e" program)]
+    (is (str/includes? (:source compiled) "k$window$002dms"))
+    (is (zero? (:exit result)) (:err result))
+    (is (= "1,0,0" (str/trim (:out result))))))
 
 (deftest emits-and-verifies-native-machine-code
   (doseq [target [:x86_64-kotoba-v1 :aarch64-kotoba-v1]]

@@ -18,6 +18,15 @@ profiles, conformance and runtime digests, CI run, test time, and expiry.
 
 The multi-target, deny-by-default compiler for the safe Kotoba language.
 
+All compilation results carry
+`:kotoba.floating-point/forbidden-v1`; restricted JavaScript artifacts also
+seal the equivalent `floatingPointPolicy: 'forbidden-v1'`. Floating-point
+literals, descriptors, parameters, results, operations, and boundary values
+are not admitted. JavaScript numbers, NaN, infinities, signed zero, implicit
+rounding, and integer-to-double coercion therefore cannot become accidental
+Kotoba semantics. Introducing floats requires a new versioned policy and ABI,
+not a silent widening of this profile.
+
 ## Relationship to `kotoba-lang/kotoba` and `kotoba-lang/kotoba-lang`
 
 This repository is the CLJC-native successor of `kotoba-lang/kotoba`'s
@@ -60,7 +69,10 @@ WGSL, CUDA C or Metal Shading Language. Sealed GPU artifacts bind KIR/code hashe
 re-lowered during verification, including against attacker-resealed code. This
 is the shared GPU compiler contract consumed by `kotoba-lang/num`; see
 ADR-0002.
-`.kotoba` is the sole admitted source-file format.
+`.kotoba`, `.cljk` (CLJ-shaped Kotoba), and `.cljc` (portable common source)
+are admitted source-discovery extensions. All three enter the exact same closed
+Kotoba reader, type/effect admission and selected backend; none enables the JVM,
+the full Clojure/ClojureScript reader, reader conditionals, or ambient host APIs.
 
 ```text
 source -> inert reader -> typed/effect HIR -> SSA-like KIR
@@ -136,6 +148,155 @@ value, narrowing the gap from "silently wrong" to "loudly fails," the
 same fail-closed posture as fuel/division/capability. See
 `backend/cljs.clj`'s own docstring for the full, honest scope.
 
+The restricted JavaScript target is selected with `--target js`. A Web
+library may deliberately omit `main`, but only when its namespace declares a
+non-empty host boundary, for example `(ns example.math (:export [add1]))`.
+This produces an entryless ESM artifact whose frozen API contains only those
+exports. Entryless source is rejected for every native, Wasm, and
+ClojureScript target; executable programs still require an exported,
+zero-argument `main`. Missing, empty, private, duplicate, or unknown exports
+fail closed before lowering.
+
+The Web target also carries the first non-i64 value profile without erasing
+types. Typed parameters use alternating name/type pairs and an optional result
+type follows the parameter vector:
+
+```clojure
+(ns example.text (:export [greet]))
+(defn greet [name :string] :string
+  (string-concat "こんにちは、" name))
+```
+
+This lowers to checked `kotoba.kir/v4`; `:string`, `:keyword`, `:map`, `:bool`,
+`:option-i64`, `:result-i64`, and `:i64` remain distinct in
+every function signature. The admitted string surface is deliberately small:
+`string-concat`, `string=?`, and `string-byte-length`. Literals must be
+well-formed UTF-16 and at most 4,096 UTF-8 bytes, all module literals together
+are capped at 65,536 bytes, and runtime values are capped at 65,536 bytes.
+Generated ESM revalidates types, Unicode shape, and byte limits at function and
+host boundaries. The qualified Wasm algebraic subset uses the sealed
+`kotoba.typed/externref-v1` ABI described below. Native and ClojureScript
+targets, and typed operations not yet lowered by Wasm, fail closed; strings are
+never replaced with hashes or silently treated as integer handles.
+
+Keywords preserve canonical Unicode text with a 512-byte bound and never use
+probabilistic integer hashing. The first owned map profile admits at most 128
+unique keyword keys with signed-i64 values. `get`, `assoc`, and `{:k value}`
+lower to typed KIR map operations; generated ESM uses canonical frozen entry
+arrays and persistent updates. Mixed/nested map values remain fail-closed.
+Booleans are strict values rather than integer truthiness. `nil` lowers only
+to the none case of `:option-i64`; `(some value)`, `some?`, `nil?`, and
+`option-value` operate on an explicit bounded option. Web host values use
+frozen `[false]` or `[true, bigint]` tags. Host null/undefined, malformed tags,
+integer sentinels, and non-i64 payloads fail closed.
+
+The first algebraic-result profile is `:result-i64`. `(result-ok value)` and
+`(result-err error)` each carry exactly one signed-i64 payload;
+`result-ok?`, `result-value`, and `result-error` inspect it without host
+truthiness or sentinels, and the two projections evaluate their fallback only
+for the opposite variant. Its Web ABI is frozen `[true, bigint]` or
+`[false, bigint]`. This closes a monomorphic tagged-union ABI foundation; it
+does not yet admit generic or recursive ADTs.
+
+Parametric results use `[:result ok-type err-type]`. Their constructors and
+projections are the explicit `result-*-of` forms and always carry the same
+descriptor, so neither the frontend nor generated JavaScript guesses types
+from host shapes. Descriptors and nested runtime payloads are capped at depth
+8 and 64 nodes and are revalidated at every function/export boundary.
+`match-result` requires the canonical pair of `(ok binder body)` and
+`(err binder body)` branches. Binder types come from the descriptor, branch
+result types must agree, and only the selected branch is evaluated; omitted,
+duplicated, reordered, or ill-typed branches fail during checking.
+
+Closed user variants use
+`[:variant :qualified/type [[:case payload-type] ...]]` with 1--32 unique
+cases inside the same depth/node budgets. Runtime values carry the complete
+descriptor, case keyword, and payload; a same-named case from a different
+descriptor cannot cross a boundary. `match-variant` requires every case once,
+in declaration order, and admits no wildcard that could hide schema growth.
+
+Generic options use `[:option payload-type]`. Their canonical Web ABI is
+`[descriptor, false]` for none and `[descriptor, true, payload]` for some, so
+even a payload-free none retains exact type identity. `option-some-of`,
+`option-none-of`, `option-some?-of`, `option-value-of`, and exhaustive
+`match-option` carry the descriptor explicitly. Null, undefined, untyped
+sentinels, cross-option substitution, malformed tags, and eager fallback
+evaluation are rejected.
+
+Fixed heterogeneous vectors use `[:vector [item-type ...]]` with at most 32
+positions inside the shared descriptor budget. Their canonical Web ABI is
+`[descriptor, item ...]`; exact descriptor identity, length, and every
+position's type are revalidated at boundaries. `(hetero-vector descriptor
+...)` constructs an exact value. `hetero-vector-at` and
+`hetero-vector-assoc` require an admission-time in-range integer index, making
+the projected/replacement type static. Updates return a new frozen value, and
+`hetero-vector-equal` performs validated structural equality without exposing
+JavaScript object identity. Dynamic indexes, sparse values, append/drop, and
+host mutation are not admitted.
+
+Typed sets use `[:set item-type]` and at most 32 values inside the shared
+depth/node budget. Canonical values are `[descriptor, sorted-items]` with
+recursive type validation, a language-owned total order across every admitted
+value family, frozen Web arrays, and duplicate rejection. `(typed-set
+descriptor ...)`, count, membership, idempotent insertion, removal, and
+structural equality preserve this representation without observing host
+insertion order or object identity.
+
+Canonical typed maps use `[:map key-type value-type]` and at most 31 entries
+inside the shared 64-node value budget. Values are
+`[descriptor, sorted-entry-vector]`; every entry is an exact two-item
+key/value vector, sorted by the same language-owned total order used by typed
+sets. Duplicate keys fail closed. `typed-map-new`, `typed-map-count`,
+`typed-map-contains`, `typed-map-get`, `typed-map-assoc`,
+`typed-map-entry-at`, `typed-map-dissoc`, and `typed-map-equal` preserve the descriptor and validate
+both sides recursively. Lookup returns `[:option value-type]`, so absence
+never uses null, undefined, zero, or a caller-provided sentinel. JavaScript
+object identity, property coercion, insertion order and mutation are outside
+the ABI. The older leaf `:map` profile remains a separate keyword-to-i64
+compatibility type and is not interchangeable with `[:map K V]`.
+`typed-map-entry-at` accepts a checked i64 index and returns
+`[:option [:vector [key-type value-type]]]`; it provides deterministic,
+fuel-bounded traversal without admitting callbacks or host iterators.
+
+Nominal bounded records use
+`[:record :qualified/type [[:field field-type] ...]]`, with 1–32 unique
+keyword fields in declaration order under the shared descriptor budget. Their
+canonical ABI is `[descriptor, field-value ...]`. `(record descriptor ...)`
+must supply every field exactly once; `record-get` and `record-assoc` require a
+declared keyword literal, so field types remain static and updates are
+persistent. Exact nominal descriptor, arity, and recursive field validation
+exclude cross-schema substitution, unknown/dynamic fields, sparse host objects,
+prototype behavior, and host identity from record semantics.
+
+The machine-readable corpus at
+`resources/kotoba/compiler/typed-value-conformance.edn` is the shared
+qualification source for these algebraic value families and the floating-point
+denial policy. Every positive vector now executes against the reference
+interpreter, restricted Web emitter, and Wasm externref runtime, with the same
+compile-time or runtime fail-closed boundary for negative vectors. `.cljk` is
+a Kotoba source extension selecting the compiler; it is not a separate runtime
+ABI and must follow the ABI of the selected target.
+
+The Wasm parity path reserves the versioned `kotoba.typed` custom section for
+canonical binary descriptor and literal tables. Hosts parse it with strict
+UTF-8, uniqueness, EOF, depth, node, member, and table limits before
+instantiation. `kotoba.typed/externref-v1` consumes that table through frozen
+canonical values, validates every reference parameter and result, and rejects
+forged or cross-schema values. The compiled result seals the required Wasm
+reference-types feature. Unsupported KIR v4 operations still fail during
+lowering; metadata presence alone is never treated as qualification.
+
+The first bounded sequential collection is `:vector-i64`, constructed
+explicitly with `(vector-i64 ...)` and capped at 128 items. `vector-count`,
+`vector-get`, `vector-assoc`, and `vector-conj` preserve signed-i64 elements;
+get uses a lazy fallback for every out-of-range index, while assoc traps.
+Generated Web values are frozen arrays and updates are persistent. Ordinary
+`[1 2 3]` literals now lower to this profile. Flat `[a b & rest]`
+destructuring uses trapping required positions and a bounded frozen suffix;
+missing positions fail closed instead of silently becoming zero or nil.
+Destructured function parameters must declare `:vector-i64` explicitly.
+The explicit `(list ...)` surface retains the legacy pair-chain representation.
+
 Release-oriented target identities explicitly bind execution format, ISA, OS,
 ABI, and runtime profile. Current explicit names are `wasm32-browser`, `wasm32-wasi`,
 `x86_64-linux`, `x86_64-macos`, `x86_64-windows`, `aarch64-linux`,
@@ -181,6 +342,14 @@ Mach-O `__TEXT,__text`, and binds artifact, code, entry, and assembly digests in
 the manifest. Pinned Xcode 16.2 CI builds the text object and a no-JIT static
 host archive twice byte-identically. Device code signing, app embedding, trap
 isolation, and physical iPhone/iPad execution remain release gates.
+A separate CI job additionally links that same static host archive into a
+plain executable against the `iphonesimulator` SDK and runs it for real inside
+the iOS Simulator (`npm run test-ios-simulator`, arm64-native on the Apple
+Silicon CI runner, no Rosetta) -- unlike the device path above, this actually
+executes the compiled code and checks the result, not just static Mach-O
+shape. This needs no physical hardware or paid signing (Simulator binaries
+run unsigned), but does not by itself count toward this repo's coverage
+percentage -- see ADR-0001's Phase 3 for why.
 
 `wasm32-wasi` is the first server/component profile. Its Wasm custom section
 seals `wasm32-wasi-kotoba-v1`; the dependency-free host rejects missing or
@@ -405,8 +574,9 @@ mutation.
 `kotoba -M check` performs capability admission before backend selection.
 `cap-call` accepts only a literal ID in `[0,255]`; effects propagate through the
 full function-call graph, including cycles and lexical bindings. Admission is
-deny-by-default and covers every exported function, returns a least-privilege
-policy, and reports unused grants. Wasm lowers admitted calls to the sole
+deny-by-default and conservatively covers every declared function, including
+private functions; it returns a least-privilege policy and reports unused
+grants. Wasm lowers admitted calls to the sole
 `kotoba:cap/call(i64,i64)->i64` import; the host rechecks policy on every call.
 Native targets carry a sealed context-v1 layout. Generated code checks its
 256-bit allow bitmap before calling the single fixed callback slot; the callback
@@ -460,6 +630,26 @@ kotoba -M check examples/capability.kotoba \
   --policy examples/capability-policy.edn
 kotoba -M compile examples/capability.kotoba --target wasm32 \
   --policy examples/capability-policy.edn --output capability.wasm
+```
+
+`cap-call`'s capability id may also be written as a namespaced keyword name
+(ADR-2607182410) instead of a magic integer, e.g. `(cap-call :identity/sign
+value)`. The name is resolved against this compiler's own local registry,
+`resources/kotoba/compiler/capability-registry.edn` (a small, closed
+name->id table -- deliberately separate from any other repo's capability
+table), at parse time -- before anything else in the compiler runs, so
+`--policy` still grants/denies by the resolved integer id exactly as before.
+An unregistered name is a hard parse-time error. `examples/capability-named.
+kotoba` / `examples/capability-named.edn` are the named-form counterpart of
+the pair above, and additionally show the optional `ns` `(:capabilities
+#{...})` declaration, which the compiler checks is an exact match (declared
+== used) for every named `cap-call` in that namespace:
+
+```bash
+kotoba -M check examples/capability-named.kotoba \
+  --policy examples/capability-named.edn
+kotoba -M compile examples/capability-named.kotoba --target wasm32 \
+  --policy examples/capability-named.edn --output capability-named.wasm
 ```
 
 After putting `bin/kotoba` on `PATH`, the public command is simply

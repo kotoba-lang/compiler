@@ -18,12 +18,15 @@
   malformed/trailing EDN at all (silently used only the FIRST top-level
   form) -- both are fixed here, not just the one conformance check that
   happened to catch it."
-  (:require [kotoba.compiler.frontend :as frontend]
+  (:require ["node:path" :as node-path]
+            [kotoba.compiler.frontend :as frontend]
             [kotoba.compiler.admission :as admission]
+            [kotoba.compiler.diagnostic :as diagnostic]
             [kotoba.compiler.ir :as ir]
             [kotoba.compiler.backend.wasm :as wasm]
             [kotoba.compiler.kotoba-reader :as kr]
-            [kotoba.compiler.nbb.io :as io]))
+            [kotoba.compiler.nbb.io :as io]
+            [kotoba.compiler.source-path :as source-path]))
 
 ;; Mirrors `kotoba.compiler.cli`'s `parse-target`, restricted to the three
 ;; wasm32 target names -- the only ones this fast path claims. Every other
@@ -39,10 +42,7 @@
 (defn- usage-error! [message]
   (throw (ex-info message {:phase :usage})))
 
-(defn- kotoba-source! [path]
-  (when-not (and (string? path) (.endsWith path ".kotoba"))
-    (usage-error! "error: input must be a .kotoba file"))
-  path)
+(defn- kotoba-source! [path] (source-path/admit! path))
 
 (defn- read-edn-form!
   "Reads exactly one top-level EDN form from TEXT, same contract
@@ -106,17 +106,20 @@
     :output 74
     70))
 
-(defn- error-report [e]
+(defn- error-report [e source-name]
   (let [data (ex-data e)
         phase (or (:phase data) :internal)]
     {:format :kotoba.cli-error/v1
      :ok false
      :error phase
+     :diagnostic (diagnostic/from-error e source-name)
      :message (if (= phase :internal) "internal compiler error" (.-message e))}))
 
 (try
   (run! (vec *command-line-args*))
   (catch :default e
-    (let [report (error-report e)]
+    (let [source (second *command-line-args*)
+          source-name (when (source-path/source-kind source) (.basename node-path source))
+          report (error-report e source-name)]
       (.error js/console (pr-str report))
       (.exit js/process (exit-code (:error report))))))

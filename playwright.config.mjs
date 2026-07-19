@@ -5,6 +5,18 @@ const brandedProjects = process.env.KOTOBA_BRANDED_BROWSERS === "1" ? [
   { name: `chrome-stable-${platform}`, use: { ...devices["Desktop Chrome"], channel: "chrome" } },
   { name: `edge-stable-${platform}`, use: { ...devices["Desktop Edge"], channel: "msedge" } }
 ] : [];
+// Playwright's `channel` option only selects a named, currently-installable release
+// channel (stable/beta/dev/canary for the Chromium family); it has no mechanism to pin
+// an arbitrary *historical* version number, and there is no upstream "chrome-N-1" channel
+// to select. So this is NOT a backward previous-version compatibility lane. What it does
+// buy is a forward-looking signal: does the Wasm/CSP contract still hold against the
+// pre-stable build each vendor is about to ship next. Firefox and WebKit have no
+// beta/dev/nightly `channel` value in Playwright (only Chromium-family browsers expose
+// this), so there is no equivalent lane for them here.
+const betaProjects = process.env.KOTOBA_BETA_BROWSERS === "1" ? [
+  { name: `chrome-beta-${platform}`, use: { ...devices["Desktop Chrome"], channel: "chrome-beta" } },
+  { name: `edge-beta-${platform}`, use: { ...devices["Desktop Edge"], channel: "msedge-beta" } }
+] : [];
 
 export default defineConfig({
   testDir: "./tests/browser",
@@ -31,6 +43,7 @@ export default defineConfig({
     { name: "webkit-desktop", use: { ...devices["Desktop Safari"] } },
     { name: "chromium-mobile-emulation", use: { ...devices["Pixel 7"] } },
     { name: "webkit-mobile-emulation", use: { ...devices["iPhone 15"] } },
-    ...brandedProjects
+    ...brandedProjects,
+    ...betaProjects
   ]
 });

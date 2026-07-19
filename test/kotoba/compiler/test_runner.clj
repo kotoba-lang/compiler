@@ -8,19 +8,28 @@
             [kotoba.compiler.coverage-test]
             [kotoba.compiler.coverage-evidence-test]
             [kotoba.compiler.bounded-edn-test]
+            [kotoba.compiler.cache-test]
             [kotoba.compiler.frontend-fuzz-test]
             [kotoba.compiler.frontend-limits-test]
             [kotoba.compiler.frontend-extensions-test]
             [kotoba.compiler.frontend-destructuring-loop-test]
+            [kotoba.compiler.frontend-named-capability-test]
             [kotoba.compiler.backend-cljs-test]
             [kotoba.compiler.ios-aot-test]
+            [kotoba.compiler.interface-test]
             [kotoba.compiler.native-executor-test]
             [kotoba.compiler.admission-test]
+            [kotoba.compiler.guest-grammar-conformance-test]
             [kotoba.compiler.property-test]
+            [kotoba.compiler.project-test]
             [kotoba.compiler.receipt-test]
             [kotoba.compiler.release-test]
             [kotoba.compiler.security-fuzz-test]
             [kotoba.compiler.signing-test]
+            [kotoba.compiler.source-path-test]
+            [kotoba.compiler.typed-value-conformance-test]
+            [kotoba.compiler.wasm-typed-test]
+            [kotoba.compiler.value-test]
             [kotoba.compiler.verifier-profile-test]))
 
 (defn -main [& _]
@@ -32,18 +41,27 @@
                                           'kotoba.compiler.coverage-test
                                           'kotoba.compiler.coverage-evidence-test
                                           'kotoba.compiler.bounded-edn-test
+                                          'kotoba.compiler.cache-test
                                           'kotoba.compiler.frontend-fuzz-test
                                           'kotoba.compiler.frontend-limits-test
                                           'kotoba.compiler.frontend-extensions-test
                                           'kotoba.compiler.frontend-destructuring-loop-test
+                                          'kotoba.compiler.frontend-named-capability-test
                                           'kotoba.compiler.backend-cljs-test
                                           'kotoba.compiler.ios-aot-test
+                                          'kotoba.compiler.interface-test
                                           'kotoba.compiler.admission-test
+                                          'kotoba.compiler.guest-grammar-conformance-test
                                           'kotoba.compiler.signing-test
+                                          'kotoba.compiler.source-path-test
+                                          'kotoba.compiler.typed-value-conformance-test
+                                          'kotoba.compiler.wasm-typed-test
                                           'kotoba.compiler.native-executor-test
                                           'kotoba.compiler.receipt-test
                                           'kotoba.compiler.release-test
                                           'kotoba.compiler.security-fuzz-test
+                                          'kotoba.compiler.value-test
                                           'kotoba.compiler.verifier-profile-test
+                                          'kotoba.compiler.project-test
                                           'kotoba.compiler.property-test)]
-    (when (pos? (+ fail error)) (System/exit 1))))
+    (System/exit (if (pos? (+ fail error)) 1 0))))

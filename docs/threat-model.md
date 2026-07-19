@@ -286,10 +286,19 @@ tests passed. A separate NBB gate requires the closed receipt schema, exact
 expected project set, version syntax, evidence classes, and GitHub commit/run
 binding before upload. The uploaded artifact is still unsigned CI output and
 can expire; it cannot satisfy platform-release evidence or the worldwide 95%
-claim. Branded Chrome/Edge now run on Linux and Windows, with the runner
-platform bound into the receipt. These runs still do not establish
-previous-version compatibility, update-channel integrity, macOS behavior,
-mobile coverage, or physical-device isolation.
+claim. Branded Chrome/Edge stable now run on Linux and Windows, with the
+runner platform bound into the receipt. An additional Chrome Beta / Edge Beta
+lane (`KOTOBA_BETA_BROWSERS=1`, evidence kind `branded-browser-beta`) runs the
+same conformance suite against each vendor's pre-stable channel build. This is
+a forward-looking signal only -- Playwright's `channel` option selects a named
+release channel (stable/beta/dev/canary) and has no mechanism to pin an
+arbitrary historical version, so it cannot and does not establish backward
+previous-version compatibility, and it should not be read as having done so.
+Firefox and WebKit expose no beta/dev/nightly channel in Playwright, so no
+equivalent lane exists for them. These runs still do not establish
+previous-version compatibility, update-channel integrity (in-place upgrade
+behavior), macOS Chrome/Edge behavior, mobile coverage, or physical-device
+isolation.
 
 SafariDriver is an additional CI TCB and is enabled only on the ephemeral macOS
 runner. The controller does not accept remote URLs, arbitrary selectors,
@@ -315,13 +324,111 @@ callbacks use reviewed fixed slots. Job active-process limits and a
 low-integrity restricted impersonation token are checked by negative process
 and filesystem probes on the Windows runner.
 
+Network denial is implemented via the Windows Filtering Platform (WFP), not
+the restricted token: the low-integrity token alone does not reliably block
+Winsock (Windows MIC is primarily a write-up denial mechanism for securable
+objects, and `\Device\Afd` is not integrity-labeled by default, so a Low-IL
+token does not stop `socket()`/`connect()`). Before the token is restricted
+(same "privileged setup, then restrict" ordering as the Job object), the
+loader opens a dynamic WFP session, resolves its own executable's ALE
+application id, and adds `FWP_ACTION_BLOCK` filters keyed to that app id at
+the `FWPM_LAYER_ALE_AUTH_CONNECT_V4`/`_V6` layers (outbound) and the
+`FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4`/`_V6` layers (inbound). The session uses
+`FWPM_SESSION_FLAG_DYNAMIC`, so the filters are torn down by the Base
+Filtering Engine when the loader's engine handle closes or the process exits
+or crashes, rather than persisting on the host. Every WFP call is fail-closed:
+if opening the engine, resolving the app id, or adding any filter fails, the
+loader aborts before guest entry instead of silently running without network
+denial. Negative outbound (`connect()` to loopback) and inbound
+(`bind()`/`listen()` on loopback, then a loopback self-connect) probes assert
+the connection is denied with a specific policy error within a bounded
+deadline; a probe that instead times out is treated as a failure, since a
+timeout means the attempt reached the network stack rather than being denied
+synchronously at WFP admission. This remains single-process: it is not an
+AppContainer, and it does not change the fact that guest traps terminate the
+loader process rather than a separately supervised child. The inbound probe
+cannot, by itself, isolate the `ALE_AUTH_RECV_ACCEPT` filter from the outbound
+`ALE_AUTH_CONNECT` filter, because the Job's `ActiveProcessLimit=1` prevents
+this process from spawning a second, independently-filtered peer to originate
+an inbound-only connection attempt; it demonstrates the end-to-end guarantee
+(no loopback TCP connection completes in either direction) rather than
+isolating the inbound layer. `FwpmEngineOpen0`/`FwpmFilterAdd0` are Base
+Filtering Engine management operations that are documented as requiring an
+administrative caller; this has not been exercised on a real Windows host as
+of this change, so whether the hosted Windows Arm64 CI runner's process is
+privileged enough for these calls to succeed is unverified until that CI job
+actually runs it.
+
+UPDATE (first real CI run, PR #67): the hosted Windows Arm64 CI runner's
+process was privileged enough -- `FwpmEngineOpen0`/`FwpmFilterAdd0` did not
+fail. The failure was downstream, at the outbound (`KEXE_NETWORK_PROBE`)
+assertion: the probe's loopback `connect()` did not resolve to the expected
+denial within the bounded deadline. Root cause is unconfirmed. The filters
+originally requested `FWP_EMPTY` (auto-assigned) weight, which only orders a
+filter among other auto-weighted filters in `FWPM_SUBLAYER_UNIVERSAL` and
+does not guarantee it outranks a higher-weighted filter that may already
+exist there (from other software, or an OS-default permissive rule for
+loopback/local traffic); the filters now request maximum explicit weight
+instead, as a defensive hardening whose effect is unverified pending the
+next CI run. `connect_and_require_denial()`'s diagnostics were also expanded
+so a repeat failure identifies, from the CI log alone, which of "connect
+succeeded", "resolved with an unexpected WSA error", or "timed out
+mid-flight" occurred, and whether that happened synchronously or after the
+non-blocking `select()` wait.
+
+UPDATE (second real CI run, PR #67, confirmed root cause): the weight change
+above did not fix it -- the expanded diagnostics showed the probe's loopback
+`connect()` returning `WSAEWOULDBLOCK` then timing out in `select()` with
+neither a socket error nor a success, which the diagnostic explicitly reads
+as "the WFP block filter is not being evaluated/applied for this connection
+at all". This is a documented Windows Filtering Platform behavior, not a
+weight/ordering bug: per Microsoft's Filtering condition flags reference,
+loopback traffic is a distinct classification at the `ALE_AUTH_CONNECT`/
+`ALE_AUTH_RECV_ACCEPT` layers, tested via the `FWP_CONDITION_FLAG_IS_LOOPBACK`
+flag (`FWPM_CONDITION_FLAGS` field key, `Fwptypes.h`) -- a filter that omits
+this condition is not guaranteed to be evaluated against loopback
+connections/accepts at all. The loader's filters had no such condition, so
+this app's own loopback probes (the only probes this codebase has) were
+never actually admitted to the filter this function installs; the timeout
+is the observable consequence of falling through to some other,
+un-instrumented path instead of hitting `FWP_ACTION_BLOCK`.
+
+Fix: `install_network_denial()` now adds a **second** filter per layer,
+identical to the first except it additionally requires
+`FWP_CONDITION_FLAG_IS_LOOPBACK` (AND-combined with the same ALE app-id
+condition, `FWP_MATCH_FLAGS_ALL_SET`). The original app-id-only filter is
+kept unchanged alongside it -- deliberately not merged into one filter,
+since WFP filter conditions are AND-combined and adding the loopback flag
+to the *existing* filter would have narrowed it to loopback-only, silently
+stopping it from denying genuine (non-loopback) outbound/inbound traffic,
+which is the actual guest-network-egress property this boundary exists for.
+
+Honest residual gap: neither `network_outbound_probe_denied()` nor
+`network_listen_probe_denied()` has ever exercised a genuine non-loopback
+destination -- both probes target `127.0.0.1`. That both filters (general
+and loopback-inclusive) share the same `ALE_APP_ID` condition and action is
+a code-review argument that non-loopback denial works the same way, but it
+is inferred from source, not independently measured by any CI run to date.
+This has also not been exercised on a real Windows host outside CI (no
+Windows SDK available on the machines used for this change); the fix is
+based on Microsoft's own condition-flag documentation and the exact match
+between the documented mechanism and the observed CI symptom, not on local
+reproduction. If a third CI run still fails, the next investigation should
+capture `netsh wfp show filters` and/or a packet trace on the actual
+Windows Arm64 runner (or an equivalent real Windows host) rather than
+iterating blindly again.
+
 This boundary is not yet sufficient for release admission. The product command
 now admits the signed KEXE, verifies its regenerated code, binds the reviewed
 Windows source plus compiler/linker/resource/header closure into runtime trust,
 and passes only extracted code to the measured loader. Windows CI verifies the
 result receipt and rejects both loader-byte mutation and OS-profile
 substitution. Guest traps still terminate the loader process rather than a
-separately supervised child. Network denial is not implemented and
+separately supervised child. An AppContainer/broker-target re-architecture
+(matching the POSIX loader's fork()+supervise() shape, with the token's
+`TokenAppContainerSid` set at `CreateProcess` time) remains a named follow-up
+for a stronger, kernel-enforced network and object-namespace boundary; it is
+out of scope for the current single-process design and has not been started.
 Job/restricted-token behavior has only hosted-runner evidence. Windows Arm64,
 Authenticode/MSIX, SBOM, and provenance gates also remain; these omissions keep
 Windows execution out of release coverage accounting.
