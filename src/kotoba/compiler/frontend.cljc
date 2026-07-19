@@ -700,7 +700,7 @@
     ;; as a bare value. `defn` params are consumed entirely inside
     ;; `analyze`, before any desugar-expr call, for the same reason.
     (vector? form)
-    (do (when (> (count form) value/vector-item-limit)
+    (do (when (> (count form) value/vector-literal-item-limit)
           (reject! "vector literal exceeds item limit" form))
         (apply list 'vector-new (map desugar-expr form)))
     (not (seq? form)) form
@@ -839,7 +839,7 @@
                   (list 'option-some? (desugar-expr (first args))))
         nil? (do (when-not (= 1 (count args)) (reject! "nil? requires one option operand" form))
                  (list 'bool-not (list 'option-some? (desugar-expr (first args)))))
-        vector-i64 (do (when (> (count args) value/vector-item-limit)
+        vector-i64 (do (when (> (count args) value/vector-literal-item-limit)
                          (reject! "vector-i64 exceeds item limit" form))
                        (apply list 'vector-new (map desugar-expr args)))
         match-result
@@ -1455,7 +1455,7 @@
               (validate-expr arg locals functions (inc depth) budget)))
 
         (= op 'vector-new)
-        (do (when (> (count args) value/vector-item-limit)
+        (do (when (> (count args) value/vector-literal-item-limit)
               (reject! "vector-new exceeds item limit" form))
             (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
 

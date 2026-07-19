@@ -406,7 +406,7 @@ function createTypedRuntime(abi) {
       if (!trustedValues.has(value))
         reject("invalid-typed-value", "forged compound typed value rejected");
       if (kind === "vector-i64") {
-        if (!sameTrustedDescriptor(value[0], descriptor) || value.length > 129)
+        if (!sameTrustedDescriptor(value[0], descriptor) || value.length > 16385)
           reject("invalid-typed-value", "vector-i64 shape or item budget is invalid");
         for (let index = 1; index < value.length; index += 1) i64(value[index]);
       } else if (kind === "option") {
@@ -610,7 +610,7 @@ function createTypedRuntime(abi) {
       if (descriptor[0] !== "vector-i64")
         reject("invalid-typed-operation", "vector-conj requires vector-i64");
       const checked = assertValue(descriptor, value);
-      if (checked.length >= 129) reject("invalid-typed-value", "vector-i64 item budget exceeded");
+      if (checked.length >= 16385) reject("invalid-typed-value", "vector-i64 item budget exceeded");
       return admitValue(descriptor, Object.freeze([...checked, i64(item)]));
     },
     "set-op-i64"(descriptorId, value, operation, item) {
@@ -755,7 +755,29 @@ function createTypedRuntime(abi) {
     return admitValue(descriptor, Object.freeze([
       descriptor, Object.freeze(checked[1].filter((_, itemIndex) => itemIndex !== index))]));
   };
-  return Object.freeze({ imports });
+  const vectorDescriptor = abi.descriptors.find(descriptor =>
+    Array.isArray(descriptor) && descriptor[0] === "vector-i64");
+  const hostVector = items => {
+    if (vectorDescriptor === undefined)
+      reject("invalid-typed-value", "module does not admit vector-i64 values");
+    if (!Array.isArray(items) || items.length > 16384)
+      reject("invalid-typed-value", "host vector-i64 input is invalid or oversized");
+    return admitValue(vectorDescriptor,
+      Object.freeze([vectorDescriptor, ...items.map(i64)]));
+  };
+  const values = Object.freeze({
+    vectorI64: hostVector,
+    bytes(items) {
+      if (!(Array.isArray(items) || ArrayBuffer.isView(items)) || items.length > 16384)
+        reject("invalid-typed-value", "host byte input is invalid or oversized");
+      return hostVector(Array.from(items, item => {
+        if (!Number.isInteger(item) || item < 0 || item > 255)
+          reject("invalid-typed-value", "host byte input contains a non-byte value");
+        return BigInt(item);
+      }));
+    }
+  });
+  return Object.freeze({ imports, values });
 }
 
 export function normalizeKotobaTrap(error) {
@@ -812,6 +834,7 @@ export async function instantiateKotoba(source, rawOptions) {
     instance,
     sha256: digest,
     typedAbi,
+    typedValues: typed?.values ?? null,
     compatibility,
     report: () => Object.freeze({ heap: heap.report() })
   });

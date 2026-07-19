@@ -94,7 +94,8 @@
                                         :heterogeneous-vector-items 32
                                         :typed-set-items 32
                                         :typed-map-entries 31
-                                        :record-fields 32))
+                                        :record-fields 32
+                                        :vector-i64-items 16384))
          :bytes (wasm/emit kir target)})
 
       ;; ADR-2607151500: cljs backend emits SOURCE TEXT, not bytes -- no
@@ -129,7 +130,7 @@
                                           :typed-set-items 32
                                           :typed-map-entries 31
                                           :record-fields 32
-                                          :vector-i64-items 128))
+                                          :vector-i64-items 16384))
             js-source (script/emit kir (merge {:source-digest source-digest
                                                :kir-digest kir-digest
                                                :compiler-version compiler-version}
