@@ -10,6 +10,7 @@
             [kotoba.compiler.bounded-edn-test]
             [kotoba.compiler.cache-test]
             [kotoba.compiler.frontend-fuzz-test]
+            [kotoba.compiler.f64-value-test]
             [kotoba.compiler.frontend-limits-test]
             [kotoba.compiler.frontend-extensions-test]
             [kotoba.compiler.frontend-destructuring-loop-test]
@@ -43,6 +44,7 @@
                                           'kotoba.compiler.bounded-edn-test
                                           'kotoba.compiler.cache-test
                                           'kotoba.compiler.frontend-fuzz-test
+                                          'kotoba.compiler.f64-value-test
                                           'kotoba.compiler.frontend-limits-test
                                           'kotoba.compiler.frontend-extensions-test
                                           'kotoba.compiler.frontend-destructuring-loop-test

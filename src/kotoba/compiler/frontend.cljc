@@ -121,6 +121,7 @@
   '{vector-count 1 vector-get 3 vector-at 2 vector-drop 2 vector-assoc 3 vector-conj 2})
 (def sequencing-operations '#{do})
 (def string-operations '{string-byte-length 1 string=? 2 string-concat 2})
+(def f64-operations '{f64-to-bits 1 f64-from-bits 1})
 (def reserved-function-names
   (set/union forbidden-heads arithmetic comparisons (set (keys heap-operations))
              (set (keys kgraph-operations))
@@ -137,6 +138,7 @@
              record-operations
              (set (keys typed-vector-operations))
              (set (keys string-operations))
+             (set (keys f64-operations))
              '#{let if cap-call ns defn defn- some some? nil? vector-i64 vector-new
                 hetero-vector typed-set record match-result match-variant match-option}))
 (def max-functions 1024)
@@ -160,7 +162,7 @@
 ;; most 256 distinct capabilities can ever exist), not the unrelated
 ;; function-count limit.
 (def max-namespace-capabilities 256)
-(def value-types #{:i64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64})
+(def value-types #{:i64 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64})
 
 (declare reject!)
 
@@ -199,7 +201,10 @@
    (when (> depth max-type-depth)
      (reject! "value type exceeds depth limit" type))
    (cond
-     (contains? value-types type) type
+     (contains? value-types type)
+     (do (when (and (= type :f64) (pos? depth))
+           (reject! "f64 is admitted only as a phase-1 scalar, not inside structured values" type))
+         type)
      (parametric-result-type? type)
      (do (validate-value-type! (second type) (inc depth) nodes)
          (validate-value-type! (nth type 2) (inc depth) nodes)
@@ -687,6 +692,7 @@
 
 (defn- desugar-expr* [form]
   (cond
+    (value/f64-value? form) (list 'f64-from-bits (value/f64-to-i64-bits form))
     (keyword? form) form
     (boolean? form) form
     (nil? form) '(option-none)
@@ -1190,6 +1196,11 @@
               (reject! "string operation arity mismatch" form))
             (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
 
+        (contains? f64-operations op)
+        (do (when-not (= (get f64-operations op) (count args))
+              (reject! "f64 operation arity mismatch" form))
+            (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
         (contains? typed-map-operations op)
         (do (case op
               map-new (when (odd? (count args))
@@ -1603,6 +1614,12 @@
             (require-expression-type! type :string arg))
           :string)
 
+      (= op 'f64-to-bits)
+      (do (require-expression-type! (first types) :f64 (first args)) :i64)
+
+      (= op 'f64-from-bits)
+      (do (require-expression-type! (first types) :i64 (first args)) :f64)
+
       (= op 'map-new)
       (do (doseq [[key-form value-form key-type value-type]
                   (map (fn [[key-form value-form] [key-type value-type]]
@@ -1639,6 +1656,7 @@
 (defn- infer-expression-type [form locals signatures]
   (cond
     (kotoba-integer? form) :i64
+    (value/f64-value? form) :f64
     (string? form) :string
     (keyword? form) :keyword
     (boolean? form) :bool
@@ -1980,6 +1998,7 @@
 (defn- lowered-cost [form env]
   (cond
     (kotoba-integer? form) 1
+    (value/f64-value? form) 1
     (string? form) 1
     (keyword? form) 1
     (boolean? form) 1
@@ -2089,7 +2108,7 @@
         (reject! "typed parameters require alternating name/type pairs" raw-params))
       (mapv (fn [[pattern type]]
               (validate-value-type! type)
-              (when (and (or (contains? #{:string :keyword :map :bool :option-i64 :result-i64 :vector-i64} type)
+              (when (and (or (contains? #{:f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64} type)
                              (structured-type? type))
                          (not (or (symbol? pattern)
                                   (and (= type :map) (map? pattern))
@@ -2340,9 +2359,9 @@
     (check-lowering-budget! parsed)
     (let [typed-values? (boolean
                          (some (fn [{:keys [param-types result body]}]
-                                 (or (some #(or (contains? #{:string :keyword :map :bool :option-i64 :result-i64 :vector-i64} %)
+                                 (or (some #(or (contains? #{:f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64} %)
                                                 (structured-type? %)) param-types)
-                                     (or (contains? #{:string :keyword :map :bool :option-i64 :result-i64 :vector-i64} result)
+                                     (or (contains? #{:f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64} result)
                                          (structured-type? result))
                                      (some #(or (string? %) (keyword? %) (boolean? %)
                                                 (and (seq? %)

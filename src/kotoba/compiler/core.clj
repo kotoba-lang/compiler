@@ -7,6 +7,7 @@
             [kotoba.compiler.ir :as ir]
             [kotoba.compiler.admission :as admission]
             [kotoba.compiler.backend.wasm :as wasm]
+            [kotoba.compiler.backend.wasm-typed :as typed]
             [kotoba.compiler.backend.cljs :as cljs]
             [kotoba.script :as script]
             [kotoba.compiler.backend.x86-64 :as x86-64]
@@ -20,7 +21,7 @@
            [java.security MessageDigest]))
 
 (def compiler-version compatibility/compiler-version)
-(def floating-point-policy :kotoba.floating-point/forbidden-v1)
+(def floating-point-policy :kotoba.floating-point/ieee-754-f64-bits-v1)
 
 (defn- text-sha256 [text]
   (let [digest (.digest (MessageDigest/getInstance "SHA-256")
@@ -59,6 +60,11 @@
    (let [profile (target-profile/profile target)
         backend (target-profile/backend target)
         hir (frontend/analyze source)
+        _ (when (and (ir/uses-f64? hir)
+                     (not (contains? #{:js-kotoba-v1 :wasm32-kotoba-v1} backend)))
+            (throw (ex-info "f64 values require the kotoba-script or Wasm target"
+                            {:phase :target :target target :backend backend
+                             :floating-point-policy floating-point-policy})))
         _ (when (and (= :kotoba.hir/v3 (:format hir))
                      (not (contains? #{:js-kotoba-v1 :wasm32-kotoba-v1} backend))
                      (not (and (contains? #{:x86_64-kotoba-v1 :aarch64-kotoba-v1} backend)
@@ -66,14 +72,17 @@
             (throw (ex-info "typed values currently require the kotoba-script web target, typed Wasm target, or (native targets) string-only typed features"
                             {:phase :target :target target :backend backend
                              :value-profile :kotoba.value/typed-v1})))
-        _ (when (and (nil? (:entry hir)) (not= backend :js-kotoba-v1))
-            (throw (ex-info "entryless libraries currently require the kotoba-script web target"
+        _ (when (and (nil? (:entry hir))
+                     (not (contains? #{:js-kotoba-v1 :wasm32-kotoba-v1} backend)))
+            (throw (ex-info "entryless libraries currently require the kotoba-script web target or Wasm target"
                             {:phase :target :target target :backend backend})))
         admission (admission/check hir policy)
         kir (ir/lower hir)
         value (:oracle-value kir)
         typed-values? (= :kotoba.kir/v4 (:format kir))
-        value-abi (if typed-values? :kotoba.typed/externref-v1 :kotoba.i64/direct-v1)
+        value-abi (cond (ir/uses-f64? hir) :kotoba.typed/mixed-f64-v2
+                        typed-values? :kotoba.typed/externref-v1
+                        :else :kotoba.i64/direct-v1)
         compatibility (compatibility/descriptor
                        {:hir-format (:format hir) :kir-format (:format kir)
                         :target target :target-profile profile :value-abi value-abi})]
@@ -85,8 +94,10 @@
          :compatibility compatibility
          :floating-point-policy floating-point-policy
          :value-profile (if typed-values? :kotoba.value/typed-v1 :kotoba.value/i64-v1)
-         :value-abi (if typed-values? :kotoba.typed/externref-v1 :kotoba.i64/direct-v1)
-         :wasm-features (if typed-values? #{:reference-types} #{})
+         :value-abi value-abi
+         :wasm-features (cond-> #{}
+                          (typed/requires-host-runtime? kir) (conj :reference-types)
+                          (ir/uses-f64? kir) (conj :ieee-754-f64))
          :limits (cond-> {:fuel 512 :replenishable? false}
                    typed-values? (assoc :parametric-adt-depth 8
                                         :parametric-adt-nodes 64

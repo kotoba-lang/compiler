@@ -15,6 +15,31 @@
 (def typed-map-entry-limit 31)
 (def record-field-limit 32)
 
+(defn f64-value? [value]
+  #?(:clj (instance? Double value)
+     :cljs (number? value)))
+
+(defn f64-to-i64-bits [value]
+  (when-not (f64-value? value)
+    (throw (ex-info "value is not f64" {:phase :value :value value})))
+  #?(:clj (Double/doubleToRawLongBits ^double value)
+     :cljs (let [buffer (js/ArrayBuffer. 8)
+                 view (js/DataView. buffer)]
+             (.setFloat64 view 0 value true)
+             (.getBigInt64 view 0 true))))
+
+(defn i64-bits-to-f64 [bits]
+  #?(:clj (do
+            (when-not (and (integer? bits) (<= Long/MIN_VALUE bits Long/MAX_VALUE))
+              (throw (ex-info "f64 bit pattern is not i64" {:phase :value :value bits})))
+            (Double/longBitsToDouble (long bits)))
+     :cljs (let [buffer (js/ArrayBuffer. 8)
+                 view (js/DataView. buffer)]
+             (when-not (and (i64/bigint-value? bits) (i64/in-i64-range? bits))
+               (throw (ex-info "f64 bit pattern is not i64" {:phase :value :value bits})))
+             (.setBigInt64 view 0 bits true)
+             (.getFloat64 view 0 true))))
+
 (defn utf8-byte-count!
   "Return the exact UTF-8 byte count without normalizing or replacing malformed
   UTF-16. Unpaired surrogates fail closed on both JVM and JavaScript hosts."
@@ -131,7 +156,7 @@
   value)
 
 (def ^:private leaf-value-types
-  #{:i64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64})
+  #{:i64 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64})
 
 (defn validate-value-type!
   ([type] (validate-value-type! type 0 (volatile! 0)))
@@ -142,7 +167,11 @@
    (when (> depth adt-depth-limit)
      (throw (ex-info "value type exceeds depth limit" {:phase :value :limit adt-depth-limit})))
    (cond
-     (contains? leaf-value-types type) type
+     (contains? leaf-value-types type)
+     (do (when (and (= type :f64) (pos? depth))
+           (throw (ex-info "f64 is admitted only as a phase-1 scalar"
+                           {:phase :value :type type})))
+         type)
      (and (vector? type) (= 3 (count type)) (= :result (first type)))
      (do (validate-value-type! (second type) (inc depth) nodes)
          (validate-value-type! (nth type 2) (inc depth) nodes)
@@ -295,6 +324,8 @@
      :i64 (do (when-not #?(:clj (and (integer? value) (<= Long/MIN_VALUE value Long/MAX_VALUE))
                               :cljs (and (i64/bigint-value? value) (i64/in-i64-range? value)))
                 (throw (ex-info "value is not a signed i64" {:phase :value}))) value)
+     :f64 (do (when-not (f64-value? value)
+                (throw (ex-info "value is not f64" {:phase :value}))) value)
      :string (bounded-string! value string-value-byte-limit)
      :keyword (bounded-keyword! value keyword-value-byte-limit)
      :map (bounded-map! value)
