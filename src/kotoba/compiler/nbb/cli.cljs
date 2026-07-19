@@ -185,8 +185,8 @@
                       :x86_64-kotoba-v1 :runtime-sysv-v1
                       :aarch64-kotoba-v1 :runtime-aapcs64-v1)
           :fuel-abi (case backend
-                      :x86_64-kotoba-v1 {:mode :hidden-context-r9 :initial 256}
-                      :aarch64-kotoba-v1 {:mode :hidden-context-x7 :initial 256})
+                      :x86_64-kotoba-v1 {:mode :hidden-context-r9 :initial 512}
+                      :aarch64-kotoba-v1 {:mode :hidden-context-x7 :initial 512})
           :context-abi {:version 2 :fuel-offset 8 :allow-bitmap-offset 16
                         :allow-bitmap-bytes 32 :cap-call-offset 48
                         :pair-new-offset 56 :pair-first-offset 64
@@ -198,7 +198,7 @@
                         :string-pool-capacity 65536}
           :effects (:effects hir)
           :compatibility compat
-          :limits {:memory-bytes 65536 :fuel 256 :stack-bytes 4096}
+          :limits {:memory-bytes 65536 :fuel 512 :stack-bytes 4096}
           :code (mapv #(bit-and (int %) 0xff) code)
           :program program :exports (:exports emitted)})]
     (verifier/verify-artifact! artifact-map)

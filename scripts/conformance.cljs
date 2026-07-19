@@ -88,7 +88,7 @@
   (let [[binary off] (offset artifact isa "main" "-report")
         result (run (file "kexe-loader") [binary off "0" isa "-"]
                     {:env {:KEXE_STRUCTURED_REPORT "1"}})]
-    (ensure! (= "{:status :ok :result 42 :fuel {:initial 256 :remaining 253} :heap {:capacity 4096 :used 0}}"
+    (ensure! (= "{:status :ok :result 42 :fuel {:initial 512 :remaining 509} :heap {:capacity 4096 :used 0}}"
                 (str/trim (:stdout result)))
              "native structured report mismatch")))
 

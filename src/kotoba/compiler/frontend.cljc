@@ -545,7 +545,7 @@
   (analyze's uses-map-get? scan) -- ADR-2607150000. Written directly in
   already-primitive form (if/=/pair-first/pair-second/self-call), not run
   through desugar-expr. Each recursive step costs 1 unit of this
-  compiler's existing fixed 256-instruction-call fuel budget (ir.clj/
+  compiler's existing fixed 512-instruction-call fuel budget (ir.clj/
   backend/wasm.clj/core.clj's `default-fuel`/global fuel counter) -- a
   map lookup on a long map, or a miss, can exhaust it; not a new limit,
   the existing one now also bounds map-walk depth."

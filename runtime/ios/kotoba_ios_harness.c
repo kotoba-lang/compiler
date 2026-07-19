@@ -27,7 +27,7 @@ int main(void) {
     return status;
   }
   printf("{:status :ok :result %" PRId64
-         " :fuel {:initial 256 :remaining %" PRIu64 "} :pairs {:used %" PRIu64 "}}\n",
+         " :fuel {:initial 512 :remaining %" PRIu64 "} :pairs {:used %" PRIu64 "}}\n",
          result.value, result.fuel_remaining, result.pairs_used);
   return 0;
 }

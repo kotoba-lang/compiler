@@ -87,7 +87,7 @@
          :value-profile (if typed-values? :kotoba.value/typed-v1 :kotoba.value/i64-v1)
          :value-abi (if typed-values? :kotoba.typed/externref-v1 :kotoba.i64/direct-v1)
          :wasm-features (if typed-values? #{:reference-types} #{})
-         :limits (cond-> {:fuel 256 :replenishable? false}
+         :limits (cond-> {:fuel 512 :replenishable? false}
                    typed-values? (assoc :parametric-adt-depth 8
                                         :parametric-adt-nodes 64
                                         :variant-cases 32
@@ -107,14 +107,14 @@
        :hir hir :kir kir :admission admission
        :compatibility compatibility
        :floating-point-policy floating-point-policy
-       :limits {:fuel 256 :replenishable? false} :source (cljs/emit kir)}
+       :limits {:fuel 512 :replenishable? false} :source (cljs/emit kir)}
 
       (= backend :js-kotoba-v1)
       (let [source-digest (text-sha256 source)
             kir-digest (artifact/sha256 kir)
             typed-values? (= :kotoba.kir/v4 (:format kir))
             value-profile (if typed-values? :kotoba.value/typed-v1 :kotoba.value/i64-v1)
-            limits (cond-> {:fuel 256 :replenishable? false}
+            limits (cond-> {:fuel 512 :replenishable? false}
                      typed-values? (assoc :string-literal-bytes 4096
                                           :string-module-literal-bytes 65536
                                           :string-value-bytes 65536
@@ -167,8 +167,8 @@
                                    :x86_64-kotoba-v1 :runtime-sysv-v1
                                    :aarch64-kotoba-v1 :runtime-aapcs64-v1)
                        :fuel-abi (case backend
-                                   :x86_64-kotoba-v1 {:mode :hidden-context-r9 :initial 256}
-                                   :aarch64-kotoba-v1 {:mode :hidden-context-x7 :initial 256})
+                                   :x86_64-kotoba-v1 {:mode :hidden-context-r9 :initial 512}
+                                   :aarch64-kotoba-v1 {:mode :hidden-context-x7 :initial 512})
                        :context-abi {:version 2 :fuel-offset 8 :allow-bitmap-offset 16
                                      :allow-bitmap-bytes 32 :cap-call-offset 48
                                      :pair-new-offset 56 :pair-first-offset 64
@@ -181,7 +181,7 @@
                       :effects (:effects hir)
                        :compatibility compatibility
                        :limits {:memory-bytes 65536
-                                :fuel 256
+                                :fuel 512
                                 :stack-bytes 4096}
                        :code (mapv #(bit-and (int %) 0xff) code)
                        :program program :exports (:exports emitted)})]

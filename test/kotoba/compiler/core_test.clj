@@ -300,12 +300,12 @@
                 (defn forever [n] (forever (+ n 1)))
                 (defn main [] (fact 5))"
         wasm (compiler/compile-source source :wasm32-kotoba-v1)]
-    (is (= {:fuel 256 :replenishable? false} (:limits wasm)))
+    (is (= {:fuel 512 :replenishable? false} (:limits wasm)))
     (is (= 120 (:oracle-value (:kir wasm))))
     (let [x86 (:artifact (compiler/compile-source source :x86_64-kotoba-v1))
           arm (:artifact (compiler/compile-source source :aarch64-kotoba-v1))]
-      (is (= {:mode :hidden-context-r9 :initial 256} (:fuel-abi x86)))
-      (is (= {:mode :hidden-context-x7 :initial 256} (:fuel-abi arm)))
+      (is (= {:mode :hidden-context-r9 :initial 512} (:fuel-abi x86)))
+      (is (= {:mode :hidden-context-x7 :initial 512} (:fuel-abi arm)))
       (is (pos? (get-in x86 [:exports 'forever :length])))
       (is (pos? (get-in arm [:exports 'forever :length])))
       (is (some #{0xe8} (:code x86)) "contains a real x86 CALL rel32")

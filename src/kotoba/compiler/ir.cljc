@@ -9,7 +9,7 @@
   (:require [kotoba.compiler.value :as value]
             #?@(:cljs [[kotoba.compiler.cljs-i64 :as i64]])))
 
-(def ^:private default-fuel 256)
+(def ^:private default-fuel 512)
 (def ^:private default-pair-capacity 4096)
 (def ^:private default-kgraph-capacity 4096)
 

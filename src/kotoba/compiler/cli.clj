@@ -198,7 +198,7 @@
                   :status (keyword (option args "--status"))
                   :target (parse-target (option args "--target"))
                   :entry (symbol (or (option args "--entry") "main"))
-                  :fuel-initial (Long/parseLong (or (option args "--fuel-initial") "256"))
+                  :fuel-initial (Long/parseLong (or (option args "--fuel-initial") "512"))
                   :fuel-remaining (Long/parseLong (option args "--fuel-remaining"))
                   :parent parent :executor-key executor-key})]
       (atomic-output/write-edn! output-path value)

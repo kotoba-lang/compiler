@@ -97,7 +97,7 @@
           shim (entry-shim source-rva data-rva)
           text (into shim (:code artifact))
           context (into (vec (repeat 8 0))
-                        (concat (le 256 8) (repeat (- context-size 16) 0)))
+                        (concat (le 512 8) (repeat (- context-size 16) 0)))
           text-raw-size (align (count text) file-alignment)
           data-offset (+ text-offset text-raw-size)
           data-raw-size (align context-size file-alignment)

@@ -101,7 +101,7 @@ int kotoba_ios_execute_static_v1(const struct kotoba_ios_request_v1 *request,
     return KOTOBA_IOS_ALLOCATION_ERROR;
   }
   shared->context.version = 2;
-  shared->context.fuel = 256;
+  shared->context.fuel = 512;
   memcpy(shared->context.allow, request->allow, sizeof(request->allow));
   shared->context.cap_call = cap_call;
   shared->context.pair_new = pair_new;

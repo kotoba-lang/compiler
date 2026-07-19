@@ -134,7 +134,7 @@ int kotoba_android_execute_verified_v1(
     return KOTOBA_ANDROID_SYSTEM_ERROR;
   }
   shared->context.version = 2;
-  shared->context.fuel = 256;
+  shared->context.fuel = 512;
   memcpy(shared->context.allow, request->allow, sizeof(request->allow));
   shared->context.cap_call = cap_call;
   shared->context.pair_new = pair_new;

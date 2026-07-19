@@ -56,13 +56,13 @@
   NOTHING\") rather than defaulting to permissive.
 
   Fuel: WASM's `charge!` is a MODULE-GLOBAL mutable counter that starts at
-  256 and is never replenished for the life of one Instance (ir.clj: one
+  512 and is never replenished for the life of one Instance (ir.clj: one
   charge per function ENTRY, not per expression -- confirmed by
   backend/wasm.clj's `global-section`, a `(global (mut i64) (i64.const
-  256))` set once at instantiation). This backend reproduces the same
+  512))` set once at instantiation). This backend reproduces the same
   global-depletion behavior with a namespace-level `defonce` atom, so a
   loaded cljs module is, like a WASM Instance, permanently exhausted after
-  256 total function calls across its whole lifetime -- not 256 per
+  512 total function calls across its whole lifetime -- not 512 per
   top-level call."
   (:require [clojure.string :as str]))
 
@@ -116,7 +116,7 @@
         (list 'do '(kotoba$charge!) (lower-expr body))))
 
 (def ^:private prelude-forms
-  '[(defonce kotoba$fuel (atom 256))
+  '[(defonce kotoba$fuel (atom 512))
     (defn- kotoba$charge! []
       (let [remaining (swap! kotoba$fuel dec)]
         (when (neg? remaining)

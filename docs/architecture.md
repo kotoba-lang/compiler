@@ -224,7 +224,7 @@ in `BRK`. Conformance requires all three backends to reject both cases.
 
 ## Fuel contract
 
-`wasm32-kotoba-v1` owns a private mutable i64 fuel global initialized to 256.
+`wasm32-kotoba-v1` owns a private mutable i64 fuel global initialized to 512.
 Every function body begins with an unconditional zero-check and decrement, so
 direct and mutual recursive calls cannot bypass accounting. Guest code cannot
 import, export, or replenish the counter. Conformance executes factorial and an
@@ -270,7 +270,7 @@ an `.spdx` suffix, then applies signer/artifact revocation.
 
 x86-64 now implements that ABI as `:hidden-context-r9`: the sixth SysV integer
 register is removed from the source ABI and carries a loader-owned pointer to a
-256-unit counter. Each function entry checks and decrements `*r9`; zero executes
+512-unit counter. Each function entry checks and decrements `*r9`; zero executes
 `UD2`. Direct calls are emitted as verified `CALL rel32` relocations and forward
 the same r9 unchanged, allowing bounded direct and mutual recursion. Source
 functions therefore accept at most five integer parameters on x86-64 v1.

@@ -797,7 +797,7 @@ int main(int argc, char **argv) {
   if (ctx == NULL) fail_win("VirtualAlloc context");
   ZeroMemory(ctx, sizeof(*ctx));
   ctx->version = 2;
-  ctx->fuel = 256;
+  ctx->fuel = 512;
   ctx->cap_call = (void *)&cap_call;
   ctx->pair_new = (void *)&pair_new;
   ctx->pair_first = (void *)&pair_first;
@@ -819,7 +819,7 @@ int main(int argc, char **argv) {
   CloseHandle(token);
 
   if (getenv("KEXE_STRUCTURED_REPORT") != NULL)
-    printf("{:status :ok :result %lld :fuel {:initial 256 :remaining %llu} :heap {:capacity 4096 :used %llu}}\n",
+    printf("{:status :ok :result %lld :fuel {:initial 512 :remaining %llu} :heap {:capacity 4096 :used %llu}}\n",
            (long long)result, (unsigned long long)ctx->fuel, (unsigned long long)ctx->pair_used);
   else printf("%lld\n", (long long)result);
 

@@ -94,7 +94,7 @@
           (run! "adb" ["shell" "chmod" "700" "/data/local/tmp/kotoba-android-harness"])
           (let [executed (run! "adb" ["shell" "/data/local/tmp/kotoba-android-harness"
                                        "/data/local/tmp/kotoba-android.bin" offset arity])]
-            (lib/ensure! (= "{:status :ok :result 42 :fuel {:initial 256 :remaining 253} :heap {:used 0}}"
+            (lib/ensure! (= "{:status :ok :result 42 :fuel {:initial 512 :remaining 509} :heap {:used 0}}"
                               (.trim (.-stdout executed)))
                          (str "android-ndk: emulator result mismatch: " (.-stdout executed)))
             (println "android-ndk: Arm64 emulator executed verified code under RW-to-RX host")))
