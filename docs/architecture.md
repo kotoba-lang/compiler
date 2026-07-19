@@ -12,7 +12,7 @@ code bytes. A structurally independent target verifier decodes all emitted
 instructions before admission.
 
 The shared value policy is
-`:kotoba.floating-point/ieee-754-f32-f64-v5`. It admits scalar f32 and
+`:kotoba.floating-point/ieee-754-f32-f64-v6`. It admits scalar f32 and
 f64 values only on restricted Kotoba Script and Wasm: decimal source literals are
 normalized to exact i64 bit patterns, and only `f64-to-bits`/
 `f64-from-bits` cross the KIR alongside explicit basic arithmetic, unary

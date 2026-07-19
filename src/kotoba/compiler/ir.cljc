@@ -32,7 +32,7 @@
      i64-to-f32-checked i64-to-f32-rounded f32-to-i64-checked f32-to-i64-truncating
      f64-to-bits f64-from-bits f64-add f64-sub f64-mul f64-div f64-min f64-max
      f64-neg f64-abs f64-sqrt f64-sin-quarter-turn f64-cos-quarter-turn
-     f64-sin-bounded f64-cos-bounded f64-exp-near-zero f64-log-near-one
+     f64-sin-bounded f64-cos-bounded f64-exp-near-zero f64-log-near-one f64-atan2-bounded
      f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered
      i64-to-f64-checked i64-to-f64-rounded f64-to-i64-checked f64-to-i64-truncating
      map-new map-get map-assoc
@@ -75,7 +75,7 @@
                                          f64-neg f64-abs f64-sqrt
                                          f64-sin-quarter-turn f64-cos-quarter-turn
                                          f64-sin-bounded f64-cos-bounded
-                                         f64-exp-near-zero f64-log-near-one
+                                         f64-exp-near-zero f64-log-near-one f64-atan2-bounded
                                          f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered
                                          i64-to-f64-checked i64-to-f64-rounded
                                          f64-to-i64-checked f64-to-i64-truncating}
@@ -228,6 +228,52 @@
         p (+ 0.3333333333333333 (* z p))
         p (+ 1.0 (* z p))]
     (* (* 2.0 y) p)))
+
+(defn- f64-atan-unit [value]
+  (let [near-zero? (<= value 0.4142135623730951)
+        t (if near-zero? value (/ (- value 1.0) (+ value 1.0)))
+        z (* t t)
+        p (+ 0.02702702702702703 (* z -0.02564102564102564))
+        p (+ -0.02857142857142857 (* z p))
+        p (+ 0.030303030303030304 (* z p))
+        p (+ -0.03225806451612903 (* z p))
+        p (+ 0.034482758620689655 (* z p))
+        p (+ -0.037037037037037035 (* z p))
+        p (+ 0.04 (* z p))
+        p (+ -0.043478260869565216 (* z p))
+        p (+ 0.047619047619047616 (* z p))
+        p (+ -0.05263157894736842 (* z p))
+        p (+ 0.058823529411764705 (* z p))
+        p (+ -0.06666666666666667 (* z p))
+        p (+ 0.07692307692307693 (* z p))
+        p (+ -0.09090909090909091 (* z p))
+        p (+ 0.1111111111111111 (* z p))
+        p (+ -0.14285714285714285 (* z p))
+        p (+ 0.2 (* z p))
+        p (+ -0.3333333333333333 (* z p))
+        p (+ 1.0 (* z p))
+        angle (* t p)]
+    (if near-zero? angle (+ 0.7853981633974483 angle))))
+
+(defn- f64-atan2-bounded [y x]
+  (when-not (and #?(:clj (Double/isFinite ^double y) :cljs (js/Number.isFinite y))
+                 #?(:clj (Double/isFinite ^double x) :cljs (js/Number.isFinite x)))
+    (trap! :f64-atan2-bounded-domain {}))
+  (let [y-negative? (neg? (value/f64-to-i64-bits y))
+        x-negative? (neg? (value/f64-to-i64-bits x))]
+    (cond
+      (zero? y) (if x-negative?
+                  (if y-negative? -3.141592653589793 3.141592653589793)
+                  y)
+      (zero? x) (if y-negative? -1.5707963267948966 1.5707963267948966)
+      :else (let [ay (#?(:clj Math/abs :cljs js/Math.abs) y)
+                  ax (#?(:clj Math/abs :cljs js/Math.abs) x)
+                  swap? (> ay ax)
+                  ratio (if swap? (/ ax ay) (/ ay ax))
+                  base (f64-atan-unit ratio)
+                  angle (if swap? (- 1.5707963267948966 base) base)
+                  angle (if x-negative? (- 3.141592653589793 angle) angle)]
+              (if y-negative? (- angle) angle)))))
 
 (defn- validate-runtime-value! [runtime-value type position]
   (case type
@@ -569,6 +615,10 @@
         (= op 'f64-log-near-one)
         (f64-log-near-one
          (eval-expr (first args) env functions fuel heap call-stack cap-call))
+
+        (= op 'f64-atan2-bounded)
+        (let [[y x] (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
+          (f64-atan2-bounded y x))
 
         (contains? '#{f64-eq f64-lt f64-le f64-gt f64-ge} op)
         (let [[left right] (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]

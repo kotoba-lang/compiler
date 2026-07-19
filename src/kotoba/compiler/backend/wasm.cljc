@@ -221,6 +221,56 @@
                           "4607182418800017408"])]
     (list 'f64-mul (list 'f64-mul (f64-constant "4611686018427387904") y) p)))
 
+(defn- bounded-atan-unit-form [value]
+  (let [one (f64-constant "4607182418800017408")
+        threshold? (list '<= (list 'f64-to-bits value) (exact-i64 "4601133428098527028"))
+        t (list 'if threshold?
+                value
+                (list 'f64-div (list 'f64-sub value one) (list 'f64-add value one)))]
+    (list 'let ['t t
+                'z (list 'f64-mul 't 't)
+                'p (f64-horner 'z ["-4640324292980923366" "4583447231574686416"
+                                   "-4639479661842017251" "4584391475231203080"
+                                   "-4638562338784276348" "4585130310279789462"
+                                   "-4637873616260616344" "4585925428558828667"
+                                   "-4636945338076552860" "4587023449039406616"
+                                   "-4635626205920252120" "4588638185040256542"
+                                   "-4633903776589082351" "4590207312512236308"
+                                   "-4632156925824526522" "4592670820000712476"
+                                   "-4629057045561531246" "4596373779694328218"
+                                   "-4623695617433709227" "4607182418800017408"])
+                'a (list 'f64-mul 't 'p)]
+          (list 'if threshold?
+                'a
+                (list 'f64-add (f64-constant "4605249457297304856") 'a)))))
+
+(defn- bounded-atan2-form [y x]
+  (let [pi (f64-constant "4614256656552045848")
+        half-pi (f64-constant "4609753056924675352")
+        negative? (fn [v] (list '< (list 'f64-to-bits v) 0))
+        zero? (fn [v] (list '= (list 'bit-and (list 'f64-to-bits v)
+                                      (exact-i64 "9223372036854775807")) 0))]
+    (list 'if (zero? y)
+          (list 'if (negative? x)
+                (list 'if (negative? y) (list 'f64-neg pi) pi)
+                y)
+          (list 'if (zero? x)
+                (list 'if (negative? y) (list 'f64-neg half-pi) half-pi)
+                (list 'let ['ay (list 'f64-abs y)
+                            'ax (list 'f64-abs x)
+                            'swap (list '> (list 'f64-to-bits 'ay) (list 'f64-to-bits 'ax))
+                            'ratio (list 'if 'swap
+                                         (list 'f64-div 'ax 'ay)
+                                         (list 'f64-div 'ay 'ax))
+                            'base (bounded-atan-unit-form 'ratio)
+                            'angle1 (list 'if 'swap
+                                          (list 'f64-sub half-pi 'base)
+                                          'base)
+                            'angle2 (list 'if (negative? x)
+                                          (list 'f64-sub pi 'angle1)
+                                          'angle1)]
+                      (list 'if (negative? y) (list 'f64-neg 'angle2) 'angle2))))))
+
 (defn- emit-typed-function-body
   [function function-indices intrinsic-indices descriptor-indices literal-indices signatures]
   (let [locals (volatile! [])
@@ -470,6 +520,21 @@
                               (emit* (f64-constant "4609434218613702656") env)
                               [0x64 0x72 0x04 0x40 0x00 0x0b]
                               (emit* (bounded-log-form value) env)))
+                    (= op 'f64-atan2-bounded)
+                    (let [y-local (allocate! 0x7c)
+                          x-local (allocate! 0x7c)
+                          y {:wasm-local y-local}
+                          x {:wasm-local x-local}
+                          finite-check (fn [local]
+                                         (concat [0x20 local 0x20 local 0x62
+                                                  0x20 local 0x99]
+                                                 (emit* (f64-constant "9218868437227405311") env)
+                                                 [0x64 0x72]))]
+                      (concat (emit* (first args) env) [0x21 y-local]
+                              (emit* (second args) env) [0x21 x-local]
+                              (finite-check y-local) (finite-check x-local)
+                              [0x72 0x04 0x40 0x00 0x0b]
+                              (emit* (bounded-atan2-form y x) env)))
                     (contains? '#{f64-eq f64-lt f64-le f64-gt f64-ge} op)
                     (concat (emit* (first args) env) (emit* (second args) env)
                             [({'f64-eq 0x61 'f64-lt 0x63 'f64-gt 0x64
