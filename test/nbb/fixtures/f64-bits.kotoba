@@ -1,4 +1,7 @@
-(ns f64-bits (:export [bits negative-zero one]))
+(ns f64-bits (:export [bits negative-zero one add nan-bits payload-bits]))
 (defn bits [value :f64] (f64-to-bits value))
 (defn negative-zero [] :f64 -0.0)
 (defn one [] :f64 1.0)
+(defn add [x :f64 y :f64] :f64 (f64-add x y))
+(defn nan-bits [] (f64-to-bits (f64-div 0.0 0.0)))
+(defn payload-bits [] (f64-to-bits (f64-from-bits 9218868437227405313)))

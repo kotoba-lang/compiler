@@ -22,7 +22,7 @@
 (defn f64-to-i64-bits [value]
   (when-not (f64-value? value)
     (throw (ex-info "value is not f64" {:phase :value :value value})))
-  #?(:clj (Double/doubleToRawLongBits ^double value)
+  #?(:clj (Double/doubleToLongBits ^double value)
      :cljs (let [buffer (js/ArrayBuffer. 8)
                  view (js/DataView. buffer)]
              (.setFloat64 view 0 value true)
