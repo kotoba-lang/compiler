@@ -586,7 +586,7 @@
   ;; A literal map can never grow past max-list-items (128, shared with
   ;; `list`) -- so a get-miss walk over the LARGEST admissible map literal
   ;; costs at most 129 fuel units (128 steps + 1 for main's own call),
-  ;; comfortably under this compiler's fixed 256-fuel budget. Verifies
+  ;; comfortably under this compiler's fixed 512-fuel budget. Verifies
   ;; that bound actually holds, rather than just asserting it in prose.
   (let [source (str "(defn main [] (get {"
                      (clojure.string/join " " (map #(str ":k" % " " %) (range 128)))
@@ -738,12 +738,12 @@
 
 (deftest map-get-recursion-shares-the-existing-fuel-budget
   ;; get/assoc introduce no new resource limit -- they are subject to the
-  ;; SAME fixed fuel budget (ir.clj/backend/wasm.clj's 256-instruction-call
+  ;; SAME fixed fuel budget (ir.clj/backend/wasm.clj's 512-instruction-call
   ;; global counter) every other recursive .kotoba program already is.
   ;; Demonstrated here via a helper that repeatedly assocs while recursing
   ;; past the budget -- the existing mechanism traps it, unmodified.
   (let [source "(defn build [m :map n :i64] :map (if (= n 0) m (build (assoc m :dummy n) (- n 1))))
-                (defn main [] (get (build {} 300) :missing))"]
+                (defn main [] (get (build {} 600) :missing))"]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"fuel"
                           (ir/execute (:kir (compiler/compile-source source :js-kotoba-v1)) 'main [])))))
 

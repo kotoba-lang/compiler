@@ -110,16 +110,16 @@
 (deftest fuel-is-a-global-never-replenished-budget-not-per-call
   ;; Mirrors WASM's own module-global fuel semantics exactly (ir.clj/
   ;; backend/wasm.clj: charge once per function ENTRY, a single Instance
-  ;; gets 256 calls total for its whole lifetime, never replenished) --
-  ;; NOT 256 fresh calls every time `main` is invoked.
+  ;; gets 512 calls total for its whole lifetime, never replenished) --
+  ;; NOT 512 fresh calls every time `main` is invoked.
   (let [source "(defn noop [] 0) (defn main [] (+ 1 2))"
         compiled (compile-cljs source)
         ns (eval-in-fresh-ns (:source compiled))]
-    (dotimes [_ 255] (call ns 'noop))
-    (is (= 3 (call ns 'main)) "the 256th call still succeeds")
+    (dotimes [_ 511] (call ns 'noop))
+    (is (= 3 (call ns 'main)) "the 512th call still succeeds")
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"fuel-exhausted"
                           (call ns 'noop))
-        "the 257th call, ever, on this loaded module traps -- not reset per top-level call")))
+        "the 513th call, ever, on this loaded module traps -- not reset per top-level call")))
 
 ;; ───────────────────────── arithmetic overflow ─────────────────────────
 

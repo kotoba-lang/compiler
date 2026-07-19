@@ -9,13 +9,13 @@
   string_pool and the read-only code_base/code_length fields they resolve
   a string handle's (offset, length) against, alongside the existing
   pair-arena/kgraph-datom-arena/cap-call surface."
-  "dc102247f94f2c2d117e1e243ca6eeace398593097ff81765cae7915eb940047")
+  "eab2b204326e032d4c9cd259f239b4c49782d7413bcd32074585982a0f034449")
 
 (def windows-loader-source-sha256
   "Pinned identity of the reviewed Windows native loader source.
   Updated for the zero-capability AppContainer execution boundary and its
   filesystem, process, outbound-network, and listen denial probes."
-  "9e46cc58bf10ead962bbc0b019fd800c41719b7894996c46eae35ff606c258a4")
+  "da10256734943e82a8c786839b6dd2ada2a1e99e38ca8463ba4ad5dd63232961")
 
 (defn loader-source-for-profile [profile]
   (case (:os profile)

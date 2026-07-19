@@ -18,6 +18,12 @@ profiles, conformance and runtime digests, CI run, test time, and expiry.
 
 The multi-target, deny-by-default compiler for the safe Kotoba language.
 
+Project compilation accepts repeated `--source-path ROOT` arguments to link
+explicit package roots into one closed graph. Every dependency remains
+confined to one of those real paths. If the same qualified namespace exists
+in multiple roots, compilation rejects the ambiguity instead of selecting a
+package by argument order.
+
 All compilation results carry
 `:kotoba.floating-point/forbidden-v1`; restricted JavaScript artifacts also
 seal the equivalent `floatingPointPolicy: 'forbidden-v1'`. Floating-point
@@ -128,7 +134,7 @@ heap-allocated persistent data structures, `pair`/`pair-first`/
 linear-memory heap simulation needed, unlike wasm32/x86_64/aarch64. KIR's
 `if`-is-0-false and comparison-returns-1-or-0 conventions (neither of
 which plain cljs semantics reproduce for free) are made explicit at every
-emission site, and the module-global, never-replenished 256-call fuel
+emission site, and the module-global, never-replenished 512-call fuel
 budget (identical to WASM's own semantics) is reproduced with a
 `defonce` atom. Real execution (not just JVM `eval`) was verified via
 `nbb`, including one real bug this uncovered before landing: KIR's own
@@ -507,7 +513,7 @@ child. CI independently requires filesystem, network, and process-creation
 probes to be denied on both OS families.
 
 Wasm modules contain a private, non-replenishable i64 fuel global initialized to
-256. Every function entry checks and decrements it before evaluating guest code.
+512. Every function entry checks and decrements it before evaluating guest code.
 This permits bounded recursion while guaranteeing that recursive cycles trap.
 x86-64 reserves r9 and AArch64 reserves x7 for a loader-owned fuel-context
 pointer; both charge every function entry before guest instructions. Their real

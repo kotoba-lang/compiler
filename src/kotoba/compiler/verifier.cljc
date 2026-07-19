@@ -322,10 +322,10 @@
       (when-not (= (:code expected) code)
         (reject! "native instruction stream rejected" {:target target})))
     (let [expected-fuel-abi (case backend
-                              :x86_64-kotoba-v1 {:mode :hidden-context-r9 :initial 256}
-                              :aarch64-kotoba-v1 {:mode :hidden-context-x7 :initial 256})
+                              :x86_64-kotoba-v1 {:mode :hidden-context-r9 :initial 512}
+                              :aarch64-kotoba-v1 {:mode :hidden-context-x7 :initial 512})
           expected-limits {:memory-bytes 65536
-                           :fuel 256
+                           :fuel 512
                            :stack-bytes 4096}
           expected-context {:version 2 :fuel-offset 8 :allow-bitmap-offset 16
                             :allow-bitmap-bytes 32 :cap-call-offset 48

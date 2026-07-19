@@ -608,9 +608,9 @@
                                      imports (range))))
         function-sec (concat (uleb (count functions))
                              (mapcat uleb (range shift (+ shift (count functions)))))
-        ;; (global (mut i64) (i64.const 256)); low enough to trap before the
+        ;; (global (mut i64) (i64.const 512)); fixed and low enough to trap before the
         ;; host call stack becomes the limiting resource.
-        global-sec [1 0x7e 1 0x42 0x80 0x02 0x0b]
+        global-sec [1 0x7e 1 0x42 0x80 0x04 0x0b]
         ;; Pure functions are exported with their source names. This makes
         ;; runtime parameters observable and testable without host authority.
         export-sec (concat (uleb (count exported-functions))

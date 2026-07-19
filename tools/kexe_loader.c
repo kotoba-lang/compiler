@@ -424,11 +424,11 @@ static void write_supervisor_report(const struct kexe_shared_v2 *shared,
                                     int child_status) {
   if (child_status == 0 && shared->completed == 1) {
     printf("{:status :ok :result %" PRId64
-           " :fuel {:initial 256 :remaining %" PRIu64
+           " :fuel {:initial 512 :remaining %" PRIu64
            "} :heap {:capacity 4096 :used %" PRIu64 "}}\n",
            shared->result, shared->context.fuel, shared->pair_used);
   } else {
-    printf("{:status :trap :exit %d :fuel {:initial 256 :remaining %" PRIu64
+    printf("{:status :trap :exit %d :fuel {:initial 512 :remaining %" PRIu64
            "} :heap {:capacity 4096 :used %" PRIu64 "}}\n",
            child_status, shared->context.fuel, shared->pair_used);
   }
@@ -613,7 +613,7 @@ int main(int argc, char **argv) {
   if (shared == MAP_FAILED) fail("mmap shared execution state");
   memset(shared, 0, sizeof(*shared));
   shared->context.version = 2;
-  shared->context.fuel = 256;
+  shared->context.fuel = 512;
   shared->context.cap_call = checked_cap_call;
   shared->context.pair_new = checked_pair_new;
   shared->context.pair_first = checked_pair_first;

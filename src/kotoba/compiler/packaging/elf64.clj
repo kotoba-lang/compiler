@@ -153,7 +153,7 @@
           shim (entry-shim (+ entry-address 23 (:offset export)) context-address)
           text (into shim (:code artifact))
           context (into (vec (repeat 8 0))
-                        (concat (le 256 8) (repeat (- kernel-image-context-size 16) 0)))
+                        (concat (le 512 8) (repeat (- kernel-image-context-size 16) 0)))
           names (mapv int (.getBytes "\u0000.text\u0000.data\u0000.shstrtab\u0000" "UTF-8"))
           names-offset (+ kernel-data-offset kernel-image-context-size)
           section-offset (+ names-offset (count names)
@@ -223,7 +223,7 @@
           shim (entry-shim-aarch64 (+ entry-address 16 (:offset export)) context-address)
           text (into shim (:code artifact))
           context (into (vec (repeat 8 0))
-                        (concat (le 256 8) (repeat (- kernel-image-context-size 16) 0)))
+                        (concat (le 512 8) (repeat (- kernel-image-context-size 16) 0)))
           names (mapv int (.getBytes " .text .data .shstrtab " "UTF-8"))
           names-offset (+ kernel-data-offset kernel-image-context-size)
           section-offset (+ names-offset (count names)
@@ -269,7 +269,7 @@
           bitmap (capability-bitmap (:effects artifact))
           callback (if (some #(= :cap/call (first %)) (:effects artifact))
                      (+ entry-address 32) 0)
-          context (vec (concat (repeat 8 0) (le 256 8) bitmap
+          context (vec (concat (repeat 8 0) (le 512 8) bitmap
                                (le callback 8) (repeat 24 0)
                                (repeat 8 0)))
           names (mapv int (.getBytes "\u0000.text\u0000.data\u0000.shstrtab\u0000" "UTF-8"))
@@ -371,7 +371,7 @@
           text (vec (concat wrapper (le call-disp 4)
                             [0x48 0x83 0xc4 0x08 0xc3]
                             (:code artifact)))
-          context (vec (concat (repeat 8 0) (le 256 8)
+          context (vec (concat (repeat 8 0) (le 512 8)
                                (repeat (- context-size 16) 0)))
           shstr "\u0000.text\u0000.data\u0000.rela.text\u0000.symtab\u0000.strtab\u0000.shstrtab\u0000"
           shstr-bytes (mapv int (.getBytes shstr "UTF-8"))

@@ -67,8 +67,8 @@
     ;; Entry shim preserves loader rdi in context+80, then initializes r9.
     (is (= [0x48 0x89 0x3d] (subvec bytes 0x1000 0x1003)))
     (is (= [0x4c 0x8d 0x0d] (subvec bytes 0x1007 0x100a)))
-    ;; Context fuel is initialized to 256; no host process populates it.
-    (is (= 256 (read-le bytes (+ 0x8000 8) 8)))))
+    ;; Context fuel is initialized to 512; no host process populates it.
+    (is (= 512 (read-le bytes (+ 0x8000 8) 8)))))
 
 (deftest kernel-target-lowers-privileged-intrinsics-without-imports
   (let [source (str "(defn main [] "

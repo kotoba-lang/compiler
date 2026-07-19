@@ -47,7 +47,7 @@
                 (vals (dissoc (get-in result [:evidence :runtime])
                               :format :target-profile))))
     (is (= {:status :ok :result 42
-            :fuel {:initial 256 :remaining 255}
+            :fuel {:initial 512 :remaining 511}
             :heap {:capacity 4096 :used 0}}
            (:report result)))
     (is (<= (:started-at result) (:finished-at result)))))
@@ -414,7 +414,7 @@
     (is (= 50 (get-in result [:evidence :result]))
         "50 levels of ordinary (non-tail-optimized self-call from inside a let,
          intentionally falling back off the tail-call fast path -- see emit-call's
-         zero-temp-depth guard) recursion, well within the 256-call fuel budget")
+         zero-temp-depth guard) recursion, well within the 512-call fuel budget")
     (is (= {:capacity 4096 :used 51} (get-in result [:report :heap]))
         "one pair per call: the initial call plus 50 recursive calls")))
 

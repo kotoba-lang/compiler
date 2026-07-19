@@ -85,7 +85,7 @@
       (loader-check! loader raw calc-offset calc-arity "21" "20" "4")
       (let [structured (run-external loader [raw main-offset main-arity isa "-"]
                                              {:KEXE_STRUCTURED_REPORT "1"} false)]
-        (lib/ensure! (= "{:status :ok :result 42 :fuel {:initial 256 :remaining 253} :heap {:capacity 4096 :used 0}}"
+        (lib/ensure! (= "{:status :ok :result 42 :fuel {:initial 512 :remaining 509} :heap {:capacity 4096 :used 0}}"
                         (.trim (.-stdout structured)))
                      "windows-profile: structured supervisor report mismatch"))
       (doseq [[probe reason] [[:KEXE_FILESYSTEM_PROBE "filesystem-denied"]
@@ -111,7 +111,7 @@
       (let [[offset arity] (extract! (artifact "heap.kexe") "main" (artifact "heap.bin"))
             report (run-external loader [(artifact "heap.bin") offset arity isa "-"]
                                  {:KEXE_STRUCTURED_REPORT "1"} false)]
-        (lib/ensure! (= "{:status :ok :result 42 :fuel {:initial 256 :remaining 255} :heap {:capacity 4096 :used 2}}"
+        (lib/ensure! (= "{:status :ok :result 42 :fuel {:initial 512 :remaining 511} :heap {:capacity 4096 :used 2}}"
                         (.trim (.-stdout report)))
                      "windows-profile: bounded heap report mismatch"))
       (run-k! ["compile" (.join path lib/root "tests/browser/capability.kotoba")

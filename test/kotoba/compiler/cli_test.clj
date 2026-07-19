@@ -127,6 +127,60 @@
       (is (= #{'example.app 'example.text}
              (set (keys (:kotoba.artifact/module-source-digests manifest))))))))
 
+(deftest compile-repeated-source-path-links-explicit-package-roots
+  (let [directory (.toFile (java.nio.file.Files/createTempDirectory
+                            "kotoba-cli-multi-root-"
+                            (make-array java.nio.file.attribute.FileAttribute 0)))
+        app-root (io/file directory "app-src")
+        library-root (io/file directory "library-src")
+        dependency (io/file library-root "shared/answer.kotoba")
+        root (io/file app-root "app/main.kotoba")
+        output (io/file directory "app.mjs")
+        out (StringWriter.)]
+    (.mkdirs (.getParentFile dependency))
+    (.mkdirs (.getParentFile root))
+    (spit dependency
+          "(ns shared.answer (:export [answer])) (defn answer [] 42)")
+    (spit root
+          "(ns app.main (:require [shared.answer :as shared]) (:export [main]))
+           (defn main [] (shared/answer))")
+    (binding [*out* out]
+      (cli/-main "compile" (.getPath root)
+                 "--source-path" (.getPath app-root)
+                 "--source-path" (.getPath library-root)
+                 "--target" "js" "--output" (.getPath output)))
+    (let [report (edn/read-string (str out))]
+      (is (:ok report))
+      (is (str/includes? (slurp output) "moduleSourceDigests")))))
+
+(deftest compile-repeated-source-path-rejects-cross-package-shadowing
+  (let [directory (.toFile (java.nio.file.Files/createTempDirectory
+                            "kotoba-cli-ambiguous-root-"
+                            (make-array java.nio.file.attribute.FileAttribute 0)))
+        roots (mapv #(io/file directory %) ["one" "two"])
+        root (io/file directory "main.kotoba")
+        status (atom nil)
+        err (StringWriter.)]
+    (doseq [source-root roots]
+      (let [dependency (io/file source-root "shared/answer.kotoba")]
+        (.mkdirs (.getParentFile dependency))
+        (spit dependency
+              "(ns shared.answer (:export [answer])) (defn answer [] 42)")))
+    (spit root
+          "(ns app.main (:require [shared.answer :as shared]) (:export [main]))
+           (defn main [] (shared/answer))")
+    (binding [cli/*exit* #(reset! status %)
+              *err* err]
+      (cli/-main "compile" (.getPath root)
+                 "--source-path" (.getPath (first roots))
+                 "--source-path" (.getPath (second roots))
+                 "--target" "js"))
+    (let [report (edn/read-string (str err))]
+      (is (= 65 @status))
+      (is (= :project-link (:error report)))
+      (is (= "namespace resolves from multiple explicit source paths"
+             (:message report))))))
+
 (deftest compile-source-path-rejects-namespace-path-substitution
   (let [directory (.toFile (java.nio.file.Files/createTempDirectory
                             "kotoba-cli-project-reject-"
