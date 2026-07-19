@@ -197,14 +197,19 @@
           (ldr-context 16 48) (insn 0xd63f0200)   ; blr x16
           (ldr-sp 7 0) (add-sp 16)))))
 
+(def ^:private heap-call-offsets
+  {'pair 56 'pair-first 64 'pair-second 72
+   'kgraph-assert! 80 'kgraph-get 88 'kgraph-count 96 'kgraph-entity-at 104})
+
 (defn- emit-heap-call [op args env]
-  (let [offset ({'pair 56 'pair-first 64 'pair-second 72} op)
-        values (if (= op 'pair)
-                 (concat (emit-expr (first args) env) (save-x0)
-                         (emit-expr (second args) env) (mov-reg 2 0)
-                         (restore-to 1))
-                 (concat (emit-expr (first args) env) (mov-reg 1 0)))]
-    (vec (concat values
+  (let [offset (get heap-call-offsets op)
+        argc (count args)
+        ;; Evaluate each arg left-to-right onto the stack (mirrors emit-call's
+        ;; save/restore shape), then pop them off in reverse into x1..x(argc)
+        ;; -- x0 is reserved for the context pointer moved in from x7 below.
+        saved (mapcat (fn [a] (concat (emit-expr a env) (save-x0))) args)
+        restored (mapcat (fn [i] (restore-to (inc i))) (reverse (range argc)))]
+    (vec (concat saved restored
                  (sub-sp 16) (str-sp 7 0)
                  (mov-reg 0 7) (ldr-context 16 offset) (insn 0xd63f0200)
                  (ldr-sp 7 0) (add-sp 16)))))
@@ -231,7 +236,8 @@
         (vec (mapcat #(emit-expr % env) args))
         (= op 'cap-call)
         (emit-cap-call (first args) (second args) env)
-        (contains? '#{pair pair-first pair-second} op)
+        (contains? '#{pair pair-first pair-second
+                      kgraph-assert! kgraph-get kgraph-count kgraph-entity-at} op)
         (emit-heap-call op args env)
         (and (= op '-) (= 1 (count args)))
         (vec (concat (emit-expr (first args) env) (insn 0xcb0003e0)))

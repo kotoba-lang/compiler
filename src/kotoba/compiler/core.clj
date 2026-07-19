@@ -155,7 +155,10 @@
                        :context-abi {:version 2 :fuel-offset 8 :allow-bitmap-offset 16
                                      :allow-bitmap-bytes 32 :cap-call-offset 48
                                      :pair-new-offset 56 :pair-first-offset 64
-                                     :pair-second-offset 72 :pair-capacity 4096}
+                                     :pair-second-offset 72 :pair-capacity 4096
+                                     :kgraph-assert-offset 80 :kgraph-get-offset 88
+                                     :kgraph-count-offset 96 :kgraph-entity-at-offset 104
+                                     :kgraph-capacity 4096}
                       :effects (:effects hir)
                        :compatibility compatibility
                        :limits {:memory-bytes 65536

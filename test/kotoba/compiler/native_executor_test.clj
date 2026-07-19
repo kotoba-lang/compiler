@@ -269,3 +269,55 @@
     (is (= :trap (get-in forged [:evidence :status])))
     (is (= {:kind :signal :signal expected-signal}
            (get-in forged [:evidence :trap])))))
+
+;; ADR-2607198300 / ADR-2607198200: the native (JVM/Node/browser-free) analog
+;; of the com-stripe Customer create/get/list pilot -- entity/attribute/value
+;; are caller-assigned integers rather than EDN strings (this backend has no
+;; addressable buffer), but the EAVT mechanism (assert, point-get, count
+;; distinct entities, index into them) is proven end to end via the real
+;; kexe-loader native process, no JVM/JS engine involved once the artifact
+;; is compiled.
+(deftest kgraph-native-customer-pilot-asserts-and-queries-through-real-kexe-loader
+  ;; NOTE: this backend's `let` (aarch64.clj/x86-64.clj `normalize-expr`) is a
+  ;; compile-time substitution pass, not an imperative sequence -- a binding
+  ;; whose value is never referenced in the body is never emitted at all, so
+  ;; a side-effecting call (kgraph-assert!, create-customers itself) MUST
+  ;; have its return value actually consumed (here, summed) or it silently
+  ;; never executes. No `let` is used below for exactly this reason.
+  (let [{:keys [envelope trust]}
+        (signed "(defn create-customers []
+                   (+ (kgraph-assert! 1 1 1001)
+                      (kgraph-assert! 1 2 2001)
+                      (kgraph-assert! 1 3 0)
+                      (kgraph-assert! 2 1 1002)
+                      (kgraph-assert! 2 2 2002)
+                      (kgraph-assert! 2 3 500)))
+                 (defn main []
+                   (+ (= (create-customers) 6)
+                      (= (kgraph-get 1 1) 1001)
+                      (= (kgraph-get 1 2) 2001)
+                      (= (kgraph-get 1 3) 0)
+                      (= (kgraph-get 2 1) 1002)
+                      (= (kgraph-get 2 2) 2002)
+                      (= (kgraph-get 2 3) 500)
+                      (= (kgraph-count 1) 2)
+                      (= (kgraph-entity-at 1 0) 1)
+                      (= (kgraph-entity-at 1 1) 2)))
+                 (defn get-unknown-field [] (+ (create-customers) (kgraph-get 1 999)))
+                 (defn entity-at-out-of-range [] (+ (create-customers) (kgraph-entity-at 1 5)))"
+               {:allow #{}})
+        {:keys [trust options]} (execution-options trust)
+        result (executor/execute envelope trust {:allow #{}} {:args []} options)
+        unknown (executor/execute envelope trust {:allow #{}} {:args []}
+                                  (assoc options :entry 'get-unknown-field))
+        out-of-range (executor/execute envelope trust {:allow #{}} {:args []}
+                                       (assoc options :entry 'entity-at-out-of-range))
+        expected-signal (if (= (target) :aarch64-kotoba-v1) :SIGILL :SIGILL)]
+    (is (= 10 (get-in result [:evidence :result]))
+        "create-customers returned 6, and all 9 get/count/entity-at checks matched -- genuinely native EAVT assert/query")
+    (is (= (+ 6 Long/MIN_VALUE) (get-in unknown [:evidence :result]))
+        "kgraph-get on an unasserted (entity,attribute) returns the not-found sentinel, not a trap")
+    (is (= :trap (get-in out-of-range [:evidence :status]))
+        "kgraph-entity-at past the distinct-entity count traps closed, like a forged pair handle")
+    (is (= {:kind :signal :signal expected-signal}
+           (get-in out-of-range [:evidence :trap])))))

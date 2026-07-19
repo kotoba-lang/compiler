@@ -3,8 +3,12 @@
             [kotoba.compiler.target :as target]))
 
 (def loader-source-sha256
-  "Pinned identity of the reviewed POSIX native loader source."
-  "b3b3361712a26e69edbaa42fec47d1290a8ebb06a0baf83f54533b9a32173fdc")
+  "Pinned identity of the reviewed POSIX native loader source.
+  Updated for ADR-2607198300: adds the kgraph-assert!/kgraph-get/
+  kgraph-count/kgraph-entity-at all-integer EAVT datom store
+  (checked_kgraph_* functions and kexe_context_v2/kexe_shared_v2 fields in
+  tools/kexe_loader.c) alongside the existing pair-arena/cap-call surface."
+  "9d9c0641e3e86b5ea2363e38ef9e338935198eb78840b18c475136e367d0b233")
 
 (def windows-loader-source-sha256
   "Pinned identity of the reviewed Windows native loader source.

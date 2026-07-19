@@ -28,6 +28,7 @@
 (def ^:private arithmetic '#{+ - * quot bit-xor bit-and})
 (def ^:private comparisons '#{= < > <= >=})
 (def ^:private heap-operations '{pair 2 pair-first 1 pair-second 1})
+(def ^:private kgraph-operations '{kgraph-assert! 3 kgraph-get 2 kgraph-count 1 kgraph-entity-at 2})
 
 (defn- valid-name? [value]
   (and (simple-symbol? value) (<= (count (name value)) max-symbol-chars)))
@@ -132,6 +133,12 @@
         (do
           (when-not (= (get heap-operations op) (count args))
             (reject! "runtime KIR heap operation arity rejected" {:operation op}))
+          (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
+
+        (contains? kgraph-operations op)
+        (do
+          (when-not (= (get kgraph-operations op) (count args))
+            (reject! "runtime KIR kgraph operation arity rejected" {:operation op}))
           (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
 
         (contains? '#{kernel-load-u8 kernel-load-u8-4k kernel-load-u8-16k
@@ -277,7 +284,10 @@
           expected-context {:version 2 :fuel-offset 8 :allow-bitmap-offset 16
                             :allow-bitmap-bytes 32 :cap-call-offset 48
                             :pair-new-offset 56 :pair-first-offset 64
-                            :pair-second-offset 72 :pair-capacity 4096}]
+                            :pair-second-offset 72 :pair-capacity 4096
+                            :kgraph-assert-offset 80 :kgraph-get-offset 88
+                            :kgraph-count-offset 96 :kgraph-entity-at-offset 104
+                            :kgraph-capacity 4096}]
       (when-not (= expected-fuel-abi fuel-abi)
         (reject! "fuel ABI is not admitted" {:target target :fuel-abi fuel-abi}))
       (when-not (= expected-limits limits)

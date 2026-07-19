@@ -11,6 +11,7 @@
 
 (def ^:private default-fuel 256)
 (def ^:private default-pair-capacity 4096)
+(def ^:private default-kgraph-capacity 4096)
 
 (defn- trap! [reason data]
   (throw (ex-info (name reason) (merge {:phase :ir :trap reason} data))))
@@ -154,6 +155,55 @@
   (let [index #?(:clj (dec handle) :cljs (dec (js/Number handle)))]
     (nth (nth @(:cells heap) index) slot)))
 
+;; kgraph-* (ADR-2607198300): an all-integer EAVT datom store, the native
+;; (JVM/Node/browser-free, `:x86_64-kotoba-v1`/`:aarch64-kotoba-v1`) analog of
+;; kotoba-lang/kotoba's string/EDN-based kgraph-assert!/kgraph-query. There is
+;; no addressable buffer in this native backend to carry EDN text (see
+;; frontend.cljc/backend -- values here are i64 only), so entity/attribute/
+;; value are caller-assigned integer ids rather than strings. Shares the
+;; `heap` map's existing threading (a new `:datoms` key alongside `:cells`)
+;; instead of adding a new interpreter parameter.
+(defn- assert-datom! [heap e a v]
+  (let [{:keys [datoms kgraph-capacity]} heap]
+    (when (>= (count @datoms) kgraph-capacity)
+      (trap! :kgraph-exhausted {:capacity kgraph-capacity}))
+    (vswap! datoms conj [e a v])
+    #?(:clj 1 :cljs i64/one)))
+
+(defn- datom-value [datoms e a not-found]
+  ;; Last-write-wins, matching kgraph-lang/kotoba's own kgraph-query
+  ;; semantics for a point (entity, attribute) lookup.
+  (reduce (fn [result [de da dv]]
+            (if (and (= de e) (= da a)) dv result))
+          not-found datoms))
+
+(defn- get-datom [heap e a]
+  (datom-value @(:datoms heap) e a #?(:clj Long/MIN_VALUE :cljs i64/min-i64)))
+
+(defn- distinct-entities [datoms a]
+  (->> datoms
+       (filter (fn [[_ da _]] (= da a)))
+       (map first)
+       distinct
+       vec))
+
+(defn- count-entities [heap a]
+  (let [n (count (distinct-entities @(:datoms heap) a))]
+    #?(:clj (long n) :cljs (i64/->bigint n))))
+
+(defn- entity-at [heap a index]
+  #?(:clj
+     (when-not (and (integer? index) (<= 0 index))
+       (trap! :invalid-kgraph-index {:index index}))
+     :cljs
+     (when-not (and (i64/bigint-value? index) (not (i64/k-neg? index)))
+       (trap! :invalid-kgraph-index {:index index})))
+  (let [entities (distinct-entities @(:datoms heap) a)
+        i #?(:clj index :cljs (js/Number index))]
+    (when-not (< i (count entities))
+      (trap! :invalid-kgraph-index {:index index}))
+    (nth entities i)))
+
 (defn eval-expr [form env functions fuel heap call-stack cap-call]
   (cond
     #?(:clj (integer? form)
@@ -211,6 +261,21 @@
 
         (= op 'pair-second)
         (read-pair heap (eval-expr (first args) env functions fuel heap call-stack cap-call) 1)
+
+        (= op 'kgraph-assert!)
+        (let [[e a v] (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
+          (assert-datom! heap e a v))
+
+        (= op 'kgraph-get)
+        (let [[e a] (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
+          (get-datom heap e a))
+
+        (= op 'kgraph-count)
+        (count-entities heap (eval-expr (first args) env functions fuel heap call-stack cap-call))
+
+        (= op 'kgraph-entity-at)
+        (let [[a index] (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
+          (entity-at heap a index))
 
         (= op 'string-byte-length)
         (let [bytes (value/utf8-byte-count!
@@ -709,18 +774,23 @@
   wraps modulo 2^64; bounded strings preserve Unicode text; invalid values,
   division, and resource exhaustion trap."
   ([kir function-name args] (execute kir function-name args {}))
-  ([kir function-name args {:keys [fuel cap-call pair-capacity]
-                            :or {fuel default-fuel pair-capacity default-pair-capacity}}]
+  ([kir function-name args {:keys [fuel cap-call pair-capacity kgraph-capacity]
+                            :or {fuel default-fuel pair-capacity default-pair-capacity
+                                 kgraph-capacity default-kgraph-capacity}}]
    (when (and (contains? kir :exports)
               (not (some #{function-name} (:exports kir))))
      (throw (ex-info "function is not exported" {:phase :ir :function function-name})))
-   ;; fuel/pair-capacity are interpreter-internal config, never a `.kotoba`
-   ;; value -- plain `integer?` is correct for both runtimes here.
+   ;; fuel/pair-capacity/kgraph-capacity are interpreter-internal config,
+   ;; never a `.kotoba` value -- plain `integer?` is correct for both
+   ;; runtimes here.
    (when-not (and (integer? fuel) (pos? fuel))
      (throw (ex-info "fuel must be a positive integer" {:phase :ir :fuel fuel})))
    (when-not (and (integer? pair-capacity) (<= 0 pair-capacity default-pair-capacity))
      (throw (ex-info "pair capacity is outside runtime limits"
                      {:phase :ir :pair-capacity pair-capacity})))
+   (when-not (and (integer? kgraph-capacity) (<= 0 kgraph-capacity default-kgraph-capacity))
+     (throw (ex-info "kgraph capacity is outside runtime limits"
+                     {:phase :ir :kgraph-capacity kgraph-capacity})))
    (let [functions (into {} (map (juxt :name identity) (:functions kir)))
          function (get functions function-name)
          param-types (or (:param-types function)
@@ -749,7 +819,8 @@
                                               arg))
                                           args param-types)
                                     functions
-                                    (volatile! fuel) {:cells (volatile! []) :capacity pair-capacity}
+                                    (volatile! fuel) {:cells (volatile! []) :capacity pair-capacity
+                                                      :datoms (volatile! []) :kgraph-capacity kgraph-capacity}
                                     [] cap-call)]
        #?(:clj
           ;; A host JVM with a small native stack can exhaust that stack just

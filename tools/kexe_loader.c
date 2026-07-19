@@ -33,6 +33,7 @@ typedef int64_t (*kexe_fn8)(int64_t, int64_t, int64_t, int64_t,
                             int64_t, int64_t, int64_t, int64_t);
 
 #define KEXE_PAIR_CAPACITY 4096u
+#define KEXE_KGRAPH_CAPACITY 4096u
 
 struct kexe_context_v2 {
   uint64_t version;
@@ -42,9 +43,18 @@ struct kexe_context_v2 {
   int64_t (*pair_new)(struct kexe_context_v2 *, int64_t, int64_t);
   int64_t (*pair_first)(struct kexe_context_v2 *, int64_t);
   int64_t (*pair_second)(struct kexe_context_v2 *, int64_t);
+  /* kgraph-* (ADR-2607198300): an all-integer EAVT datom store, the native
+   * analog of kotoba-lang/kotoba's string/EDN-based kgraph-assert!/
+   * kgraph-query -- this loader has no addressable guest buffer for EDN
+   * text, so entity/attribute/value are caller-assigned integer ids. */
+  int64_t (*kgraph_assert)(struct kexe_context_v2 *, int64_t, int64_t, int64_t);
+  int64_t (*kgraph_get)(struct kexe_context_v2 *, int64_t, int64_t);
+  int64_t (*kgraph_count)(struct kexe_context_v2 *, int64_t);
+  int64_t (*kgraph_entity_at)(struct kexe_context_v2 *, int64_t, int64_t);
 };
 
 struct kexe_pair_v1 { int64_t first; int64_t second; };
+struct kexe_datom_v1 { int64_t e; int64_t a; int64_t v; };
 
 struct kexe_shared_v2 {
   struct kexe_context_v2 context;
@@ -52,6 +62,8 @@ struct kexe_shared_v2 {
   uint64_t completed;
   uint64_t pair_used;
   struct kexe_pair_v1 pairs[KEXE_PAIR_CAPACITY];
+  uint64_t kgraph_used;
+  struct kexe_datom_v1 datoms[KEXE_KGRAPH_CAPACITY];
 };
 
 _Static_assert(offsetof(struct kexe_context_v2, fuel) == 8, "fuel ABI drift");
@@ -60,8 +72,14 @@ _Static_assert(offsetof(struct kexe_context_v2, cap_call) == 48, "cap ABI drift"
 _Static_assert(offsetof(struct kexe_context_v2, pair_new) == 56, "pair ABI drift");
 _Static_assert(offsetof(struct kexe_context_v2, pair_first) == 64, "pair ABI drift");
 _Static_assert(offsetof(struct kexe_context_v2, pair_second) == 72, "pair ABI drift");
+_Static_assert(offsetof(struct kexe_context_v2, kgraph_assert) == 80, "kgraph ABI drift");
+_Static_assert(offsetof(struct kexe_context_v2, kgraph_get) == 88, "kgraph ABI drift");
+_Static_assert(offsetof(struct kexe_context_v2, kgraph_count) == 96, "kgraph ABI drift");
+_Static_assert(offsetof(struct kexe_context_v2, kgraph_entity_at) == 104, "kgraph ABI drift");
 _Static_assert(sizeof(((struct kexe_shared_v2 *)0)->pairs) == 65536,
                "pair arena size drift");
+_Static_assert(sizeof(((struct kexe_shared_v2 *)0)->datoms) == 98304,
+               "kgraph arena size drift");
 
 static int parse_u64(const char *text, uint64_t *value) {
   if (text == NULL || *text < '0' || *text > '9') return -1;
@@ -139,6 +157,82 @@ static int64_t checked_pair_first(struct kexe_context_v2 *context, int64_t handl
 
 static int64_t checked_pair_second(struct kexe_context_v2 *context, int64_t handle) {
   return checked_pair_get(context, handle, 1);
+}
+
+static int64_t checked_kgraph_assert(struct kexe_context_v2 *context,
+                                     int64_t e, int64_t a, int64_t v) {
+  struct kexe_shared_v2 *shared = (struct kexe_shared_v2 *)context;
+  if (context == NULL || context->version != 2 ||
+      shared->kgraph_used >= KEXE_KGRAPH_CAPACITY) {
+    raise(SIGILL);
+    return 0;
+  }
+  uint64_t index = shared->kgraph_used++;
+  shared->datoms[index].e = e;
+  shared->datoms[index].a = a;
+  shared->datoms[index].v = v;
+  return 1;
+}
+
+/* Last-write-wins point lookup, matching kgraph-lang/kotoba's own
+ * kgraph-query semantics for a single (entity, attribute) pair. */
+static int64_t checked_kgraph_get(struct kexe_context_v2 *context,
+                                  int64_t e, int64_t a) {
+  struct kexe_shared_v2 *shared = (struct kexe_shared_v2 *)context;
+  if (context == NULL || context->version != 2) {
+    raise(SIGILL);
+    return 0;
+  }
+  int64_t result = INT64_MIN;
+  for (uint64_t i = 0; i < shared->kgraph_used; i++) {
+    if (shared->datoms[i].e == e && shared->datoms[i].a == a) {
+      result = shared->datoms[i].v;
+    }
+  }
+  return result;
+}
+
+/* True (non-zero) exactly when entity `e` has ever been asserted with
+ * attribute `a`, used by checked_kgraph_count/checked_kgraph_entity_at to
+ * de-duplicate to the first occurrence without a separate seen-set. */
+static int kgraph_entity_seen_before(const struct kexe_shared_v2 *shared,
+                                     uint64_t upto, int64_t a, int64_t e) {
+  for (uint64_t j = 0; j < upto; j++) {
+    if (shared->datoms[j].a == a && shared->datoms[j].e == e) return 1;
+  }
+  return 0;
+}
+
+static int64_t checked_kgraph_count(struct kexe_context_v2 *context, int64_t a) {
+  struct kexe_shared_v2 *shared = (struct kexe_shared_v2 *)context;
+  if (context == NULL || context->version != 2) {
+    raise(SIGILL);
+    return 0;
+  }
+  int64_t count = 0;
+  for (uint64_t i = 0; i < shared->kgraph_used; i++) {
+    if (shared->datoms[i].a != a) continue;
+    if (!kgraph_entity_seen_before(shared, i, a, shared->datoms[i].e)) count++;
+  }
+  return count;
+}
+
+static int64_t checked_kgraph_entity_at(struct kexe_context_v2 *context,
+                                        int64_t a, int64_t index) {
+  struct kexe_shared_v2 *shared = (struct kexe_shared_v2 *)context;
+  if (context == NULL || context->version != 2 || index < 0) {
+    raise(SIGILL);
+    return 0;
+  }
+  int64_t seen = -1;
+  for (uint64_t i = 0; i < shared->kgraph_used; i++) {
+    if (shared->datoms[i].a != a) continue;
+    if (kgraph_entity_seen_before(shared, i, a, shared->datoms[i].e)) continue;
+    seen++;
+    if (seen == index) return shared->datoms[i].e;
+  }
+  raise(SIGILL);
+  return 0;
 }
 
 static int parse_allow(const char *text, uint64_t allow[4]) {
@@ -438,6 +532,10 @@ int main(int argc, char **argv) {
   shared->context.pair_new = checked_pair_new;
   shared->context.pair_first = checked_pair_first;
   shared->context.pair_second = checked_pair_second;
+  shared->context.kgraph_assert = checked_kgraph_assert;
+  shared->context.kgraph_get = checked_kgraph_get;
+  shared->context.kgraph_count = checked_kgraph_count;
+  shared->context.kgraph_entity_at = checked_kgraph_entity_at;
   if (parse_allow(argv[5], shared->context.allow) != 0) return 2;
   int structured_report = getenv("KEXE_STRUCTURED_REPORT") != NULL;
 
