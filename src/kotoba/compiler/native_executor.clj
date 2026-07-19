@@ -511,7 +511,15 @@
   (if (= :windows host-os-value)
     (if-let [system-root (or (System/getenv "SystemRoot")
                              (System/getenv "WINDIR"))]
-      {"KEXE_STRUCTURED_REPORT" "1" "SystemRoot" system-root}
+      (if-let [local-app-data (System/getenv "LOCALAPPDATA")]
+        {"KEXE_STRUCTURED_REPORT" "1"
+         "SystemRoot" system-root
+         ;; CreateProcessW uses this to materialize the per-profile
+         ;; AppContainer environment. Do not inherit the rest of the user's
+         ;; environment (PATH, credentials, or arbitrary injection knobs).
+         "LOCALAPPDATA" local-app-data}
+        (throw (ex-info "Windows AppContainer execution requires LOCALAPPDATA"
+                        {:phase :execute})))
       (throw (ex-info "Windows native execution requires SystemRoot"
                       {:phase :execute})))
     {"KEXE_STRUCTURED_REPORT" "1"}))
