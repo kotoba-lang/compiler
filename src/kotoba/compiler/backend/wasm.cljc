@@ -288,9 +288,37 @@
                               [0x04 (typed/wasm-type result-type)]
                               (emit* then env) [0x05] (emit* else env) [0x0b]))
                     (= op 'f64-to-bits)
-                    (concat (emit* (first args) env) [0xbd])
+                    (let [value-local (allocate! 0x7c)]
+                      (concat (emit* (first args) env) [0x21 value-local]
+                              [0x20 value-local 0x20 value-local 0x62 0x04 0x7e]
+                              [0x42] (sleb 9221120237041090560)
+                              [0x05 0x20 value-local 0xbd 0x0b]))
                     (= op 'f64-from-bits)
-                    (concat (emit* (first args) env) [0xbf])
+                    (let [value-local (allocate! 0x7c)]
+                      (concat (emit* (first args) env) [0xbf 0x21 value-local]
+                              [0x20 value-local 0x20 value-local 0x62 0x04 0x7c]
+                              [0x42] (sleb 9221120237041090560) [0xbf]
+                              [0x05 0x20 value-local 0x0b]))
+                    (contains? '#{f64-add f64-sub f64-mul f64-div} op)
+                    (concat (emit* (first args) env) (emit* (second args) env)
+                            [({'f64-add 0xa0 'f64-sub 0xa1 'f64-mul 0xa2 'f64-div 0xa3} op)])
+                    (= op 'f64-neg)
+                    (concat (emit* (first args) env) [0x9a])
+                    (= op 'f64-abs)
+                    (concat (emit* (first args) env) [0x99])
+                    (contains? '#{f64-eq f64-lt f64-le f64-gt f64-ge} op)
+                    (concat (emit* (first args) env) (emit* (second args) env)
+                            [({'f64-eq 0x61 'f64-lt 0x63 'f64-gt 0x64
+                               'f64-le 0x65 'f64-ge 0x66} op)
+                             0x10 (get intrinsic-indices 'typed-bool)])
+                    (= op 'f64-unordered)
+                    (let [left-local (allocate! 0x7c)
+                          right-local (allocate! 0x7c)]
+                      (concat (emit* (first args) env) [0x21 left-local]
+                              (emit* (second args) env) [0x21 right-local]
+                              [0x20 left-local 0x20 left-local 0x62
+                               0x20 right-local 0x20 right-local 0x62 0x72
+                               0x10 (get intrinsic-indices 'typed-bool)]))
                     (contains? '#{+ - * quot bit-xor bit-and} op)
                     (let [opcode ({'+ 0x7c '- 0x7d '* 0x7e 'quot 0x7f
                                    'bit-and 0x83 'bit-xor 0x85} op)]

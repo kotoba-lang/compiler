@@ -25,15 +25,17 @@ in multiple roots, compilation rejects the ambiguity instead of selecting a
 package by argument order.
 
 All compilation results carry
-`:kotoba.floating-point/ieee-754-f64-bits-v1`; restricted JavaScript artifacts
+`:kotoba.floating-point/ieee-754-f64-arithmetic-v1`; restricted JavaScript artifacts
 seal the equivalent policy. Phase 1 admits scalar `:f64`, decimal/exponent
-literals, `##NaN`, `##Inf`, `##-Inf`, `f64-to-bits`, and `f64-from-bits` on
-Kotoba Script and Wasm targets. The reader normalizes every literal to its exact
+literals, exact bit conversion, add/subtract/multiply/divide, negate/absolute,
+ordered comparisons, and unordered detection on Kotoba Script and Wasm targets.
+The reader normalizes every literal to its exact
 signed-i64 IEEE-754 bit pattern before KIR, preserving signed zero and making
 JVM and JVM-free compiler artifacts byte-identical. NaN payloads are not
-observable from source and canonicalize to `0x7ff8000000000000`. Arithmetic,
-implicit coercion, checked numeric conversion, nested f64 values, and native or
-CLJS lowering remain rejected rather than inheriting host-number semantics.
+observable and canonicalize to `0x7ff8000000000000`, including arbitrary NaN
+payloads introduced through `f64-from-bits`. Implicit coercion, checked numeric
+conversion, nested f64 values, fused operations, remainder, square root,
+transcendentals, and native or CLJS lowering remain rejected.
 
 ## Relationship to `kotoba-lang/kotoba` and `kotoba-lang/kotoba-lang`
 

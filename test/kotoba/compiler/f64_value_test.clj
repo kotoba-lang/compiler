@@ -73,3 +73,45 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
                           #"f64 values require"
                           (compiler/compile-source source :x86_64-kotoba-v1)))))
+
+(def arithmetic-source
+  (str "(ns pilot.f64-arithmetic (:export [main add divide neg absolute equal less unordered nan-bits payload-bits])) "
+       "(defn main [] 0) "
+       "(defn add [x :f64 y :f64] :f64 (f64-add x y)) "
+       "(defn divide [x :f64 y :f64] :f64 (f64-div x y)) "
+       "(defn neg [x :f64] :f64 (f64-neg x)) "
+       "(defn absolute [x :f64] :f64 (f64-abs x)) "
+       "(defn equal [x :f64 y :f64] :bool (f64-eq x y)) "
+       "(defn less [x :f64 y :f64] :bool (f64-lt x y)) "
+       "(defn unordered [x :f64 y :f64] :bool (f64-unordered x y)) "
+       "(defn nan-bits [] (f64-to-bits (f64-div 0.0 0.0))) "
+       "(defn payload-bits [] (f64-to-bits (f64-from-bits 9218868437227405313)))"))
+
+(deftest f64-arithmetic-special-value-matrix-matches-reference-js-and-wasm
+  (let [kir (:kir (compiler/compile-source arithmetic-source :js-kotoba-v1))
+        js-artifact (compiler/compile-source arithmetic-source :js-kotoba-v1)
+        wasm-artifact (compiler/compile-source arithmetic-source :wasm32-browser-kotoba-v1)
+        js-encoded (.encodeToString (java.util.Base64/getEncoder)
+                                    (.getBytes ^String (:source js-artifact) "UTF-8"))
+        wasm-encoded (.encodeToString (java.util.Base64/getEncoder) (:bytes wasm-artifact))
+        assertions (str "const check=x=>{"
+                        "if(x.add(0.1,0.2)!==0.30000000000000004)process.exit(2);"
+                        "if(x.divide(1,0)!==Infinity||!Number.isNaN(x.divide(0,0)))process.exit(3);"
+                        "if(!Object.is(x.neg(0),-0)||!Object.is(x.absolute(-0),0))process.exit(4);"
+                        "if(!x.equal(0,-0)||x.equal(NaN,NaN)||!x.less(-1,0))process.exit(5);"
+                        "if(!x.unordered(NaN,1)||x.unordered(1,2))process.exit(6);"
+                        "if(x['nan-bits']()!==9221120237041090560n||"
+                        "x['payload-bits']()!==9221120237041090560n)process.exit(7)};")
+        js-result (node-run
+                   (str "import('data:text/javascript;base64," js-encoded
+                        "').then(m=>{" assertions "check(m.instantiateKotoba({}));})"))
+        wasm-result (node-run
+                     (str "import('./runtime/browser-host.mjs').then(async m=>{"
+                          "const h=await m.instantiateKotoba(Buffer.from('" wasm-encoded "','base64'));"
+                          assertions "check(h.instance.exports);})"))]
+    (is (= 9221120237041090560 (ir/execute kir 'nan-bits [])))
+    (is (= 9221120237041090560 (ir/execute kir 'payload-bits [])))
+    (is (true? (ir/execute kir 'unordered [Double/NaN 1.0])))
+    (is (false? (ir/execute kir 'equal [Double/NaN Double/NaN])))
+    (is (zero? (:exit js-result)) (:err js-result))
+    (is (zero? (:exit wasm-result)) (:err wasm-result))))

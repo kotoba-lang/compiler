@@ -26,7 +26,8 @@
 ;; rejecting cleanly -- so admission has to inspect which features are
 ;; actually used, not just the HIR format tag.
 (def non-string-typed-ops
-  '#{f64-to-bits f64-from-bits
+  '#{f64-to-bits f64-from-bits f64-add f64-sub f64-mul f64-div f64-neg f64-abs
+     f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered
      map-new map-get map-assoc
      bool-not option-some option-none option-some? option-value
      result-ok result-err result-ok? result-value result-error
@@ -61,7 +62,11 @@
    (some (fn [{:keys [param-types result body]}]
            (or (some #{:f64} param-types)
                (= :f64 result)
-               (some #(and (seq? %) (contains? '#{f64-to-bits f64-from-bits} (first %)))
+               (some #(and (seq? %)
+                           (contains? '#{f64-to-bits f64-from-bits
+                                         f64-add f64-sub f64-mul f64-div f64-neg f64-abs
+                                         f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered}
+                                      (first %)))
                      (tree-seq coll? seq body))))
          (:functions program))))
 
@@ -76,6 +81,10 @@
   (let [remaining (vswap! fuel dec)]
     (when (neg? remaining)
       (trap! :fuel-exhausted {:limit default-fuel}))))
+
+(defn- f64-divide [left right]
+  #?(:clj (let [^double left left ^double right right] (/ left right))
+     :cljs (/ left right)))
 
 (defn- validate-runtime-value! [runtime-value type position]
   (case type
@@ -355,6 +364,26 @@
         (= op 'f64-from-bits)
         (value/i64-bits-to-f64
          (eval-expr (first args) env functions fuel heap call-stack cap-call))
+
+        (contains? '#{f64-add f64-sub f64-mul f64-div} op)
+        (let [[left right] (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
+          ((case op f64-add + f64-sub - f64-mul * f64-div f64-divide) left right))
+
+        (= op 'f64-neg)
+        (- (double (eval-expr (first args) env functions fuel heap call-stack cap-call)))
+
+        (= op 'f64-abs)
+        (#?(:clj Math/abs :cljs js/Math.abs)
+         (eval-expr (first args) env functions fuel heap call-stack cap-call))
+
+        (contains? '#{f64-eq f64-lt f64-le f64-gt f64-ge} op)
+        (let [[left right] (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
+          ((case op f64-eq = f64-lt < f64-le <= f64-gt > f64-ge >=) left right))
+
+        (= op 'f64-unordered)
+        (let [[left right] (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
+          (or #?(:clj (Double/isNaN ^double left) :cljs (js/Number.isNaN left))
+              #?(:clj (Double/isNaN ^double right) :cljs (js/Number.isNaN right))))
 
         (= op 'map-new)
         (let [values (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)

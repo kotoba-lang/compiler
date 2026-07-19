@@ -12,13 +12,14 @@ code bytes. A structurally independent target verifier decodes all emitted
 instructions before admission.
 
 The shared value policy is
-`:kotoba.floating-point/ieee-754-f64-bits-v1`. Its first slice admits scalar
+`:kotoba.floating-point/ieee-754-f64-arithmetic-v1`. It admits scalar
 f64 values only on restricted Kotoba Script and Wasm: source literals are
 normalized to exact i64 bit patterns, and only `f64-to-bits`/
-`f64-from-bits` cross the KIR. Signed zero and infinities are exact; source NaN
-is canonical and its payload is not observable. Arithmetic, implicit
-coercion, nested f64, native, and CLJS paths fail closed until separately
-versioned and qualified.
+`f64-from-bits` cross the KIR alongside explicit basic arithmetic, unary
+negate/absolute, ordered comparisons, and unordered detection. Signed zero and
+infinities are exact; every observed NaN is canonical and its payload is not
+observable. Implicit coercion, nested f64, native, CLJS, fused operations,
+remainder, square root, and transcendental paths fail closed.
 
 Native verification does not trust a sealed KIR merely because its hash is
 valid. Before re-emission, an independent KIR profile checker validates exact

@@ -1,6 +1,6 @@
 # ADR 0005: Admit f64 through an exact bit-preserving profile
 
-Status: accepted, 2026-07-20.
+Status: superseded by its Phase 2 extension below, 2026-07-20.
 
 ## Decision
 
@@ -39,3 +39,13 @@ than being delegated to ambient host semantics.
 4. Qualify square-root and transcendental operations against pinned vectors.
 5. Run Kami engine geometry, physics, and rendering goldens before widening
    the production language profile.
+
+## Phase 2 extension
+
+The policy advances to `:kotoba.floating-point/ieee-754-f64-arithmetic-v1`.
+It adds explicitly typed `f64-add`, `f64-sub`, `f64-mul`, `f64-div`,
+`f64-neg`, `f64-abs`, `f64-eq`, `f64-lt`, `f64-le`, `f64-gt`, `f64-ge`, and
+`f64-unordered`. Reference, restricted JavaScript, and Wasm agree on finite
+rounding, division by zero, signed zero, infinities, ordered/unordered NaN
+behavior, and canonical NaN observation. This does not authorize implicit
+conversion, fused operations, remainder, square root, or transcendentals.
