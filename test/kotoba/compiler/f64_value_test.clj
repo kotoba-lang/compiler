@@ -1,6 +1,7 @@
 (ns kotoba.compiler.f64-value-test
   (:require [clojure.java.shell :as shell]
             [clojure.test :refer [deftest is testing]]
+            [kotoba.compiler.backend.wasm-typed :as typed]
             [kotoba.compiler.core :as compiler]
             [kotoba.compiler.frontend :as frontend]
             [kotoba.compiler.ir :as ir]))
@@ -73,6 +74,24 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
                           #"floating-point values require"
                           (compiler/compile-source source :x86_64-kotoba-v1)))))
+
+(deftest f64-comparison-used-only-as-control-flow-is-sealed-for-typed-wasm
+  (let [conditional-source
+        (str "(ns pilot.f64-condition (:export [main classify])) "
+             "(defn main [] :i64 0) "
+             "(defn classify [x :f64] :f64 "
+             "  (if (f64-lt x 25.0) 0.0 (if (f64-lt x 60.0) 1.0 2.0)))")
+        artifact (compiler/compile-source conditional-source :wasm32-browser-kotoba-v1)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (:bytes artifact))
+        result (node-run
+                (str "import('./runtime/browser-host.mjs').then(async m=>{"
+                     "const h=await m.instantiateKotoba(Buffer.from('" encoded "','base64'));"
+                     "const f=h.instance.exports.classify;"
+                     "if(f(10)!==0||f(25)!==1||f(60)!==2)process.exit(2);"
+                     "console.log('wasm-f64-condition-ok')})"))]
+    (is (some #{:bool} (typed/descriptor-table (:kir artifact))))
+    (is (zero? (:exit result)) (:err result))
+    (is (= "wasm-f64-condition-ok\n" (:out result)))))
 
 (def arithmetic-source
   (str "(ns pilot.f64-arithmetic (:export [main add divide neg absolute equal less unordered nan-bits payload-bits to-f64 rounded to-i64 truncating])) "

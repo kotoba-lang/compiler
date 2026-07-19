@@ -7,6 +7,12 @@
 (def ^:private primitive-tags
   {:i64 0 :string 1 :keyword 2 :bool 3 :vector-i64 11 :f64 12 :f32 13})
 
+(def ^:private boolean-result-ops
+  '#{f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered
+     f32-eq f32-lt f32-le f32-gt f32-ge f32-unordered
+     string=? bool-not option-some? result-ok? option-some?-of result-ok?-of
+     typed-set-contains typed-map-contains})
+
 (defn descriptor? [value]
   (or (contains? primitive-tags value)
       (and (vector? value)
@@ -76,6 +82,10 @@
           :record (reduce (fn [result [_ type]] (walk type result)) found (nth value 2))
           found)))
 
+    (and (seq? value) (contains? boolean-result-ops (first value)))
+    (reduce (fn [result item] (walk item result))
+            (conj found :bool)
+            value)
     (map? value) (reduce (fn [result item] (walk item result)) found (vals value))
     (coll? value) (reduce (fn [result item] (walk item result)) found value)
     (string? value) (conj found :string)
