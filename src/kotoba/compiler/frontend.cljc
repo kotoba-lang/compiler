@@ -73,6 +73,11 @@
 (def arithmetic '#{+ - * quot bit-xor bit-and})
 (def comparisons '#{= < > <= >=})
 (def heap-operations '{pair 2 pair-first 1 pair-second 1})
+;; kgraph-* (ADR-2607198300): all-integer EAVT datom store, the native
+;; (JVM/Node/browser-free) analog of kotoba-lang/kotoba's string/EDN-based
+;; kgraph-assert!/kgraph-query -- this backend has no addressable buffer for
+;; EDN text, so entity/attribute/value are caller-assigned integer ids.
+(def kgraph-operations '{kgraph-assert! 3 kgraph-get 2 kgraph-count 1 kgraph-entity-at 2})
 (def kernel-memory-operations
   '{kernel-load-u8 3 kernel-load-u8-4k 3 kernel-load-u8-16k 3
     kernel-store-u8 4 kernel-store-u8-4k 4
@@ -118,6 +123,7 @@
 (def string-operations '{string-byte-length 1 string=? 2 string-concat 2})
 (def reserved-function-names
   (set/union forbidden-heads arithmetic comparisons (set (keys heap-operations))
+             (set (keys kgraph-operations))
              (set (keys kernel-memory-operations))
              (set (keys kernel-privileged-operations))
              list-operations predicate-operations logical-operations map-operations typed-map-operations
@@ -1174,6 +1180,11 @@
               (reject! "heap operation arity mismatch" form))
             (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
 
+        (contains? kgraph-operations op)
+        (do (when-not (= (get kgraph-operations op) (count args))
+              (reject! "kgraph operation arity mismatch" form))
+            (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
         (contains? string-operations op)
         (do (when-not (= (get string-operations op) (count args))
               (reject! "string operation arity mismatch" form))
@@ -1561,6 +1572,11 @@
           :i64)
 
       (contains? heap-operations op)
+      (do (doseq [[arg type] (map vector args types)]
+            (require-expression-type! type :i64 arg))
+          :i64)
+
+      (contains? kgraph-operations op)
       (do (doseq [[arg type] (map vector args types)]
             (require-expression-type! type :i64 arg))
           :i64)
