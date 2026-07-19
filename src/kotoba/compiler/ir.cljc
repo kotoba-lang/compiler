@@ -26,7 +26,8 @@
 ;; rejecting cleanly -- so admission has to inspect which features are
 ;; actually used, not just the HIR format tag.
 (def non-string-typed-ops
-  '#{map-new map-get map-assoc
+  '#{f64-to-bits f64-from-bits
+     map-new map-get map-assoc
      bool-not option-some option-none option-some? option-value
      result-ok result-err result-ok? result-value result-error
      result-ok-of result-err-of result-ok?-of result-value-of result-error-of result-match-of
@@ -43,12 +44,26 @@
   (letfn [(walk [form]
             (cond
               (or (string? form) (integer? form) (symbol? form)) true
+              (or (keyword? form) (boolean? form)) false
               (seq? form)
               (let [[op & args] form]
                 (and (not (contains? non-string-typed-ops op))
                      (every? walk args)))
               :else true))]
-    (every? #(walk (:body %)) (:functions hir))))
+    (every? (fn [{:keys [param-types result body]}]
+              (and (every? #{:i64 :string} param-types)
+                   (contains? #{:i64 :string} result)
+                   (walk body)))
+            (:functions hir))))
+
+(defn uses-f64? [program]
+  (boolean
+   (some (fn [{:keys [param-types result body]}]
+           (or (some #{:f64} param-types)
+               (= :f64 result)
+               (some #(and (seq? %) (contains? '#{f64-to-bits f64-from-bits} (first %)))
+                     (tree-seq coll? seq body))))
+         (:functions program))))
 
 (defn- trap! [reason data]
   (throw (ex-info (name reason) (merge {:phase :ir :trap reason} data))))
@@ -76,6 +91,10 @@
       (value/bounded-string! runtime-value value/string-value-byte-limit)
       (catch #?(:clj Exception :cljs :default) error
         (trap! :invalid-string-value {:position position :message (ex-message error)})))
+
+    :f64
+    (when-not (value/f64-value? runtime-value)
+      (trap! :value-type-mismatch {:expected :f64 :position position}))
 
     :keyword
     (try
@@ -254,6 +273,7 @@
     #?(:clj (long form) :cljs (i64/->bigint form))
     (string? form)
     (value/bounded-string! form value/string-literal-byte-limit)
+    (value/f64-value? form) form
     (keyword? form)
     (value/bounded-keyword! form value/keyword-value-byte-limit)
     (boolean? form) form
@@ -327,6 +347,14 @@
         (= op 'string-concat)
         (let [[left right] (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
           (value/bounded-string! (str left right) value/string-value-byte-limit))
+
+        (= op 'f64-to-bits)
+        (value/f64-to-i64-bits
+         (eval-expr (first args) env functions fuel heap call-stack cap-call))
+
+        (= op 'f64-from-bits)
+        (value/i64-bits-to-f64
+         (eval-expr (first args) env functions fuel heap call-stack cap-call))
 
         (= op 'map-new)
         (let [values (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)

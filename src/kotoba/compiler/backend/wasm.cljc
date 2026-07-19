@@ -37,7 +37,11 @@
          (if done (conj out b) (recur n' (conj out (bit-or b 0x80))))))
      :cljs
      (loop [n (i64/->bigint n) out []]
-       (let [b (js/Number (bit-and n (js/BigInt 0x7f))) n' (i64/ashr n 7)
+       ;; cljs.core/bit-and coerces through its collection-oriented SCI
+       ;; implementation under nbb and cannot accept JS bigint.  Modulo 128
+       ;; yields the identical low seven two's-complement bits, including for
+       ;; negative values, without leaving the exact-bigint domain.
+       (let [b (js/Number (mod n (js/BigInt 0x80))) n' (i64/ashr n 7)
              done (or (and (= n' i64/zero) (zero? (bit-and b 0x40)))
                       (and (= n' (js/BigInt -1)) (not (zero? (bit-and b 0x40)))))]
          (if done (conj out b) (recur n' (conj out (bit-or b 0x80))))))))
@@ -65,8 +69,13 @@
                 (identity-text (:format kir))
                 (identity-text target)
                 (identity-text (wasm-runtime target))
-                (identity-text (if (= :kotoba.kir/v4 (:format kir))
-                        :kotoba.typed/externref-v1 :kotoba.i64/direct-v1))
+                (identity-text (cond
+                                 (some (fn [{:keys [param-types result]}]
+                                         (or (some #{:f64} param-types) (= :f64 result)))
+                                       (:functions kir))
+                                 :kotoba.typed/mixed-f64-v2
+                                 (= :kotoba.kir/v4 (:format kir)) :kotoba.typed/externref-v1
+                                 :else :kotoba.i64/direct-v1))
                 (identity-text compatibility/tender-role)
                 (identity-text :kotoba.capability-host/v1)]]
     (vec (concat [1] (mapcat name-bytes fields)))))
@@ -243,7 +252,9 @@
             (emit* [form env]
               (cond
                 (and (map? form) (contains? form :wasm-local)) [0x20 (:wasm-local form)]
-                (integer? form) (into [0x42] (sleb form))
+                #?(:clj (integer? form)
+                   :cljs (or (i64/bigint-value? form) (integer? form)))
+                (into [0x42] (sleb form))
                 (or (string? form) (keyword? form) (boolean? form))
                 (let [literal [(cond (string? form) :string (keyword? form) :keyword :else :bool)
                                (if (keyword? form) (str form) form)]]
@@ -276,6 +287,10 @@
                       (concat (emit-test test env)
                               [0x04 (typed/wasm-type result-type)]
                               (emit* then env) [0x05] (emit* else env) [0x0b]))
+                    (= op 'f64-to-bits)
+                    (concat (emit* (first args) env) [0xbd])
+                    (= op 'f64-from-bits)
+                    (concat (emit* (first args) env) [0xbf])
                     (contains? '#{+ - * quot bit-xor bit-and} op)
                     (let [opcode ({'+ 0x7c '- 0x7d '* 0x7e 'quot 0x7f
                                    'bit-and 0x83 'bit-xor 0x85} op)]
@@ -554,7 +569,7 @@
                                (coll? form) (doseq [item form] (walk item))))]
                      (doseq [function functions] (walk (:body function)))
                      @found))
-        typed-imports (when typed?
+        typed-imports (when (and typed? (typed/requires-host-runtime? kir))
                         [['typed-literal "kotoba:typed" "literal" [0x60 1 0x7f 1 0x6f]]
                          ['typed-new "kotoba:typed" "new" [0x60 2 0x7f 0x7f 1 0x6f]]
                          ['typed-push-i64 "kotoba:typed" "push-i64" [0x60 2 0x6f 0x7e 1 0x6f]]

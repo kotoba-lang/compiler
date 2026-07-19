@@ -1,10 +1,11 @@
-(ns kotoba.compiler.backend.wasm-typed)
+(ns kotoba.compiler.backend.wasm-typed
+  #?(:cljs (:require [kotoba.compiler.cljs-i64 :as i64])))
 
-(def abi-version 2)
+(def abi-version 3)
 (def custom-section-name "kotoba.typed")
 
 (def ^:private primitive-tags
-  {:i64 0 :string 1 :keyword 2 :bool 3 :vector-i64 11})
+  {:i64 0 :string 1 :keyword 2 :bool 3 :vector-i64 11 :f64 12})
 
 (defn descriptor? [value]
   (or (contains? primitive-tags value)
@@ -91,6 +92,24 @@
   (into {} (map-indexed (fn [index descriptor] [descriptor index])
                         (descriptor-table kir))))
 
+(declare literal-table reference-type?)
+
+(defn requires-host-runtime? [kir]
+  ;; i64 and f64 are native Wasm scalars.  A module whose complete sealed
+  ;; descriptor table contains only those two types must not acquire the
+  ;; externref host ABI merely because KIR v4 is used.
+  (let [signature-types (mapcat (fn [{:keys [param-types result]}]
+                                  (conj (vec param-types) result))
+                                (:functions kir))
+        ;; `descriptor-table` walks the sealed KIR map and therefore also
+        ;; observes the map's own keyword-valued metadata as `:keyword`.
+        ;; Actual guest keyword literals are independently present in the
+        ;; body-only literal table, so discard only that metadata artefact.
+        body-descriptors (disj (set (descriptor-table kir)) :keyword)]
+    (or (some reference-type? signature-types)
+        (some #(not (contains? #{:i64 :f64} %)) body-descriptors)
+        (seq (literal-table kir)))))
+
 (defn- literal-walk [form found]
   (cond
     (descriptor? form) found
@@ -128,16 +147,17 @@
                  (mapcat encode-literal literals)))))
 
 (defn reference-type? [type]
-  (not= type :i64))
+  (not (contains? #{:i64 :f64} type)))
 
 (defn wasm-type [type]
-  (if (reference-type? type) 0x6f 0x7e))
+  (case type :i64 0x7e :f64 0x7c 0x6f))
 
 (declare infer-type)
 
 (defn infer-type [form env signatures]
   (cond
-    (integer? form) :i64
+    #?(:clj (integer? form) :cljs (or (i64/bigint-value? form) (integer? form))) :i64
+    #?(:clj (instance? Double form) :cljs (number? form)) :f64
     (string? form) :string
     (keyword? form) :keyword
     (boolean? form) :bool
@@ -159,6 +179,8 @@
                       string-byte-length map-get vector-count vector-get
                       vector-at hetero-vector-count typed-set-count
                       typed-map-count} op) :i64
+        (= op 'f64-to-bits) :i64
+        (= op 'f64-from-bits) :f64
         (contains? '#{= < > <= >= hetero-vector-equal typed-set-equal
                       typed-map-equal record-equal} op) :i64
         (contains? '#{string=? bool-not option-some? result-ok?

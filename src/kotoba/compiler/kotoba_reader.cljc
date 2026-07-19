@@ -117,6 +117,17 @@
     #?(:clj (bigint token)
        :cljs (js/BigInt token))))
 
+(defn- f64-form [number]
+  #?(:clj (list 'f64-from-bits (Double/doubleToRawLongBits ^double number))
+     :cljs (let [buffer (js/ArrayBuffer. 8)
+                 view (js/DataView. buffer)]
+             (.setFloat64 view 0 number true)
+             (list 'f64-from-bits (.getBigInt64 view 0 true)))))
+
+(defn- parse-f64-token [token]
+  (when (re-matches #"[+-]?(?:(?:[0-9]+\.[0-9]*|[0-9]*\.[0-9]+)(?:[eE][+-]?[0-9]+)?|[0-9]+[eE][+-]?[0-9]+)" token)
+    (f64-form #?(:clj (Double/parseDouble token) :cljs (js/Number token)))))
+
 (defn- read-token [st]
   (let [[st token] (read-while st token-char?)]
     (when (zero? (count token)) (reject! "expected a form" {:position (:position st)}))
@@ -126,7 +137,7 @@
 
 (defn- read-symbol-or-number [st]
   (let [[st token] (read-token st)]
-    [st (or (parse-int-token token) (symbol token))]))
+    [st (or (parse-int-token token) (parse-f64-token token) (symbol token))]))
 
 (defn- read-keyword [st]
   (let [st (advance st) ; consume leading `:`
@@ -228,6 +239,13 @@
                        (let [[st clauses] (read-delimited (advance st) \))
                              [form matched?] (reader-conditional-branch clauses)]
                          (if matched? [st form false] [st nil true])))
+          (= ch2 \#) (let [[st token] (read-token (advance (advance st)))
+                            value (case token
+                                    "NaN" (f64-form #?(:clj Double/NaN :cljs js/NaN))
+                                    "Inf" (f64-form #?(:clj Double/POSITIVE_INFINITY :cljs js/Infinity))
+                                    "-Inf" (f64-form #?(:clj Double/NEGATIVE_INFINITY :cljs js/Number.NEGATIVE_INFINITY))
+                                    (reject! "unsupported symbolic f64 literal" {:token token}))]
+                        [st (located value start st) false])
           :else (reject! "unsupported reader dispatch" {:next ch2})))
 
       (= ch \)) (reject! "unmatched `)`" {})

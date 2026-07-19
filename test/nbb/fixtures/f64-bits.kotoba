@@ -1,0 +1,4 @@
+(ns f64-bits (:export [bits negative-zero one]))
+(defn bits [value :f64] (f64-to-bits value))
+(defn negative-zero [] :f64 -0.0)
+(defn one [] :f64 1.0)

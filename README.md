@@ -25,13 +25,15 @@ in multiple roots, compilation rejects the ambiguity instead of selecting a
 package by argument order.
 
 All compilation results carry
-`:kotoba.floating-point/forbidden-v1`; restricted JavaScript artifacts also
-seal the equivalent `floatingPointPolicy: 'forbidden-v1'`. Floating-point
-literals, descriptors, parameters, results, operations, and boundary values
-are not admitted. JavaScript numbers, NaN, infinities, signed zero, implicit
-rounding, and integer-to-double coercion therefore cannot become accidental
-Kotoba semantics. Introducing floats requires a new versioned policy and ABI,
-not a silent widening of this profile.
+`:kotoba.floating-point/ieee-754-f64-bits-v1`; restricted JavaScript artifacts
+seal the equivalent policy. Phase 1 admits scalar `:f64`, decimal/exponent
+literals, `##NaN`, `##Inf`, `##-Inf`, `f64-to-bits`, and `f64-from-bits` on
+Kotoba Script and Wasm targets. The reader normalizes every literal to its exact
+signed-i64 IEEE-754 bit pattern before KIR, preserving signed zero and making
+JVM and JVM-free compiler artifacts byte-identical. NaN payloads are not
+observable from source and canonicalize to `0x7ff8000000000000`. Arithmetic,
+implicit coercion, checked numeric conversion, nested f64 values, and native or
+CLJS lowering remain rejected rather than inheriting host-number semantics.
 
 ## Relationship to `kotoba-lang/kotoba` and `kotoba-lang/kotoba-lang`
 
@@ -276,8 +278,7 @@ prototype behavior, and host identity from record semantics.
 
 The machine-readable corpus at
 `resources/kotoba/compiler/typed-value-conformance.edn` is the shared
-qualification source for these algebraic value families and the floating-point
-denial policy. Every positive vector now executes against the reference
+qualification source for these algebraic value families. Every positive vector now executes against the reference
 interpreter, restricted Web emitter, and Wasm externref runtime, with the same
 compile-time or runtime fail-closed boundary for negative vectors. `.cljk` is
 a Kotoba source extension selecting the compiler; it is not a separate runtime
@@ -286,12 +287,14 @@ ABI and must follow the ABI of the selected target.
 The Wasm parity path reserves the versioned `kotoba.typed` custom section for
 canonical binary descriptor and literal tables. Hosts parse it with strict
 UTF-8, uniqueness, EOF, depth, node, member, and table limits before
-instantiation. Binary typed ABI v2 adds the bounded `vector-i64` descriptor and
-i64-indexed vector operations; a v1 host rejects it before instantiation.
+instantiation. Binary typed ABI v3 retains the bounded `vector-i64` descriptor
+and adds scalar `f64` tag 12; an older host rejects it before instantiation.
 `kotoba.typed/externref-v1` consumes that table through frozen, host-issued
 canonical values, validates every reference parameter and result, and rejects
 forged, descriptor-reused, or cross-schema values. The compiled result seals the required Wasm
-reference-types feature. Unsupported KIR v4 operations still fail during
+reference-types feature only when reference values are present. Scalar-only
+f64 modules use the Wasm scalar ABI without typed host imports and seal
+`:kotoba.typed/mixed-f64-v2`. Unsupported KIR v4 operations still fail during
 lowering; metadata presence alone is never treated as qualification.
 
 The first bounded sequential collection is `:vector-i64`, constructed

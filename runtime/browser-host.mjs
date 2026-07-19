@@ -1,7 +1,7 @@
 const MAX_MODULE_BYTES = 1024 * 1024;
 const PAIR_CAPACITY = 4096;
 const TYPED_SECTION = "kotoba.typed";
-const TYPED_ABI_VERSION = 2;
+const TYPED_ABI_VERSION = 3;
 const COMPATIBILITY_SECTION = "kotoba.compatibility";
 const COMPATIBILITY_VERSION = 1;
 const MAX_TYPED_DESCRIPTORS = 64;
@@ -140,6 +140,7 @@ function parseTypedMetadata(module) {
     const tag = byte();
     if (tag <= 3) return Object.freeze(["i64", "string", "keyword", "bool"][tag]);
     if (tag === 11) return Object.freeze(["vector-i64"]);
+    if (tag === 12) return Object.freeze(["f64"]);
     if (tag === 4) return Object.freeze(["option", descriptor(depth + 1)]);
     if (tag === 5) return Object.freeze(["result", descriptor(depth + 1), descriptor(depth + 1)]);
     if (tag === 7) {
