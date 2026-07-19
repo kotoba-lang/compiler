@@ -345,6 +345,8 @@
                         (or (get descriptor-indices type)
                             (throw (ex-info "typed Wasm descriptor is not sealed"
                                             {:phase :wasm-typed-lowering :descriptor type}))))
+        scalar-suffix (fn [type]
+                        (case type :i64 "i64" :f64 "f64" :f32 "f32" "ref"))
         env (into {} (map-indexed (fn [index [name type]]
                                     [name {:index index :type type}])
                                   (map vector (:params function) (:param-types function))))]
@@ -354,9 +356,8 @@
                     pushed (reduce (fn [code [item item-type]]
                                      (concat code (emit* item env)
                                              [0x10 (get intrinsic-indices
-                                                        (if (= item-type :i64)
-                                                          'typed-push-i64
-                                                          'typed-push-ref))]))
+                                                        (symbol (str "typed-push-"
+                                                                     (scalar-suffix item-type))))]))
                                    initial (map vector item-forms item-types))]
                 (concat (i32-const (descriptor-id type)) pushed
                         [0x10 (get intrinsic-indices 'typed-seal)])))
@@ -364,7 +365,7 @@
               (concat (i32-const (descriptor-id type)) (emit* value-form env)
                       (i32-const index)
                       [0x10 (get intrinsic-indices
-                                 (if (= item-type :i64) 'typed-get-i64 'typed-get-ref))]))
+                                 (symbol (str "typed-get-" (scalar-suffix item-type))))]))
             (emit-bool [code]
               (concat code [0x10 (get intrinsic-indices 'typed-bool)]))
             (emit-equal [type left right env]
@@ -388,8 +389,8 @@
               (concat (i32-const (descriptor-id type)) (emit* value env)
                       (i32-const index) (emit* replacement env)
                       [0x10 (get intrinsic-indices
-                                 (if (= replacement-type :i64)
-                                   'typed-assoc-i64 'typed-assoc-ref))]))
+                                 (symbol (str "typed-assoc-"
+                                              (scalar-suffix replacement-type))))]))
             (emit-match [type value-form branches env]
               (let [value-local (allocate! 0x6f)
                     tag-local (allocate! 0x7f)
@@ -975,16 +976,22 @@
                         [['typed-literal "kotoba:typed" "literal" [0x60 1 0x7f 1 0x6f]]
                          ['typed-new "kotoba:typed" "new" [0x60 2 0x7f 0x7f 1 0x6f]]
                          ['typed-push-i64 "kotoba:typed" "push-i64" [0x60 2 0x6f 0x7e 1 0x6f]]
+                         ['typed-push-f64 "kotoba:typed" "push-f64" [0x60 2 0x6f 0x7c 1 0x6f]]
+                         ['typed-push-f32 "kotoba:typed" "push-f32" [0x60 2 0x6f 0x7d 1 0x6f]]
                          ['typed-push-ref "kotoba:typed" "push-ref" [0x60 2 0x6f 0x6f 1 0x6f]]
                          ['typed-seal "kotoba:typed" "seal" [0x60 2 0x7f 0x6f 1 0x6f]]
                          ['typed-assert-ref "kotoba:typed" "assert-ref" [0x60 2 0x7f 0x6f 1 0x6f]]
                          ['typed-tag "kotoba:typed" "tag" [0x60 2 0x7f 0x6f 1 0x7f]]
                          ['typed-get-i64 "kotoba:typed" "get-i64" [0x60 3 0x7f 0x6f 0x7f 1 0x7e]]
+                         ['typed-get-f64 "kotoba:typed" "get-f64" [0x60 3 0x7f 0x6f 0x7f 1 0x7c]]
+                         ['typed-get-f32 "kotoba:typed" "get-f32" [0x60 3 0x7f 0x6f 0x7f 1 0x7d]]
                          ['typed-get-ref "kotoba:typed" "get-ref" [0x60 3 0x7f 0x6f 0x7f 1 0x6f]]
                          ['typed-count "kotoba:typed" "count" [0x60 2 0x7f 0x6f 1 0x7e]]
                          ['typed-bool "kotoba:typed" "bool" [0x60 1 0x7f 1 0x6f]]
                          ['typed-equal "kotoba:typed" "equal" [0x60 3 0x7f 0x6f 0x6f 1 0x7f]]
                          ['typed-assoc-i64 "kotoba:typed" "assoc-i64" [0x60 4 0x7f 0x6f 0x7f 0x7e 1 0x6f]]
+                         ['typed-assoc-f64 "kotoba:typed" "assoc-f64" [0x60 4 0x7f 0x6f 0x7f 0x7c 1 0x6f]]
+                         ['typed-assoc-f32 "kotoba:typed" "assoc-f32" [0x60 4 0x7f 0x6f 0x7f 0x7d 1 0x6f]]
                          ['typed-assoc-ref "kotoba:typed" "assoc-ref" [0x60 4 0x7f 0x6f 0x7f 0x6f 1 0x6f]]
                          ['typed-vector-drop "kotoba:typed" "vector-drop" [0x60 3 0x7f 0x6f 0x7e 1 0x6f]]
                          ['typed-vector-at-i64 "kotoba:typed" "vector-at-i64" [0x60 3 0x7f 0x6f 0x7e 1 0x7e]]

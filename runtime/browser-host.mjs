@@ -13,16 +13,22 @@ const ALLOWED_IMPORTS = new Set([
   "kotoba:typed/literal/function",
   "kotoba:typed/new/function",
   "kotoba:typed/push-i64/function",
+  "kotoba:typed/push-f64/function",
+  "kotoba:typed/push-f32/function",
   "kotoba:typed/push-ref/function",
   "kotoba:typed/seal/function",
   "kotoba:typed/assert-ref/function",
   "kotoba:typed/tag/function",
   "kotoba:typed/get-i64/function",
+  "kotoba:typed/get-f64/function",
+  "kotoba:typed/get-f32/function",
   "kotoba:typed/get-ref/function",
   "kotoba:typed/count/function",
   "kotoba:typed/bool/function",
   "kotoba:typed/equal/function",
   "kotoba:typed/assoc-i64/function",
+  "kotoba:typed/assoc-f64/function",
+  "kotoba:typed/assoc-f32/function",
   "kotoba:typed/assoc-ref/function",
   "kotoba:typed/vector-drop/function",
   "kotoba:typed/vector-at-i64/function",
@@ -140,8 +146,8 @@ function parseTypedMetadata(module) {
     const tag = byte();
     if (tag <= 3) return Object.freeze(["i64", "string", "keyword", "bool"][tag]);
     if (tag === 11) return Object.freeze(["vector-i64"]);
-    if (tag === 12) return Object.freeze(["f64"]);
-    if (tag === 13) return Object.freeze(["f32"]);
+    if (tag === 12) return "f64";
+    if (tag === 13) return "f32";
     if (tag === 4) return Object.freeze(["option", descriptor(depth + 1)]);
     if (tag === 5) return Object.freeze(["result", descriptor(depth + 1), descriptor(depth + 1)]);
     if (tag === 7) {
@@ -306,6 +312,16 @@ function createTypedRuntime(abi) {
       reject("invalid-typed-value", "typed i64 value is invalid");
     return value;
   };
+  const f64 = value => {
+    if (typeof value !== "number")
+      reject("invalid-typed-value", "typed f64 value is invalid");
+    return Number.isNaN(value) ? Number.NaN : value;
+  };
+  const f32 = value => {
+    if (typeof value !== "number" || !Object.is(Math.fround(value), value))
+      reject("invalid-typed-value", "typed f32 value is invalid");
+    return Number.isNaN(value) ? Number.NaN : value;
+  };
   const utf8Length = value => {
     if (typeof value !== "string") reject("invalid-typed-value", "typed string is invalid");
     for (let index = 0; index < value.length; index += 1) {
@@ -330,6 +346,11 @@ function createTypedRuntime(abi) {
     return left.length < right.length ? -1 : left.length > right.length ? 1 : 0;
   };
   const compareValue = (descriptor, left, right) => {
+    if (descriptor === "f64" || descriptor === "f32") {
+      if (Number.isNaN(left) || Number.isNaN(right))
+        return Number.isNaN(left) && Number.isNaN(right) ? 0 : Number.isNaN(left) ? 1 : -1;
+      return left < right ? -1 : left > right ? 1 : 0;
+    }
     if (descriptor === "i64" || descriptor === "string" || descriptor === "keyword")
       return left < right ? -1 : left > right ? 1 : 0;
     if (descriptor === "bool") return left === right ? 0 : left ? 1 : -1;
@@ -389,6 +410,8 @@ function createTypedRuntime(abi) {
       reject("invalid-typed-value", "typed runtime value budget exceeded");
     try {
       if (descriptor === "i64") return i64(value);
+      if (descriptor === "f64") return f64(value);
+      if (descriptor === "f32") return f32(value);
       if (descriptor === "string") {
         if (utf8Length(value) > 65536) reject("invalid-typed-value", "typed string is oversized");
         return value;
@@ -482,6 +505,18 @@ function createTypedRuntime(abi) {
       builders.add(next);
       return next;
     },
+    "push-f64"(rawBuilder, item) {
+      const builder = checkedBuilder(rawBuilder);
+      const next = Object.freeze({ ...builder, slots: Object.freeze([...builder.slots, f64(item)]) });
+      builders.add(next);
+      return next;
+    },
+    "push-f32"(rawBuilder, item) {
+      const builder = checkedBuilder(rawBuilder);
+      const next = Object.freeze({ ...builder, slots: Object.freeze([...builder.slots, f32(item)]) });
+      builders.add(next);
+      return next;
+    },
     "push-ref"(rawBuilder, item) {
       const builder = checkedBuilder(rawBuilder);
       const next = Object.freeze({ ...builder, slots: Object.freeze([...builder.slots, item]) });
@@ -544,6 +579,26 @@ function createTypedRuntime(abi) {
         : checked[index + 1];
       return i64(item);
     },
+    "get-f64"(descriptorId, value, index) {
+      const descriptor = descriptorAt(descriptorId);
+      const checked = assertValue(descriptor, value);
+      const kind = descriptor[0];
+      const item = kind === "option" ? checked[2]
+        : kind === "result" ? checked[1]
+        : kind === "variant" ? checked[2]
+        : checked[index + 1];
+      return f64(item);
+    },
+    "get-f32"(descriptorId, value, index) {
+      const descriptor = descriptorAt(descriptorId);
+      const checked = assertValue(descriptor, value);
+      const kind = descriptor[0];
+      const item = kind === "option" ? checked[2]
+        : kind === "result" ? checked[1]
+        : kind === "variant" ? checked[2]
+        : checked[index + 1];
+      return f32(item);
+    },
     "get-ref"(descriptorId, value, index) {
       const descriptor = descriptorAt(descriptorId);
       const checked = assertValue(descriptor, value);
@@ -570,6 +625,12 @@ function createTypedRuntime(abi) {
     },
     "assoc-i64"(descriptorId, value, index, replacement) {
       return assoc(descriptorId, value, index, i64(replacement));
+    },
+    "assoc-f64"(descriptorId, value, index, replacement) {
+      return assoc(descriptorId, value, index, f64(replacement));
+    },
+    "assoc-f32"(descriptorId, value, index, replacement) {
+      return assoc(descriptorId, value, index, f32(replacement));
     },
     "assoc-ref"(descriptorId, value, index, replacement) {
       return assoc(descriptorId, value, index, replacement);
