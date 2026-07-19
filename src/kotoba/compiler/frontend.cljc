@@ -123,8 +123,8 @@
 (def string-operations '{string-byte-length 1 string=? 2 string-concat 2})
 (def f64-operations
   '{f64-to-bits 1 f64-from-bits 1
-    f64-add 2 f64-sub 2 f64-mul 2 f64-div 2
-    f64-neg 1 f64-abs 1
+    f64-add 2 f64-sub 2 f64-mul 2 f64-div 2 f64-min 2 f64-max 2
+    f64-neg 1 f64-abs 1 f64-sqrt 1
     f64-eq 2 f64-lt 2 f64-le 2 f64-gt 2 f64-ge 2 f64-unordered 2
     i64-to-f64-checked 1 i64-to-f64-rounded 1
     f64-to-i64-checked 1 f64-to-i64-truncating 1})
@@ -134,8 +134,8 @@
     f64-to-f32-rounded 1 f32-to-f64-exact 1
     i64-to-f32-checked 1 i64-to-f32-rounded 1
     f32-to-i64-checked 1 f32-to-i64-truncating 1
-    f32-add 2 f32-sub 2 f32-mul 2 f32-div 2
-    f32-neg 1 f32-abs 1
+    f32-add 2 f32-sub 2 f32-mul 2 f32-div 2 f32-min 2 f32-max 2
+    f32-neg 1 f32-abs 1 f32-sqrt 1
     f32-eq 2 f32-lt 2 f32-le 2 f32-gt 2 f32-ge 2 f32-unordered 2})
 (def reserved-function-names
   (set/union forbidden-heads arithmetic comparisons (set (keys heap-operations))
@@ -1647,12 +1647,12 @@
       (contains? '#{f64-to-i64-checked f64-to-i64-truncating} op)
       (do (require-expression-type! (first types) :f64 (first args)) :i64)
 
-      (contains? '#{f64-add f64-sub f64-mul f64-div} op)
+      (contains? '#{f64-add f64-sub f64-mul f64-div f64-min f64-max} op)
       (do (doseq [[type arg] (map vector types args)]
             (require-expression-type! type :f64 arg))
           :f64)
 
-      (contains? '#{f64-neg f64-abs} op)
+      (contains? '#{f64-neg f64-abs f64-sqrt} op)
       (do (require-expression-type! (first types) :f64 (first args)) :f64)
 
       (contains? '#{f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered} op)
@@ -1678,12 +1678,12 @@
       (contains? '#{f32-to-i64-checked f32-to-i64-truncating} op)
       (do (require-expression-type! (first types) :f32 (first args)) :i64)
 
-      (contains? '#{f32-add f32-sub f32-mul f32-div} op)
+      (contains? '#{f32-add f32-sub f32-mul f32-div f32-min f32-max} op)
       (do (doseq [[type arg] (map vector types args)]
             (require-expression-type! type :f32 arg))
           :f32)
 
-      (contains? '#{f32-neg f32-abs} op)
+      (contains? '#{f32-neg f32-abs f32-sqrt} op)
       (do (require-expression-type! (first types) :f32 (first args)) :f32)
 
       (contains? '#{f32-eq f32-lt f32-le f32-gt f32-ge f32-unordered} op)

@@ -324,13 +324,16 @@
                               [0x20 source-local 0xb0 0x21 result-local]
                               [0x20 result-local 0xb9 0x20 source-local 0x62
                                0x04 0x40 0x00 0x0b 0x20 result-local]))
-                    (contains? '#{f64-add f64-sub f64-mul f64-div} op)
+                    (contains? '#{f64-add f64-sub f64-mul f64-div f64-min f64-max} op)
                     (concat (emit* (first args) env) (emit* (second args) env)
-                            [({'f64-add 0xa0 'f64-sub 0xa1 'f64-mul 0xa2 'f64-div 0xa3} op)])
+                            [({'f64-add 0xa0 'f64-sub 0xa1 'f64-mul 0xa2 'f64-div 0xa3
+                               'f64-min 0xa4 'f64-max 0xa5} op)])
                     (= op 'f64-neg)
                     (concat (emit* (first args) env) [0x9a])
                     (= op 'f64-abs)
                     (concat (emit* (first args) env) [0x99])
+                    (= op 'f64-sqrt)
+                    (concat (emit* (first args) env) [0x9f])
                     (contains? '#{f64-eq f64-lt f64-le f64-gt f64-ge} op)
                     (concat (emit* (first args) env) (emit* (second args) env)
                             [({'f64-eq 0x61 'f64-lt 0x63 'f64-gt 0x64
@@ -383,13 +386,16 @@
                               [0x20 source-local 0xae 0x21 result-local]
                               [0x20 result-local 0xb4 0x20 source-local 0x5c
                                0x04 0x40 0x00 0x0b 0x20 result-local]))
-                    (contains? '#{f32-add f32-sub f32-mul f32-div} op)
+                    (contains? '#{f32-add f32-sub f32-mul f32-div f32-min f32-max} op)
                     (concat (emit* (first args) env) (emit* (second args) env)
-                            [({'f32-add 0x92 'f32-sub 0x93 'f32-mul 0x94 'f32-div 0x95} op)])
+                            [({'f32-add 0x92 'f32-sub 0x93 'f32-mul 0x94 'f32-div 0x95
+                               'f32-min 0x96 'f32-max 0x97} op)])
                     (= op 'f32-neg)
                     (concat (emit* (first args) env) [0x8c])
                     (= op 'f32-abs)
                     (concat (emit* (first args) env) [0x8b])
+                    (= op 'f32-sqrt)
+                    (concat (emit* (first args) env) [0x91])
                     (contains? '#{f32-eq f32-lt f32-le f32-gt f32-ge} op)
                     (concat (emit* (first args) env) (emit* (second args) env)
                             [({'f32-eq 0x5b 'f32-lt 0x5d 'f32-gt 0x5e

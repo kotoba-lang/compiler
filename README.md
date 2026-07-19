@@ -25,7 +25,7 @@ in multiple roots, compilation rejects the ambiguity instead of selecting a
 package by argument order.
 
 All compilation results carry
-`:kotoba.floating-point/ieee-754-f32-f64-v1`; restricted JavaScript artifacts
+`:kotoba.floating-point/ieee-754-f32-f64-v2`; restricted JavaScript artifacts
 seal the equivalent policy. Scalar `:f32` and `:f64` provide exact bit
 conversion, explicit arithmetic, ordered comparisons, unordered detection,
 and checked-versus-lossy numeric conversions on Kotoba Script and Wasm targets.
@@ -37,6 +37,9 @@ observable and canonicalize to `0x7ff8000000000000`, including arbitrary NaN
 payloads introduced through `f64-from-bits`; f32 observation similarly uses
 canonical `0x7fc00000`. Implicit coercion, nested floating values, fused operations, remainder, square root,
 transcendentals, and native or CLJS lowering remain rejected.
+The v2 profile adds NaN-propagating square root, minimum, and maximum. Minimum
+selects negative zero and maximum positive zero for opposite-signed zeros;
+binary32 rounds after each named operation.
 
 Conversions are explicit: `i64-to-f64-checked` rejects inexact integers,
 whereas `i64-to-f64-rounded` names the IEEE rounding request.
