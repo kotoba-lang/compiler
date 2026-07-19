@@ -41,6 +41,10 @@
         (keyword s)))
 
 (defn- option [args flag] (second (drop-while #(not= flag %) args)))
+(defn- options [args flag]
+  (->> (partition 2 1 args)
+       (keep (fn [[candidate value]] (when (= candidate flag) value)))
+       vec))
 
 (def ^:dynamic *exit* (fn [status] (System/exit status)))
 
@@ -257,7 +261,7 @@
                         :kernel-sha256 (:embedded-kernel-sha256 packaged)})))
     "compile"
     (let [input (kotoba-source! (second args))
-          source-root (option args "--source-path")
+          source-roots (options args "--source-path")
           target (parse-target (or (option args "--target") "wasm32"))
           output (or (option args "--output")
                      (str input (case (:execution (target-profile/profile target))
@@ -273,8 +277,8 @@
           _ (when-not (contains? #{nil "object" "image"} artifact-kind)
               (throw (ex-info "unknown native artifact kind"
                               {:phase :artifact-target :artifact artifact-kind})))
-          result (if source-root
-                   (let [{:keys [sources root]} (project-files/load-closed-graph input source-root)]
+          result (if (seq source-roots)
+                   (let [{:keys [sources root]} (project-files/load-closed-graph input source-roots)]
                      (compiler/compile-project sources root target policy))
                    (compiler/compile-source (bounded-edn/read-text-file input) target policy))]
       (case (:format result)

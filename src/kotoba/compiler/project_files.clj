@@ -19,35 +19,49 @@
 (defn- namespace-relative [namespace]
   (-> (str namespace) (str/replace "." "/") (str/replace "-" "_")))
 
-(defn- module-path [^Path source-root namespace]
+(defn- module-path [source-roots namespace]
   (let [relative (namespace-relative namespace)
-        candidates (map #(.resolve source-root (str relative %)) extensions)
-        existing (filter #(Files/isRegularFile % (make-array LinkOption 0)) candidates)]
-    (when-not (seq existing)
-      (reject! "required module is missing from the explicit source path"
-               {:module namespace}))
-    ;; Extension priority is part of the source contract. A lower-priority
-    ;; compatibility file never shadows canonical .kotoba.
-    (first existing)))
+        existing (keep (fn [^Path source-root]
+                         ;; Extension priority remains local to one package
+                         ;; root. The same namespace in two explicit roots is
+                         ;; ambiguous and must never be shadowed by argument order.
+                         (first (filter #(Files/isRegularFile % (make-array LinkOption 0))
+                                        (map #(.resolve source-root (str relative %)) extensions))))
+                       source-roots)]
+    (cond
+      (empty? existing)
+      (reject! "required module is missing from the explicit source paths"
+               {:module namespace})
+      (> (count existing) 1)
+      (reject! "namespace resolves from multiple explicit source paths"
+               {:module namespace})
+      :else (first existing))))
 
 (defn load-closed-graph
   "Load only the transitive closure rooted at input from one explicit source
-  directory. The explicitly selected root may live beside that directory;
-  dependency real-path checks reject symlink escape. project/link-source owns
-  the aggregate graph and source bounds."
-  [input source-path]
-  (let [source-root (real-path source-path)
+  directories. The explicitly selected root may live beside those directories;
+  dependency real-path checks reject symlink escape and cross-root namespace
+  ambiguity. project/link-source owns the aggregate graph and source bounds."
+  [input source-paths]
+  (let [source-roots (mapv real-path (if (sequential? source-paths)
+                                       source-paths [source-paths]))
         root-path (real-path input)]
-    (when-not (Files/isDirectory source-root (make-array LinkOption 0))
-      (reject! "source path must be a readable directory" {}))
+    (when (empty? source-roots)
+      (reject! "at least one source path is required" {}))
+    (doseq [^Path source-root source-roots]
+      (when-not (Files/isDirectory source-root (make-array LinkOption 0))
+        (reject! "source path must be a readable directory" {})))
     (let [sources (volatile! {})
           paths (volatile! {})]
       (letfn [(visit [^Path file expected]
                 (let [real (.toRealPath file (make-array LinkOption 0))]
                   ;; The root is explicitly selected, not discovered by
                   ;; namespace. Only discovered dependencies are confined.
-                  (when (and expected (not (.startsWith real source-root)))
-                    (reject! "project module escapes the explicit source path"
+                  (when (and expected
+                             (not-any? (fn [^Path source-root]
+                                         (.startsWith real source-root))
+                                       source-roots))
+                    (reject! "project module escapes the explicit source paths"
                              {:module expected}))
                   (let [source (slurp (.toFile real))
                         info (project/module-info (frontend/read-forms source))
@@ -66,7 +80,7 @@
                       (vswap! sources assoc declared source)
                       (vswap! paths assoc declared real)
                       (doseq [{dependency :namespace} (:requires info)]
-                        (visit (module-path source-root dependency) dependency)))
+                        (visit (module-path source-roots dependency) dependency)))
                     declared)))]
         (let [root-namespace (visit root-path nil)]
           {:sources @sources :root root-namespace

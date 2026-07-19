@@ -18,6 +18,12 @@ profiles, conformance and runtime digests, CI run, test time, and expiry.
 
 The multi-target, deny-by-default compiler for the safe Kotoba language.
 
+Project compilation accepts repeated `--source-path ROOT` arguments to link
+explicit package roots into one closed graph. Every dependency remains
+confined to one of those real paths. If the same qualified namespace exists
+in multiple roots, compilation rejects the ambiguity instead of selecting a
+package by argument order.
+
 All compilation results carry
 `:kotoba.floating-point/forbidden-v1`; restricted JavaScript artifacts also
 seal the equivalent `floatingPointPolicy: 'forbidden-v1'`. Floating-point
