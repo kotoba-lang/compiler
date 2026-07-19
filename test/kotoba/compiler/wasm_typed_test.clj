@@ -43,6 +43,20 @@
     (testing "legacy i64 modules do not acquire a typed ABI claim"
     (is (not-any? #(= marker %) (partition (count marker) 1 i64-bytes))))))
 
+(deftest parameterized-i64-bitwise-ops-have-wasm-runtime-lowering
+  (let [source
+        "(ns i64.bitwise (:export [main xor and-bits]))
+         (defn main [] :i64 42)
+         (defn xor [x :i64 y :i64] :i64 (bit-xor x y))
+         (defn and-bits [x :i64 y :i64] :i64 (bit-and x y))"
+        compiled (compiler/compile-source source :wasm32-browser-kotoba-v1)
+        probe (node-probe
+               compiled
+               (str "const x=h.instance.exports;"
+                    "if(x.xor(-1n,0x5555555555555555n)!==-6148914691236517206n)process.exit(2);"
+                    "if(x['and-bits'](-1n,0x5555555555555555n)!==0x5555555555555555n)process.exit(3);"))]
+    (is (zero? (:exit probe)) (:err probe))))
+
 (deftest compatibility-is-sealed-and-host-admitted-before-instantiation
   (let [compiled (compiler/compile-source "(defn main [] 42)" :wasm32-browser-kotoba-v1)
         encoded (.encodeToString (java.util.Base64/getEncoder) ^bytes (:bytes compiled))

@@ -131,8 +131,9 @@
         (contains? '#{pair pair-first pair-second} op)
         (concat (emit-many args env ctx) [0x10 (get intrinsic-indices op)])
 
-        (contains? '#{+ - * quot} op)
-        (let [opcode ({'+ 0x7c '- 0x7d '* 0x7e 'quot 0x7f} op)]
+        (contains? '#{+ - * quot bit-xor bit-and} op)
+        (let [opcode ({'+ 0x7c '- 0x7d '* 0x7e 'quot 0x7f
+                       'bit-and 0x83 'bit-xor 0x85} op)]
           (if (and (= op '-) (= 1 (count args)))
             (concat [0x42 0] (emit-expr (first args) env ctx) [0x7d])
             (concat (emit-expr (first args) env ctx)
