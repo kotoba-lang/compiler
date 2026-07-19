@@ -446,6 +446,13 @@ classify loopback for a standard desktop process with
 not the precise process-class condition. The probe filter now matches the
 non-AppContainer loopback flag explicitly.
 
+UPDATE (sixth hosted-runner observation): the process-class flag alone did not
+change the result. ALE authorization is stateful, and the original differential
+probe recreated the same `127.0.0.1` class immediately after authorizing its
+control connection. The post-policy probe now uses a distinct live
+`127.0.0.2` flow so its evidence cannot be inherited from the pre-policy ALE
+flow; all of `127/8` remains loopback.
+
 This boundary is not yet sufficient for release admission. The product command
 now admits the signed KEXE, verifies its regenerated code, binds the reviewed
 Windows source plus compiler/linker/resource/header closure into runtime trust,

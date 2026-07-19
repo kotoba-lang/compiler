@@ -537,7 +537,10 @@ static int network_outbound_probe_denied(void) {
   ZeroMemory(&address, sizeof(address));
   address.sin_family = AF_INET;
   address.sin_port = htons(0);
-  address.sin_addr.s_addr = htonl(0x7f000001);
+  /* Use a different loopback flow from the pre-filter 127.0.0.1 control.
+     ALE is stateful: reusing a previously authorized five-tuple can bypass
+     classification until reauthorization. 127/8 is entirely loopback. */
+  address.sin_addr.s_addr = htonl(0x7f000002);
   if (bind(listener, (struct sockaddr *)&address, sizeof(address)) != 0 ||
       listen(listener, 1) != 0 ||
       getsockname(listener, (struct sockaddr *)&address, &address_length) != 0) {
