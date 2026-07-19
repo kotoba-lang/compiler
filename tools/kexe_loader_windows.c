@@ -317,7 +317,8 @@ static void install_network_denial(void) {
   loopback_conditions[1].fieldKey = FWPM_CONDITION_FLAGS;
   loopback_conditions[1].matchType = FWP_MATCH_FLAGS_ALL_SET;
   loopback_conditions[1].conditionValue.type = FWP_UINT32;
-  loopback_conditions[1].conditionValue.uint32 = FWP_CONDITION_FLAG_IS_LOOPBACK;
+  loopback_conditions[1].conditionValue.uint32 =
+    FWP_CONDITION_FLAG_IS_NON_APPCONTAINER_LOOPBACK;
 
   for (i = 0; i < sizeof(layers) / sizeof(layers[0]); i++) {
     UINT64 filter_id = 0;
@@ -345,9 +346,9 @@ static void install_network_denial(void) {
     fprintf(stderr, "kexe-loader-windows: network denial filter installed: layer=%zu filter_id=%llu "
                     "kind=general\n", i, (unsigned long long)filter_id);
 
-    /* Filter B: loopback-inclusive block, app id AND FWP_CONDITION_FLAG_IS_LOOPBACK.
-       This is the filter this app's own loopback probes below actually
-       exercise; without it, the confirmed CI failure recurs. */
+    /* Filter B: standard-process loopback block, app id AND
+       FWP_CONDITION_FLAG_IS_NON_APPCONTAINER_LOOPBACK. The generic loopback
+       bit did not match this non-AppContainer process on hosted Windows. */
     filter_id = 0;
     ZeroMemory(&filter, sizeof(filter));
     filter.layerKey = *layers[i];

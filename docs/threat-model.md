@@ -439,6 +439,13 @@ dynamic Kotoba sublayer and installs terminating `CLEAR_ACTION_RIGHT` block
 filters there. The session still owns their lifetime and tears them down when
 the loader exits.
 
+UPDATE (fifth hosted-runner observation): the terminating custom sublayer was
+reached but the loopback connection still completed. Windows 8 and later
+classify loopback for a standard desktop process with
+`FWP_CONDITION_FLAG_IS_NON_APPCONTAINER_LOOPBACK`; the generic loopback bit is
+not the precise process-class condition. The probe filter now matches the
+non-AppContainer loopback flag explicitly.
+
 This boundary is not yet sufficient for release admission. The product command
 now admits the signed KEXE, verifies its regenerated code, binds the reviewed
 Windows source plus compiler/linker/resource/header closure into runtime trust,
