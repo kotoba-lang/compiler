@@ -275,8 +275,9 @@
                       (concat (emit-test test env)
                               [0x04 (typed/wasm-type result-type)]
                               (emit* then env) [0x05] (emit* else env) [0x0b]))
-                    (contains? '#{+ - * quot} op)
-                    (let [opcode ({'+ 0x7c '- 0x7d '* 0x7e 'quot 0x7f} op)]
+                    (contains? '#{+ - * quot bit-xor bit-and} op)
+                    (let [opcode ({'+ 0x7c '- 0x7d '* 0x7e 'quot 0x7f
+                                   'bit-and 0x83 'bit-xor 0x85} op)]
                       (if (and (= op '-) (= 1 (count args)))
                         (concat [0x42 0] (emit* (first args) env) [0x7d])
                         (concat (emit* (first args) env)
@@ -284,6 +285,41 @@
                     (= op 'string-byte-length)
                     (concat (i32-const (descriptor-id :string)) (emit* (first args) env)
                             [0x10 (get intrinsic-indices 'typed-count)])
+                    (= op 'vector-new)
+                    (emit-builder :vector-i64 -1 args (repeat (count args) :i64) env)
+                    (= op 'vector-count)
+                    (concat (i32-const (descriptor-id :vector-i64)) (emit* (first args) env)
+                            [0x10 (get intrinsic-indices 'typed-count)])
+                    (= op 'vector-at)
+                    (concat (i32-const (descriptor-id :vector-i64))
+                            (emit* (first args) env) (emit* (second args) env)
+                            [0x10 (get intrinsic-indices 'typed-vector-at-i64)])
+                    (= op 'vector-get)
+                    (let [[value index fallback] args
+                          value-local (allocate! 0x6f)
+                          index-local (allocate! 0x7e)]
+                      (concat (emit* value env) [0x21 value-local]
+                              (emit* index env) [0x21 index-local]
+                              [0x20 index-local 0x42 0 0x59 0x20 index-local]
+                              (i32-const (descriptor-id :vector-i64)) [0x20 value-local]
+                              [0x10 (get intrinsic-indices 'typed-count) 0x54 0x71 0x04 0x7e]
+                              (i32-const (descriptor-id :vector-i64))
+                              [0x20 value-local 0x20 index-local
+                               0x10 (get intrinsic-indices 'typed-vector-at-i64) 0x05]
+                              (emit* fallback env) [0x0b]))
+                    (= op 'vector-drop)
+                    (concat (i32-const (descriptor-id :vector-i64))
+                            (emit* (first args) env) (emit* (second args) env)
+                            [0x10 (get intrinsic-indices 'typed-vector-drop)])
+                    (= op 'vector-assoc)
+                    (concat (i32-const (descriptor-id :vector-i64))
+                            (emit* (first args) env) (emit* (second args) env)
+                            (emit* (nth args 2) env)
+                            [0x10 (get intrinsic-indices 'typed-vector-assoc-i64)])
+                    (= op 'vector-conj)
+                    (concat (i32-const (descriptor-id :vector-i64))
+                            (emit* (first args) env) (emit* (second args) env)
+                            [0x10 (get intrinsic-indices 'typed-vector-conj-i64)])
                     (= op 'string=?)
                     (emit-bool
                      (concat (i32-const (descriptor-id :string))
@@ -532,6 +568,10 @@
                          ['typed-equal "kotoba:typed" "equal" [0x60 3 0x7f 0x6f 0x6f 1 0x7f]]
                          ['typed-assoc-i64 "kotoba:typed" "assoc-i64" [0x60 4 0x7f 0x6f 0x7f 0x7e 1 0x6f]]
                          ['typed-assoc-ref "kotoba:typed" "assoc-ref" [0x60 4 0x7f 0x6f 0x7f 0x6f 1 0x6f]]
+                         ['typed-vector-drop "kotoba:typed" "vector-drop" [0x60 3 0x7f 0x6f 0x7e 1 0x6f]]
+                         ['typed-vector-at-i64 "kotoba:typed" "vector-at-i64" [0x60 3 0x7f 0x6f 0x7e 1 0x7e]]
+                         ['typed-vector-assoc-i64 "kotoba:typed" "vector-assoc-i64" [0x60 4 0x7f 0x6f 0x7e 0x7e 1 0x6f]]
+                         ['typed-vector-conj-i64 "kotoba:typed" "vector-conj-i64" [0x60 3 0x7f 0x6f 0x7e 1 0x6f]]
                          ['typed-set-op-i64 "kotoba:typed" "set-op-i64" [0x60 4 0x7f 0x6f 0x7f 0x7e 1 0x6f]]
                          ['typed-set-op-ref "kotoba:typed" "set-op-ref" [0x60 4 0x7f 0x6f 0x7f 0x6f 1 0x6f]]
                          ['typed-set-contains-i64 "kotoba:typed" "set-contains-i64" [0x60 3 0x7f 0x6f 0x7e 1 0x7f]]

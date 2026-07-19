@@ -1,7 +1,7 @@
 const MAX_MODULE_BYTES = 1024 * 1024;
 const PAIR_CAPACITY = 4096;
 const TYPED_SECTION = "kotoba.typed";
-const TYPED_ABI_VERSION = 1;
+const TYPED_ABI_VERSION = 2;
 const COMPATIBILITY_SECTION = "kotoba.compatibility";
 const COMPATIBILITY_VERSION = 1;
 const MAX_TYPED_DESCRIPTORS = 64;
@@ -24,6 +24,10 @@ const ALLOWED_IMPORTS = new Set([
   "kotoba:typed/equal/function",
   "kotoba:typed/assoc-i64/function",
   "kotoba:typed/assoc-ref/function",
+  "kotoba:typed/vector-drop/function",
+  "kotoba:typed/vector-at-i64/function",
+  "kotoba:typed/vector-assoc-i64/function",
+  "kotoba:typed/vector-conj-i64/function",
   "kotoba:typed/set-op-i64/function",
   "kotoba:typed/set-op-ref/function",
   "kotoba:typed/set-contains-i64/function",
@@ -135,6 +139,7 @@ function parseTypedMetadata(module) {
       reject("invalid-typed-metadata", "typed ABI descriptor budget exceeded");
     const tag = byte();
     if (tag <= 3) return Object.freeze(["i64", "string", "keyword", "bool"][tag]);
+    if (tag === 11) return Object.freeze(["vector-i64"]);
     if (tag === 4) return Object.freeze(["option", descriptor(depth + 1)]);
     if (tag === 5) return Object.freeze(["result", descriptor(depth + 1), descriptor(depth + 1)]);
     if (tag === 7) {
@@ -273,6 +278,7 @@ function createTypedRuntime(abi) {
   if (abi === null) return null;
   const builders = new WeakSet();
   const trustedDescriptors = new WeakSet();
+  const trustedValues = new WeakSet();
   const trustDescriptor = descriptor => {
     if (!Array.isArray(descriptor) || trustedDescriptors.has(descriptor)) return;
     trustedDescriptors.add(descriptor);
@@ -341,6 +347,9 @@ function createTypedRuntime(abi) {
         ? compareValue(descriptor[2][leftIndex][1], left[2], right[2])
         : leftIndex < rightIndex ? -1 : 1;
     }
+    if (kind === "vector-i64")
+      return compareSequence(Array.from({ length: Math.max(left.length, right.length) - 1 }, () => "i64"),
+                             left.slice(1), right.slice(1));
     if (kind === "vector") return compareSequence(descriptor[1], left.slice(1), right.slice(1));
     if (kind === "set") {
       const length = Math.max(left[1].length, right[1].length);
@@ -394,7 +403,13 @@ function createTypedRuntime(abi) {
       const kind = descriptor[0];
       if (!Array.isArray(value) || !Object.isFrozen(value))
         reject("invalid-typed-value", "compound typed value must be a frozen array");
-      if (kind === "option") {
+      if (!trustedValues.has(value))
+        reject("invalid-typed-value", "forged compound typed value rejected");
+      if (kind === "vector-i64") {
+        if (!sameTrustedDescriptor(value[0], descriptor) || value.length > 129)
+          reject("invalid-typed-value", "vector-i64 shape or item budget is invalid");
+        for (let index = 1; index < value.length; index += 1) i64(value[index]);
+      } else if (kind === "option") {
         if (!sameTrustedDescriptor(value[0], descriptor) || typeof value[1] !== "boolean" ||
             value.length !== (value[1] ? 3 : 2))
           reject("invalid-typed-value", "generic option shape or descriptor is invalid");
@@ -446,6 +461,11 @@ function createTypedRuntime(abi) {
         !builders.has(value)) reject("invalid-typed-builder", "forged typed builder rejected");
     return value;
   };
+  const admitValue = (descriptor, value) => {
+    trustedValues.add(value);
+    try { return assertValue(descriptor, value); }
+    catch (error) { trustedValues.delete(value); throw error; }
+  };
   const imports = Object.freeze({
     literal: literalAt,
     new(descriptorId, tag) {
@@ -480,7 +500,8 @@ function createTypedRuntime(abi) {
         const member = descriptor[2][builder.tag];
         if (member === undefined) reject("invalid-typed-builder", "variant tag is out of range");
         result = [descriptor, member[0], ...builder.slots];
-      } else if (kind === "vector" || kind === "record") result = [descriptor, ...builder.slots];
+      } else if (kind === "vector-i64" || kind === "vector" || kind === "record")
+        result = [descriptor, ...builder.slots];
       else if (kind === "set") {
         const sorted = [...builder.slots].sort((left, right) => compareValue(descriptor[1], left, right));
         for (let index = 1; index < sorted.length; index += 1)
@@ -499,7 +520,7 @@ function createTypedRuntime(abi) {
             reject("invalid-typed-map", "duplicate typed map key rejected");
         result = [descriptor, Object.freeze(entries)];
       } else reject("invalid-typed-builder", "primitive descriptor cannot be constructed");
-      return assertValue(descriptor, Object.freeze(result));
+      return admitValue(descriptor, Object.freeze(result));
     },
     "assert-ref"(descriptorId, value) { return assertValue(descriptorAt(descriptorId), value); },
     tag(descriptorId, value) {
@@ -534,7 +555,8 @@ function createTypedRuntime(abi) {
       const descriptor = descriptorAt(descriptorId);
       const checked = assertValue(descriptor, value);
       if (descriptor === "string") return BigInt(utf8Length(checked));
-      if (descriptor[0] === "vector" || descriptor[0] === "record") return BigInt(checked.length - 1);
+      if (descriptor[0] === "vector-i64" || descriptor[0] === "vector" || descriptor[0] === "record")
+        return BigInt(checked.length - 1);
       if (descriptor[0] === "set") return BigInt(checked[1].length);
       if (descriptor[0] === "map") return BigInt(checked[1].length);
       reject("invalid-typed-operation", "count is not defined for this descriptor");
@@ -549,6 +571,47 @@ function createTypedRuntime(abi) {
     },
     "assoc-ref"(descriptorId, value, index, replacement) {
       return assoc(descriptorId, value, index, replacement);
+    },
+    "vector-drop"(descriptorId, value, rawCount) {
+      const descriptor = descriptorAt(descriptorId);
+      if (descriptor[0] !== "vector-i64")
+        reject("invalid-typed-operation", "vector-drop requires vector-i64");
+      const checked = assertValue(descriptor, value);
+      const count = i64(rawCount);
+      if (count < 0n || count > BigInt(checked.length - 1))
+        reject("invalid-typed-operation", "vector-drop count is out of range");
+      const start = Number(count) + 1;
+      return admitValue(descriptor, Object.freeze([descriptor, ...checked.slice(start)]));
+    },
+    "vector-at-i64"(descriptorId, value, rawIndex) {
+      const descriptor = descriptorAt(descriptorId);
+      if (descriptor[0] !== "vector-i64")
+        reject("invalid-typed-operation", "vector-at requires vector-i64");
+      const checked = assertValue(descriptor, value);
+      const index = i64(rawIndex);
+      if (index < 0n || index >= BigInt(checked.length - 1))
+        reject("invalid-typed-operation", "vector-i64 index is out of range");
+      return i64(checked[Number(index) + 1]);
+    },
+    "vector-assoc-i64"(descriptorId, value, rawIndex, replacement) {
+      const descriptor = descriptorAt(descriptorId);
+      if (descriptor[0] !== "vector-i64")
+        reject("invalid-typed-operation", "vector-assoc requires vector-i64");
+      const checked = assertValue(descriptor, value);
+      const index = i64(rawIndex);
+      if (index < 0n || index >= BigInt(checked.length - 1))
+        reject("invalid-typed-operation", "vector-i64 assoc index is out of range");
+      const result = [...checked];
+      result[Number(index) + 1] = i64(replacement);
+      return admitValue(descriptor, Object.freeze(result));
+    },
+    "vector-conj-i64"(descriptorId, value, item) {
+      const descriptor = descriptorAt(descriptorId);
+      if (descriptor[0] !== "vector-i64")
+        reject("invalid-typed-operation", "vector-conj requires vector-i64");
+      const checked = assertValue(descriptor, value);
+      if (checked.length >= 129) reject("invalid-typed-value", "vector-i64 item budget exceeded");
+      return admitValue(descriptor, Object.freeze([...checked, i64(item)]));
     },
     "set-op-i64"(descriptorId, value, operation, item) {
       return setOperation(descriptorId, value, operation, i64(item));
@@ -591,6 +654,13 @@ function createTypedRuntime(abi) {
   const assoc = (descriptorId, value, index, replacement) => {
     const descriptor = descriptorAt(descriptorId);
     const checked = assertValue(descriptor, value);
+    if (descriptor[0] === "vector-i64") {
+      if (!Number.isInteger(index) || index < 0 || index >= checked.length - 1)
+        reject("invalid-typed-operation", "vector-i64 assoc index is invalid");
+      const result = [...checked];
+      result[index + 1] = i64(replacement);
+      return admitValue(descriptor, Object.freeze(result));
+    }
     const types = descriptor[0] === "vector" ? descriptor[1]
       : descriptor[0] === "record" ? descriptor[2].map(([, type]) => type) : null;
     if (types === null || !Number.isInteger(index) || index < 0 || index >= types.length)
@@ -598,7 +668,7 @@ function createTypedRuntime(abi) {
     assertValue(types[index], replacement);
     const result = [...checked];
     result[index + 1] = replacement;
-    return assertValue(descriptor, Object.freeze(result));
+    return admitValue(descriptor, Object.freeze(result));
   };
   const setOperation = (descriptorId, value, operation, item) => {
     const descriptor = descriptorAt(descriptorId);
@@ -616,7 +686,7 @@ function createTypedRuntime(abi) {
     } else if (operation === 2) {
       items = checked[1].filter(existing => compareValue(descriptor[1], existing, item) !== 0);
     } else reject("invalid-typed-operation", "unknown typed set operation");
-    return assertValue(descriptor, Object.freeze([descriptor, Object.freeze(items)]));
+    return admitValue(descriptor, Object.freeze([descriptor, Object.freeze(items)]));
   };
   const setContains = (descriptorId, value, item) => {
     const descriptor = descriptorAt(descriptorId);
@@ -646,7 +716,7 @@ function createTypedRuntime(abi) {
       sameDescriptor(candidate[1], descriptor[2]));
     if (optionDescriptor === undefined)
       reject("invalid-typed-operation", "typed map lookup option descriptor is absent");
-    return assertValue(optionDescriptor, Object.freeze(index < 0
+    return admitValue(optionDescriptor, Object.freeze(index < 0
       ? [optionDescriptor, false]
       : [optionDescriptor, true, checked[1][index][1]]));
   };
@@ -661,10 +731,12 @@ function createTypedRuntime(abi) {
     if (entryDescriptor === undefined || optionDescriptor === undefined)
       reject("invalid-typed-operation", "typed map entry option descriptor is absent");
     if (index < 0n || index >= BigInt(checked[1].length))
-      return assertValue(optionDescriptor, Object.freeze([optionDescriptor, false]));
+      return admitValue(optionDescriptor, Object.freeze([optionDescriptor, false]));
     const entry = checked[1][Number(index)];
-    return assertValue(optionDescriptor, Object.freeze([
-      optionDescriptor, true, Object.freeze([entryDescriptor, entry[0], entry[1]])]));
+    const entryValue = admitValue(entryDescriptor,
+      Object.freeze([entryDescriptor, entry[0], entry[1]]));
+    return admitValue(optionDescriptor, Object.freeze([
+      optionDescriptor, true, entryValue]));
   };
   const mapAssoc = (descriptorId, value, key, item) => {
     const [descriptor, checked, index] = mapIndex(descriptorId, value, key);
@@ -675,12 +747,12 @@ function createTypedRuntime(abi) {
     const entry = Object.freeze([key, item]);
     if (index < 0) entries.push(entry); else entries[index] = entry;
     entries.sort((left, right) => compareValue(descriptor[1], left[0], right[0]));
-    return assertValue(descriptor, Object.freeze([descriptor, Object.freeze(entries)]));
+    return admitValue(descriptor, Object.freeze([descriptor, Object.freeze(entries)]));
   };
   const mapDissoc = (descriptorId, value, key) => {
     const [descriptor, checked, index] = mapIndex(descriptorId, value, key);
     if (index < 0) return checked;
-    return assertValue(descriptor, Object.freeze([
+    return admitValue(descriptor, Object.freeze([
       descriptor, Object.freeze(checked[1].filter((_, itemIndex) => itemIndex !== index))]));
   };
   return Object.freeze({ imports });
