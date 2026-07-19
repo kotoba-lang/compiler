@@ -906,6 +906,13 @@
                         (concat (i32-const (descriptor-id (:result function))) body-code
                                 [0x10 (get intrinsic-indices 'typed-assert-ref)])
                         body-code)
+            _ (when (> (+ param-count (count @locals)) 128)
+                (throw (ex-info "typed Wasm local index exceeds the sealed one-byte profile"
+                                {:phase :wasm-typed-lowering
+                                 :function (:name function)
+                                 :locals (count @locals)
+                                 :params param-count
+                                 :limit 128})))
             declarations (if (empty? @locals) [0]
                            (concat (uleb (count @locals))
                                    (mapcat (fn [type] [1 type]) @locals)))
