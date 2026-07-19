@@ -443,7 +443,8 @@
                                 common-flags
                                 (deterministic-linker-flags)
                                 [(.getPath loader-source) "-o" (.getPath loader)]
-                                (when windows? ["-ladvapi32"]))))
+                                (when windows? ["-ladvapi32" "-luserenv" "-lws2_32"
+                                                "-lfwpuclnt" "-lrpcrt4"]))))
           build (run-process (build-command) toolchain-env {:timeout-ms 30000})
           first-loader-sha (when (zero? (:exit build)) (file-sha256 loader))
           reproduced-build (run-process (build-command) toolchain-env {:timeout-ms 30000})]
