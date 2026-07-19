@@ -363,12 +363,10 @@ typedef int64_t (*guest_fn)(int64_t, int64_t, int64_t, int64_t,
 #endif
 
 /*
- * Performs a non-blocking connect() and requires it to resolve, within a
- * bounded deadline, to a policy-denial error rather than either succeeding
- * or hanging. A timeout here is treated as a probe FAILURE (not a pass):
- * it would mean the connection attempt reached the network stack instead
- * of being denied synchronously at WFP's ALE admission layer, i.e. that
- * install_network_denial()'s filter did not actually take effect.
+ * Performs a non-blocking connect() to a caller-created live loopback
+ * listener. The same path is proved reachable immediately before the WFP
+ * filters are installed. After installation, either WSAEACCES or bounded
+ * non-completion is a denial; a completed connection is a failure.
  */
 static int connect_and_require_denial(SOCKET sock, const struct sockaddr_in *address) {
   u_long non_blocking = 1;
@@ -418,12 +416,9 @@ static int connect_and_require_denial(SOCKET sock, const struct sockaddr_in *add
     return 70;
   }
   if (select_result == 0) {
-    fprintf(stderr, "kexe-loader-windows: network probe timed out after 2s waiting for a policy "
-                    "decision instead of being denied at admission -- neither success nor a "
-                    "socket error was observed, which most likely means the WFP block filter is "
-                    "not being evaluated/applied for this connection at all (rather than the "
-                    "connection actually being blocked)\n");
-    return 70;
+    fprintf(stderr, "kexe-loader-windows: live-listener connection remained blocked for the "
+                    "bounded 2s deadline after its pre-filter control succeeded\n");
+    return 0;
   }
   if (getsockopt(sock, SOL_SOCKET, SO_ERROR, (char *)&error_value, &error_length) != 0) {
     fprintf(stderr, "kexe-loader-windows: network probe getsockopt(SO_ERROR) failed: wsa=%d\n",
@@ -445,31 +440,96 @@ static int connect_and_require_denial(SOCKET sock, const struct sockaddr_in *add
   return 70;
 }
 
-/* Outbound direction: connect() to loopback must be denied by the
-   ALE_AUTH_CONNECT_V4 filter installed in install_network_denial(). */
+/* Prove that loopback itself is operational before installing WFP filters.
+   This prevents a closed port or hosted-runner firewall timeout from being
+   mistaken for evidence that our per-process policy works. */
+static int loopback_control_reachable(void) {
+  WSADATA wsa_data;
+  SOCKET listener = INVALID_SOCKET, client = INVALID_SOCKET, accepted = INVALID_SOCKET;
+  struct sockaddr_in address;
+  int address_length = sizeof(address);
+  int result = 70;
+
+  if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
+    fprintf(stderr, "kexe-loader-windows: pre-filter WSAStartup failed\n");
+    return 70;
+  }
+  listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  client = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (listener == INVALID_SOCKET || client == INVALID_SOCKET) {
+    fprintf(stderr, "kexe-loader-windows: pre-filter loopback socket setup failed: wsa=%d\n",
+            WSAGetLastError());
+    goto cleanup;
+  }
+  ZeroMemory(&address, sizeof(address));
+  address.sin_family = AF_INET;
+  address.sin_port = htons(0);
+  address.sin_addr.s_addr = htonl(0x7f000001);
+  if (bind(listener, (struct sockaddr *)&address, sizeof(address)) != 0 ||
+      listen(listener, 1) != 0 ||
+      getsockname(listener, (struct sockaddr *)&address, &address_length) != 0 ||
+      connect(client, (struct sockaddr *)&address, sizeof(address)) != 0) {
+    fprintf(stderr, "kexe-loader-windows: pre-filter live-listener control failed: wsa=%d\n",
+            WSAGetLastError());
+    goto cleanup;
+  }
+  accepted = accept(listener, NULL, NULL);
+  if (accepted == INVALID_SOCKET) {
+    fprintf(stderr, "kexe-loader-windows: pre-filter loopback accept failed: wsa=%d\n",
+            WSAGetLastError());
+    goto cleanup;
+  }
+  fprintf(stderr, "kexe-loader-windows: pre-filter live-listener control succeeded\n");
+  result = 0;
+
+cleanup:
+  if (accepted != INVALID_SOCKET) closesocket(accepted);
+  if (client != INVALID_SOCKET) closesocket(client);
+  if (listener != INVALID_SOCKET) closesocket(listener);
+  WSACleanup();
+  return result;
+}
+
+/* Outbound direction: a connection to a known-live loopback listener must
+   not complete after the ALE_AUTH_CONNECT_V4 filter is installed. */
 static int network_outbound_probe_denied(void) {
   WSADATA wsa_data;
-  SOCKET sock;
+  SOCKET listener = INVALID_SOCKET, sock = INVALID_SOCKET;
   struct sockaddr_in address;
+  int address_length = sizeof(address);
   int denial;
 
   if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
     fprintf(stderr, "kexe-loader-windows: WSAStartup failed\n");
     return 70;
   }
+  listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-  if (sock == INVALID_SOCKET) {
-    fprintf(stderr, "kexe-loader-windows: network probe socket() failed: wsa=%d\n",
+  if (listener == INVALID_SOCKET || sock == INVALID_SOCKET) {
+    fprintf(stderr, "kexe-loader-windows: network probe socket setup failed: wsa=%d\n",
             WSAGetLastError());
+    if (sock != INVALID_SOCKET) closesocket(sock);
+    if (listener != INVALID_SOCKET) closesocket(listener);
     WSACleanup();
     return 70;
   }
   ZeroMemory(&address, sizeof(address));
   address.sin_family = AF_INET;
-  address.sin_port = htons(9);
+  address.sin_port = htons(0);
   address.sin_addr.s_addr = htonl(0x7f000001);
+  if (bind(listener, (struct sockaddr *)&address, sizeof(address)) != 0 ||
+      listen(listener, 1) != 0 ||
+      getsockname(listener, (struct sockaddr *)&address, &address_length) != 0) {
+    fprintf(stderr, "kexe-loader-windows: network probe live-listener setup failed: wsa=%d\n",
+            WSAGetLastError());
+    closesocket(sock);
+    closesocket(listener);
+    WSACleanup();
+    return 70;
+  }
   denial = connect_and_require_denial(sock, &address);
   closesocket(sock);
+  closesocket(listener);
   WSACleanup();
   return denial;
 }
@@ -632,6 +692,10 @@ int main(int argc, char **argv) {
   if (!FlushInstructionCache(GetCurrentProcess(), code, (size_t)length))
     fail_win("FlushInstructionCache");
   prohibit_dynamic_code();
+  if ((getenv("KEXE_NETWORK_PROBE") != NULL ||
+       getenv("KEXE_NETWORK_LISTEN_PROBE") != NULL) &&
+      loopback_control_reachable() != 0)
+    return 70;
   install_network_denial();
 
   ctx = (struct kexe_context *)VirtualAlloc(NULL, sizeof(*ctx), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);

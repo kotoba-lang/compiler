@@ -340,11 +340,12 @@ or crashes, rather than persisting on the host. Every WFP call is fail-closed:
 if opening the engine, resolving the app id, or adding any filter fails, the
 loader aborts before guest entry instead of silently running without network
 denial. Negative outbound (`connect()` to loopback) and inbound
-(`bind()`/`listen()` on loopback, then a loopback self-connect) probes assert
-the connection is denied with a specific policy error within a bounded
-deadline; a probe that instead times out is treated as a failure, since a
-timeout means the attempt reached the network stack rather than being denied
-synchronously at WFP admission. This remains single-process: it is not an
+(`bind()`/`listen()` on loopback, then a loopback self-connect) probes first
+prove that a live loopback listener is reachable before filter installation.
+After installation, they target another live listener and require either a
+specific policy error or bounded non-completion; any completed connection is
+a failure. The before/after control avoids treating closed-port or hosted-
+firewall behavior as WFP evidence. This remains single-process: it is not an
 AppContainer, and it does not change the fact that guest traps terminate the
 loader process rather than a separately supervised child. The inbound probe
 cannot, by itself, isolate the `ALE_AUTH_RECV_ACCEPT` filter from the outbound
@@ -417,6 +418,17 @@ reproduction. If a third CI run still fails, the next investigation should
 capture `netsh wfp show filters` and/or a packet trace on the actual
 Windows Arm64 runner (or an equivalent real Windows host) rather than
 iterating blindly again.
+
+UPDATE (third hosted-runner observation): adding the loopback-inclusive
+filters still produced `WSAEWOULDBLOCK` followed by a bounded timeout on both
+x86_64 and Arm64 Windows runners. That observation does not distinguish a WFP
+DROP-style block from a filter miss when the target is a closed port. The
+probe therefore no longer uses port 9 as its oracle. It now proves a live
+listener is reachable before installing filters, recreates a live listener
+after installation, and rejects any completed connection. A bounded timeout
+is accepted only in this differential live-listener test. Windows release
+coverage remains closed until this revised probe passes on hosted x86_64 and
+Arm64 runners; source review alone is not promotion evidence.
 
 This boundary is not yet sufficient for release admission. The product command
 now admits the signed KEXE, verifies its regenerated code, binds the reviewed
