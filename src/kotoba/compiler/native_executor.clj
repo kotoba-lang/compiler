@@ -507,6 +507,15 @@
                       (or stderr ""))]
     (str stage (when win32 (str "/win32=" win32)))))
 
+(defn- runtime-environment [host-os-value]
+  (if (= :windows host-os-value)
+    (if-let [system-root (or (System/getenv "SystemRoot")
+                             (System/getenv "WINDIR"))]
+      {"KEXE_STRUCTURED_REPORT" "1" "SystemRoot" system-root}
+      (throw (ex-info "Windows native execution requires SystemRoot"
+                      {:phase :execute})))
+    {"KEXE_STRUCTURED_REPORT" "1"}))
+
 (defn- valid-supervisor-report? [report exit]
   (let [status (:status report)
         expected-keys (case status
@@ -593,7 +602,7 @@
                              (str (:offset export)) (str (:arity export)) isa allow]
                             (map str args))
               started-at (quot (System/currentTimeMillis) 1000)
-              process (run-process command {"KEXE_STRUCTURED_REPORT" "1"}
+              process (run-process command (runtime-environment host-os-value)
                                    {:timeout-ms (if (= :windows host-os-value) 60000 5000)
                                     :output-limit 65536})
               finished-at (quot (System/currentTimeMillis) 1000)

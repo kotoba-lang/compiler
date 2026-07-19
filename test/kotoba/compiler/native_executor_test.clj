@@ -158,6 +158,10 @@
             "kexe-loader-windows: child contract requires an AppContainer process token\n")))
     (is (nil? (failure-class "unable to open C:\\secret\\program.bin\n")))))
 
+(deftest native-runtime-environment-does-not-inherit-ambient-authority
+  (is (= {"KEXE_STRUCTURED_REPORT" "1"}
+         ((deref #'executor/runtime-environment) :linux))))
+
 (deftest compiler-executable-is-resolved-to-a-hashed-real-file
   (let [resolve-executable @#'executor/resolve-executable
         file-sha256 @#'executor/file-sha256
