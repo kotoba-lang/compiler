@@ -75,7 +75,8 @@
           raw (artifact "program.bin")
           _ (run-external "clang" ["-std=c11" "-O2" "-Wall" "-Wextra" "-Werror"
                                     (.join path lib/root "tools/kexe_loader_windows.c")
-                                    "-o" loader "-ladvapi32" "-lws2_32" "-lfwpuclnt" "-lrpcrt4"])
+                                    "-o" loader "-ladvapi32" "-luserenv" "-lws2_32"
+                                    "-lfwpuclnt" "-lrpcrt4"])
           [main-offset main-arity] (extract! (artifact "first.kexe") "main" raw)
           [score-offset score-arity] (extract! (artifact "first.kexe") "score" raw)
           [calc-offset calc-arity] (extract! (artifact "first.kexe") "calc" raw)]

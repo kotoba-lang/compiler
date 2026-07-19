@@ -324,13 +324,18 @@ callbacks use reviewed fixed slots. Job active-process limits and a
 low-integrity restricted impersonation token are checked by negative process
 and filesystem probes on the Windows runner.
 
-Network denial is implemented via the Windows Filtering Platform (WFP), not
-the restricted token: the low-integrity token alone does not reliably block
+The primary Windows network and object-namespace boundary is a capability-free
+AppContainer child process, not the restricted token: the low-integrity token alone does not reliably block
 Winsock (Windows MIC is primarily a write-up denial mechanism for securable
 objects, and `\Device\Afd` is not integrity-labeled by default, so a Low-IL
-token does not stop `socket()`/`connect()`). Before the token is restricted
-(same "privileged setup, then restrict" ordering as the Job object), the
-loader opens a dynamic WFP session, resolves its own executable's ALE
+token does not stop `socket()`/`connect()`). The parent copies admitted raw
+code into an inherited anonymous mapping, creates an ephemeral AppContainer
+profile with zero capability SIDs, starts the measured loader image suspended
+with `PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`, assigns it to a one-process
+kill-on-close Job, then resumes and supervises it. The child verifies
+`TokenIsAppContainer` before accepting the mapping.
+
+As defense in depth, the parent opens a dynamic WFP session and resolves its executable's ALE
 application id, and adds `FWP_ACTION_BLOCK` filters keyed to that app id at
 the `FWPM_LAYER_ALE_AUTH_CONNECT_V4`/`_V6` layers (outbound) and the
 `FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4`/`_V6` layers (inbound). The session uses
@@ -345,15 +350,10 @@ prove that a live loopback listener is reachable before filter installation.
 After installation, they target another live listener and require either a
 specific policy error or bounded non-completion; any completed connection is
 a failure. The before/after control avoids treating closed-port or hosted-
-firewall behavior as WFP evidence. This remains single-process: it is not an
-AppContainer, and it does not change the fact that guest traps terminate the
-loader process rather than a separately supervised child. The inbound probe
-cannot, by itself, isolate the `ALE_AUTH_RECV_ACCEPT` filter from the outbound
-`ALE_AUTH_CONNECT` filter, because the Job's `ActiveProcessLimit=1` prevents
-this process from spawning a second, independently-filtered peer to originate
-an inbound-only connection attempt; it demonstrates the end-to-end guarantee
-(no loopback TCP connection completes in either direction) rather than
-isolating the inbound layer. `FwpmEngineOpen0`/`FwpmFilterAdd0` are Base
+firewall behavior as WFP evidence. AppContainer denial is the required
+kernel-enforced result; WFP is defense in depth after hosted-runner evidence
+showed same-process loopback classification could complete.
+`FwpmEngineOpen0`/`FwpmFilterAdd0` are Base
 Filtering Engine management operations that are documented as requiring an
 administrative caller; this has not been exercised on a real Windows host as
 of this change, so whether the hosted Windows Arm64 CI runner's process is
@@ -458,12 +458,10 @@ now admits the signed KEXE, verifies its regenerated code, binds the reviewed
 Windows source plus compiler/linker/resource/header closure into runtime trust,
 and passes only extracted code to the measured loader. Windows CI verifies the
 result receipt and rejects both loader-byte mutation and OS-profile
-substitution. Guest traps still terminate the loader process rather than a
-separately supervised child. An AppContainer/broker-target re-architecture
-(matching the POSIX loader's fork()+supervise() shape, with the token's
-`TokenAppContainerSid` set at `CreateProcess` time) remains a named follow-up
-for a stronger, kernel-enforced network and object-namespace boundary; it is
-out of scope for the current single-process design and has not been started.
+substitution. Guest traps terminate only the AppContainer child; the measured
+parent reports its exit status and closes the Job, anonymous mapping, dynamic
+WFP session, and ephemeral profile. This matches the POSIX loader's
+fork-and-supervise shape while retaining Windows-native token semantics.
 Job/restricted-token behavior has only hosted-runner evidence. Windows Arm64,
 Authenticode/MSIX, SBOM, and provenance gates also remain; these omissions keep
 Windows execution out of release coverage accounting.
