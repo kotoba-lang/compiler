@@ -1,10 +1,10 @@
 (ns kotoba.compiler.backend.wasm-typed)
 
-(def abi-version 1)
+(def abi-version 2)
 (def custom-section-name "kotoba.typed")
 
 (def ^:private primitive-tags
-  {:i64 0 :string 1 :keyword 2 :bool 3})
+  {:i64 0 :string 1 :keyword 2 :bool 3 :vector-i64 11})
 
 (defn descriptor? [value]
   (or (contains? primitive-tags value)
@@ -155,9 +155,9 @@
           (infer-type body env' signatures))
         (= op 'if) (infer-type (second args) env signatures)
         (= op 'do) (infer-type (last args) env signatures)
-        (contains? '#{+ - * quot cap-call pair pair-first pair-second
+        (contains? '#{+ - * quot bit-xor bit-and cap-call pair pair-first pair-second
                       string-byte-length map-get vector-count vector-get
-                      vector-at vector-slice hetero-vector-count typed-set-count
+                      vector-at hetero-vector-count typed-set-count
                       typed-map-count} op) :i64
         (contains? '#{= < > <= >= hetero-vector-equal typed-set-equal
                       typed-map-equal record-equal} op) :i64
@@ -165,6 +165,8 @@
                       result-ok?-of option-some?-of typed-set-contains
                       typed-map-contains} op) :bool
         (= op 'string-concat) :string
+        (= op 'vector-new) :vector-i64
+        (contains? '#{vector-drop vector-assoc vector-conj} op) :vector-i64
         (= op 'variant-new) (first args)
         (contains? '#{option-some-of option-none-of result-ok-of result-err-of
                       hetero-vector-new typed-set-new typed-map-new record-new} op) (first args)

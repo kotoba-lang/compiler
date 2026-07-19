@@ -280,15 +280,17 @@ ABI and must follow the ABI of the selected target.
 The Wasm parity path reserves the versioned `kotoba.typed` custom section for
 canonical binary descriptor and literal tables. Hosts parse it with strict
 UTF-8, uniqueness, EOF, depth, node, member, and table limits before
-instantiation. `kotoba.typed/externref-v1` consumes that table through frozen
+instantiation. Binary typed ABI v2 adds the bounded `vector-i64` descriptor and
+i64-indexed vector operations; a v1 host rejects it before instantiation.
+`kotoba.typed/externref-v1` consumes that table through frozen, host-issued
 canonical values, validates every reference parameter and result, and rejects
-forged or cross-schema values. The compiled result seals the required Wasm
+forged, descriptor-reused, or cross-schema values. The compiled result seals the required Wasm
 reference-types feature. Unsupported KIR v4 operations still fail during
 lowering; metadata presence alone is never treated as qualification.
 
 The first bounded sequential collection is `:vector-i64`, constructed
 explicitly with `(vector-i64 ...)` and capped at 128 items. `vector-count`,
-`vector-get`, `vector-assoc`, and `vector-conj` preserve signed-i64 elements;
+`vector-get`, `vector-at`, `vector-drop`, `vector-assoc`, and `vector-conj` preserve signed-i64 elements;
 get uses a lazy fallback for every out-of-range index, while assoc traps.
 Generated Web values are frozen arrays and updates are persistent. Ordinary
 `[1 2 3]` literals now lower to this profile. Flat `[a b & rest]`

@@ -170,6 +170,37 @@
     (is (not-any? #{[:bool true]} (typed/literal-table (:kir compiled))))
     (is (zero? (:exit probe)) (:err probe))))
 
+(deftest bounded-vector-i64-has-sealed-wasm-runtime-parity
+  (let [full (str "(vector-i64 " (str/join " " (range 128)) ")")
+        source
+        (str "(ns typed.vector-i64 (:export [main bitops make count-items lookup at update append drop-items full]))\n"
+             "(defn main [] :i64 42)\n"
+             "(defn bitops [] :i64 (bit-xor (bit-and 255 15) 5))\n"
+             "(defn make [] :vector-i64 (vector-i64 10 20 30))\n"
+             "(defn count-items [items :vector-i64] :i64 (vector-count items))\n"
+             "(defn lookup [items :vector-i64 index :i64] :i64 (vector-get items index 99))\n"
+             "(defn at [items :vector-i64 index :i64] :i64 (vector-at items index))\n"
+             "(defn update [items :vector-i64 index :i64] :vector-i64 (vector-assoc items index 77))\n"
+             "(defn append [items :vector-i64] :vector-i64 (vector-conj items 40))\n"
+             "(defn drop-items [items :vector-i64 index :i64] :vector-i64 (vector-drop items index))\n"
+             "(defn full [] :vector-i64 " full ")")
+        compiled (compiler/compile-source source :wasm32-kotoba-v1)
+        probe (node-probe
+               compiled
+               (str "const x=h.instance.exports,v=x.make();"
+                    "if(x.main()!==42n||x.bitops()!==10n||x['count-items'](v)!==3n||x.lookup(v,1n)!==20n||"
+                    "x.lookup(v,-1n)!==99n||x.lookup(v,4294967296n)!==99n||x.at(v,2n)!==30n)process.exit(2);"
+                    "const updated=x.update(v,1n),appended=x.append(v),dropped=x['drop-items'](v,2n);"
+                    "if(x.at(updated,1n)!==77n||x['count-items'](appended)!==4n||"
+                    "x['count-items'](dropped)!==1n||x.at(dropped,0n)!==30n)process.exit(3);"
+                    "for(const run of [()=>x.at(v,-1n),()=>x.at(v,4294967296n),"
+                    "()=>x.update(v,4294967296n),()=>x['drop-items'](v,4n),()=>x.append(x.full()),"
+                    "()=>x['count-items'](Object.freeze([v[0],10n,20n,30n]))]){"
+                    "let rejected=false;try{run()}catch(e){rejected=true}if(!rejected)process.exit(4)}"))]
+    (is (= 2 typed/abi-version))
+    (is (some #{:vector-i64} (typed/descriptor-table (:kir compiled))))
+    (is (zero? (:exit probe)) (:err probe))))
+
 (deftest bounded-typed-map-has-real-wasm-runtime-parity
   (let [source
         "(ns typed.map (:export [main present missing update remove compare-map]))
