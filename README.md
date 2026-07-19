@@ -25,7 +25,7 @@ in multiple roots, compilation rejects the ambiguity instead of selecting a
 package by argument order.
 
 All compilation results carry
-`:kotoba.floating-point/ieee-754-f32-f64-v4`; restricted JavaScript artifacts
+`:kotoba.floating-point/ieee-754-f32-f64-v5`; restricted JavaScript artifacts
 seal the equivalent policy. Scalar `:f32` and `:f64` provide exact bit
 conversion, explicit arithmetic, ordered comparisons, unordered detection,
 and checked-versus-lossy numeric conversions on Kotoba Script and Wasm targets.
@@ -47,6 +47,9 @@ Bounded wide-angle sine/cosine extend this through fixed split-`pi/2` reduction
 over finite `[-8192*pi,8192*pi]`, with ties-away-from-zero quadrant selection
 and a `5e-12` absolute-error bound. Outside that domain compilation artifacts
 trap rather than silently accepting unreliable large-argument reduction.
+Qualified near-zero exponential (`[-0.5,0.5]`) and near-one logarithm
+(`[0.75,1.5]`) use fixed degree-18/21 kernels with a `4e-15` absolute-error
+bound. They trap outside their domains and never call host exp/log functions.
 
 Conversions are explicit: `i64-to-f64-checked` rejects inexact integers,
 whereas `i64-to-f64-rounded` names the IEEE rounding request.

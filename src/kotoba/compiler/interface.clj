@@ -24,7 +24,7 @@
                :namespace (:namespace hir)
                :entry (:entry hir)
                :hir-format (:format hir)
-               :floating-point-policy :kotoba.floating-point/ieee-754-f32-f64-v4
+               :floating-point-policy :kotoba.floating-point/ieee-754-f32-f64-v5
                :exports functions
                :effects (set (:effects hir))}]
     (assoc value :sha256 (artifact/sha256 value))))
