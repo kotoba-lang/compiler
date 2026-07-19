@@ -19,6 +19,65 @@
   #?(:clj (instance? Double value)
      :cljs (number? value)))
 
+(defn f32-value? [value]
+  #?(:clj (instance? Float value)
+     :cljs (and (number? value) (js/Object.is (js/Math.fround value) value))))
+
+(defn f32-to-i64-bits [value]
+  (when-not (f32-value? value)
+    (throw (ex-info "value is not f32" {:phase :value :value value})))
+  #?(:clj (long (Float/floatToIntBits ^float value))
+     :cljs (if (js/Number.isNaN value)
+             (js/BigInt 2143289344)
+             (let [buffer (js/ArrayBuffer. 4)
+                   view (js/DataView. buffer)]
+               (.setFloat32 view 0 value true)
+               (js/BigInt (.getInt32 view 0 true))))))
+
+(defn i64-bits-to-f32 [bits]
+  #?(:clj (do
+            (when-not (and (integer? bits) (<= Integer/MIN_VALUE bits Integer/MAX_VALUE))
+              (throw (ex-info "f32 bit pattern is not signed i32" {:phase :value :value bits})))
+            (Float/intBitsToFloat (int bits)))
+     :cljs (let [min (js/BigInt -2147483648) max (js/BigInt 2147483647)]
+             (when-not (and (i64/bigint-value? bits) (<= min bits max))
+               (throw (ex-info "f32 bit pattern is not signed i32" {:phase :value :value bits})))
+             (let [buffer (js/ArrayBuffer. 4)
+                   view (js/DataView. buffer)]
+               (.setInt32 view 0 (js/Number bits) true)
+               (.getFloat32 view 0 true)))))
+
+(defn f64-to-f32-rounded [value]
+  (when-not (f64-value? value)
+    (throw (ex-info "value is not f64" {:phase :value :value value})))
+  #?(:clj (.floatValue ^Number value) :cljs (js/Math.fround value)))
+
+(defn f32-to-f64-exact [value]
+  (when-not (f32-value? value)
+    (throw (ex-info "value is not f32" {:phase :value :value value})))
+  #?(:clj (double value) :cljs value))
+
+(defn i64-to-f32-rounded [value]
+  #?(:clj (do
+            (when-not (and (integer? value) (<= Long/MIN_VALUE value Long/MAX_VALUE))
+              (throw (ex-info "value is not a signed i64" {:phase :value})))
+            (.floatValue ^Number value))
+     :cljs (do
+             (when-not (and (i64/bigint-value? value) (i64/in-i64-range? value))
+               (throw (ex-info "value is not a signed i64" {:phase :value})))
+             (js/Math.fround (js/Number value)))))
+
+(defn i64-to-f32-checked [value]
+  (let [result (i64-to-f32-rounded value)
+        exact? #?(:clj (= (bigint value)
+                          (bigint (.toBigIntegerExact
+                                   (java.math.BigDecimal/valueOf (double result)))))
+                  :cljs (= value (js/BigInt result)))]
+    (when-not exact?
+      (throw (ex-info "i64 is not exactly representable as f32"
+                      {:phase :value :conversion :i64-to-f32-checked})))
+    result))
+
 (defn f64-to-i64-bits [value]
   (when-not (f64-value? value)
     (throw (ex-info "value is not f64" {:phase :value :value value})))
@@ -87,6 +146,27 @@
    #?(:clj (bigint (.toBigInteger (java.math.BigDecimal/valueOf value)))
       :cljs (js/BigInt (js/Math.trunc value)))
    :f64-to-i64-truncating))
+
+(defn f32-to-i64-checked [value]
+  (when-not (and (f32-value? value)
+                 #?(:clj (Float/isFinite ^float value) :cljs (js/Number.isFinite value))
+                 #?(:clj (= value (Math/rint (double value))) :cljs (js/Number.isInteger value)))
+    (throw (ex-info "f32 is not a finite integral value"
+                    {:phase :value :conversion :f32-to-i64-checked})))
+  (checked-i64-result
+   #?(:clj (bigint (.toBigIntegerExact (java.math.BigDecimal/valueOf (double value))))
+      :cljs (js/BigInt value))
+   :f32-to-i64-checked))
+
+(defn f32-to-i64-truncating [value]
+  (when-not (and (f32-value? value)
+                 #?(:clj (Float/isFinite ^float value) :cljs (js/Number.isFinite value)))
+    (throw (ex-info "f32 is not finite"
+                    {:phase :value :conversion :f32-to-i64-truncating})))
+  (checked-i64-result
+   #?(:clj (bigint (.toBigInteger (java.math.BigDecimal/valueOf (double value))))
+      :cljs (js/BigInt (js/Math.trunc value)))
+   :f32-to-i64-truncating))
 
 (defn utf8-byte-count!
   "Return the exact UTF-8 byte count without normalizing or replacing malformed
@@ -204,7 +284,7 @@
   value)
 
 (def ^:private leaf-value-types
-  #{:i64 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64})
+  #{:i64 :f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64})
 
 (defn validate-value-type!
   ([type] (validate-value-type! type 0 (volatile! 0)))
@@ -216,8 +296,8 @@
      (throw (ex-info "value type exceeds depth limit" {:phase :value :limit adt-depth-limit})))
    (cond
      (contains? leaf-value-types type)
-     (do (when (and (= type :f64) (pos? depth))
-           (throw (ex-info "f64 is admitted only as a phase-1 scalar"
+     (do (when (and (contains? #{:f32 :f64} type) (pos? depth))
+           (throw (ex-info "floating-point values are admitted only as scalars"
                            {:phase :value :type type})))
          type)
      (and (vector? type) (= 3 (count type)) (= :result (first type)))
@@ -374,6 +454,8 @@
                 (throw (ex-info "value is not a signed i64" {:phase :value}))) value)
      :f64 (do (when-not (f64-value? value)
                 (throw (ex-info "value is not f64" {:phase :value}))) value)
+     :f32 (do (when-not (f32-value? value)
+                (throw (ex-info "value is not f32" {:phase :value}))) value)
      :string (bounded-string! value string-value-byte-limit)
      :keyword (bounded-keyword! value keyword-value-byte-limit)
      :map (bounded-map! value)

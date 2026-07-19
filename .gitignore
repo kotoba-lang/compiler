@@ -11,3 +11,4 @@
 # nbb-native wasm32 path's byte-identical cross-check against the JVM
 # path needs them committed, not regenerated on every clone).
 !test/nbb/golden/*.wasm
+test/nbb/golden/*.wasm.provenance.edn

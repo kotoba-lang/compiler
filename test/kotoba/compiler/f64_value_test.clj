@@ -71,7 +71,7 @@
 (deftest f64-native-targets-fail-closed
   (testing "f64 is not silently lowered through the i64 native ABI"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                          #"f64 values require"
+                          #"floating-point values require"
                           (compiler/compile-source source :x86_64-kotoba-v1)))))
 
 (def arithmetic-source

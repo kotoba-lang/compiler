@@ -21,7 +21,7 @@
            [java.security MessageDigest]))
 
 (def compiler-version compatibility/compiler-version)
-(def floating-point-policy :kotoba.floating-point/ieee-754-f64-conversions-v1)
+(def floating-point-policy :kotoba.floating-point/ieee-754-f32-f64-v1)
 
 (defn- text-sha256 [text]
   (let [digest (.digest (MessageDigest/getInstance "SHA-256")
@@ -60,9 +60,9 @@
    (let [profile (target-profile/profile target)
         backend (target-profile/backend target)
         hir (frontend/analyze source)
-        _ (when (and (ir/uses-f64? hir)
+        _ (when (and (or (ir/uses-f32? hir) (ir/uses-f64? hir))
                      (not (contains? #{:js-kotoba-v1 :wasm32-kotoba-v1} backend)))
-            (throw (ex-info "f64 values require the kotoba-script or Wasm target"
+            (throw (ex-info "floating-point values require the kotoba-script or Wasm target"
                             {:phase :target :target target :backend backend
                              :floating-point-policy floating-point-policy})))
         _ (when (and (= :kotoba.hir/v3 (:format hir))
@@ -80,7 +80,8 @@
         kir (ir/lower hir)
         value (:oracle-value kir)
         typed-values? (= :kotoba.kir/v4 (:format kir))
-        value-abi (cond (ir/uses-f64? hir) :kotoba.typed/mixed-f64-v2
+        value-abi (cond (ir/uses-f32? hir) :kotoba.typed/mixed-f32-f64-v3
+                        (ir/uses-f64? hir) :kotoba.typed/mixed-f64-v2
                         typed-values? :kotoba.typed/externref-v1
                         :else :kotoba.i64/direct-v1)
         compatibility (compatibility/descriptor
@@ -97,6 +98,7 @@
          :value-abi value-abi
          :wasm-features (cond-> #{}
                           (typed/requires-host-runtime? kir) (conj :reference-types)
+                          (ir/uses-f32? kir) (conj :ieee-754-f32)
                           (ir/uses-f64? kir) (conj :ieee-754-f64))
          :limits (cond-> {:fuel 512 :replenishable? false}
                    typed-values? (assoc :parametric-adt-depth 8
