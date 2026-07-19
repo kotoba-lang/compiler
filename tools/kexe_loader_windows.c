@@ -298,7 +298,7 @@ static void install_network_denial(void) {
   sublayer.displayData.description = L"Fail-closed per-process KEXE network boundary";
   sublayer.weight = 0xffff;
   status = FwpmSubLayerAdd0(engine, &sublayer, NULL);
-  if (status != ERROR_SUCCESS && status != FWP_E_ALREADY_EXISTS) {
+  if (status != ERROR_SUCCESS && status != (DWORD)FWP_E_ALREADY_EXISTS) {
     SetLastError(status);
     fail_win("FwpmSubLayerAdd0 denial");
   }
