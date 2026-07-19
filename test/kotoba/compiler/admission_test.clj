@@ -27,7 +27,26 @@
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"hybrid PQC policy denies compilation"
                             (compiler/check-source effect-source
-                                                   (assoc base :crypto-envelope envelope)))))))
+                                                    (assoc base :crypto-envelope envelope)))))))
+
+(deftest production-artifact-admission-requires-hardware-signing
+  (let [evidence {:provider-id :apple-secure-enclave
+                  :hardware-backed? true :provider-origin-verified? true
+                  :private-exported? false :sign-verified? true
+                  :unavailable-failed-closed? true}
+        base {:allow #{[:cap/call 7]}
+              :hardware-signing-required? true
+              :hardware-signing-evidence evidence}]
+    (is (true? (get-in (compiler/check-source effect-source base)
+                       [:admission :hardware-signing
+                        :hardware-signing/qualified?])))
+    (doseq [bad [(assoc evidence :private-exported? true)
+                 (assoc evidence :provider-origin-verified? false)
+                 (assoc evidence :unavailable-failed-closed? false)]]
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo #"hardware signing policy denies"
+           (compiler/check-source
+            effect-source (assoc base :hardware-signing-evidence bad)))))))
 
 (deftest effects-propagate-and-all-exports-are-covered
   (let [{:keys [hir admission]}

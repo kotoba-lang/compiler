@@ -2,6 +2,7 @@
   (:require [clojure.set :as set]
             [kotoba.security.abac :as abac]
             [kotoba.security.crypto-policy :as crypto]
+            [kotoba.security.hardware :as hardware]
             [kotoba.security.information-flow :as flow]
             ;; See `kotoba.compiler.ir`'s ns form for why a conditional
             ;; require needs to be the WHOLE clause, not an item inside it,
@@ -24,7 +25,9 @@
   [hir policy]
   (when-not (and (map? policy)
                  (every? #{:allow :abac :attributes :information-flow
-                           :crypto-required? :crypto-policy :crypto-envelope} (keys policy))
+                           :crypto-required? :crypto-policy :crypto-envelope
+                           :hardware-signing-required?
+                           :hardware-signing-evidence} (keys policy))
                  (or (not (contains? policy :allow)) (set? (:allow policy))))
     (throw (ex-info "malformed capability policy" {:phase :admission})))
   (let [required (set (:effects hir))
@@ -46,6 +49,12 @@
         crypto-result (when (or crypto-required? (:crypto-envelope policy))
                         (crypto/check-production-envelope
                          (:crypto-policy policy) (:crypto-envelope policy)))
+        hardware-signing-required? (:hardware-signing-required? policy)
+        hardware-signing-result
+        (when (or hardware-signing-required?
+                  (:hardware-signing-evidence policy))
+          (hardware/evaluate-signing
+           (:hardware-signing-evidence policy)))
         flow-policy (:information-flow policy)
         flow-result
         (when flow-policy
@@ -72,10 +81,16 @@
     (when (and crypto-required? (not (:valid? crypto-result)))
       (throw (ex-info "hybrid PQC policy denies compilation"
                       {:phase :admission :crypto crypto-result})))
+    (when (and hardware-signing-required?
+               (not (:hardware-signing/qualified? hardware-signing-result)))
+      (throw (ex-info "hardware signing policy denies compilation"
+                      {:phase :admission
+                       :hardware-signing hardware-signing-result})))
     {:admitted? true
      :required required
      :minimal-policy {:allow required}
      :unused-grants unused
      :abac abac-result
      :information-flow flow-result
-     :crypto crypto-result}))
+     :crypto crypto-result
+     :hardware-signing hardware-signing-result}))
