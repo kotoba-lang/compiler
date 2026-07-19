@@ -32,7 +32,7 @@
      i64-to-f32-checked i64-to-f32-rounded f32-to-i64-checked f32-to-i64-truncating
      f64-to-bits f64-from-bits f64-add f64-sub f64-mul f64-div f64-min f64-max
      f64-neg f64-abs f64-sqrt f64-sin-quarter-turn f64-cos-quarter-turn
-     f64-sin-bounded f64-cos-bounded
+     f64-sin-bounded f64-cos-bounded f64-exp-near-zero f64-log-near-one
      f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered
      i64-to-f64-checked i64-to-f64-rounded f64-to-i64-checked f64-to-i64-truncating
      map-new map-get map-assoc
@@ -75,6 +75,7 @@
                                          f64-neg f64-abs f64-sqrt
                                          f64-sin-quarter-turn f64-cos-quarter-turn
                                          f64-sin-bounded f64-cos-bounded
+                                         f64-exp-near-zero f64-log-near-one
                                          f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered
                                          i64-to-f64-checked i64-to-f64-rounded
                                          f64-to-i64-checked f64-to-i64-truncating}
@@ -186,6 +187,47 @@
       1 (- (f64-sin-quarter-turn reduced))
       2 (- (f64-cos-quarter-turn reduced))
       (f64-sin-quarter-turn reduced))))
+
+(defn- f64-exp-near-zero [value]
+  (when-not (and #?(:clj (Double/isFinite ^double value) :cljs (js/Number.isFinite value))
+                 (<= (#?(:clj Math/abs :cljs js/Math.abs) value) 0.5))
+    (trap! :f64-exp-near-zero-domain {}))
+  (let [p (+ 2.8114572543455206e-15 (* value 1.5619206968586225e-16))
+        p (+ 4.779477332387385e-14 (* value p))
+        p (+ 7.647163731819816e-13 (* value p))
+        p (+ 1.1470745597729725e-11 (* value p))
+        p (+ 1.6059043836821613e-10 (* value p))
+        p (+ 2.08767569878681e-9 (* value p))
+        p (+ 2.505210838544172e-8 (* value p))
+        p (+ 2.755731922398589e-7 (* value p))
+        p (+ 2.7557319223985893e-6 (* value p))
+        p (+ 0.0000248015873015873 (* value p))
+        p (+ 0.0001984126984126984 (* value p))
+        p (+ 0.001388888888888889 (* value p))
+        p (+ 0.008333333333333333 (* value p))
+        p (+ 0.041666666666666664 (* value p))
+        p (+ 0.16666666666666666 (* value p))
+        p (+ 0.5 (* value p))
+        p (+ 1.0 (* value p))]
+    (+ 1.0 (* value p))))
+
+(defn- f64-log-near-one [value]
+  (when-not (and #?(:clj (Double/isFinite ^double value) :cljs (js/Number.isFinite value))
+                 (<= 0.75 value 1.5))
+    (trap! :f64-log-near-one-domain {}))
+  (let [y (/ (- value 1.0) (+ value 1.0))
+        z (* y y)
+        p (+ 0.05263157894736842 (* z 0.047619047619047616))
+        p (+ 0.058823529411764705 (* z p))
+        p (+ 0.06666666666666667 (* z p))
+        p (+ 0.07692307692307693 (* z p))
+        p (+ 0.09090909090909091 (* z p))
+        p (+ 0.1111111111111111 (* z p))
+        p (+ 0.14285714285714285 (* z p))
+        p (+ 0.2 (* z p))
+        p (+ 0.3333333333333333 (* z p))
+        p (+ 1.0 (* z p))]
+    (* (* 2.0 y) p)))
 
 (defn- validate-runtime-value! [runtime-value type position]
   (case type
@@ -518,6 +560,14 @@
 
         (= op 'f64-cos-bounded)
         (f64-cos-bounded
+         (eval-expr (first args) env functions fuel heap call-stack cap-call))
+
+        (= op 'f64-exp-near-zero)
+        (f64-exp-near-zero
+         (eval-expr (first args) env functions fuel heap call-stack cap-call))
+
+        (= op 'f64-log-near-one)
+        (f64-log-near-one
          (eval-expr (first args) env functions fuel heap call-stack cap-call))
 
         (contains? '#{f64-eq f64-lt f64-le f64-gt f64-ge} op)

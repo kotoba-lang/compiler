@@ -186,7 +186,8 @@
         (contains? '#{f64-to-i64-checked f64-to-i64-truncating} op) :i64
         (contains? '#{f64-add f64-sub f64-mul f64-div f64-min f64-max f64-neg f64-abs f64-sqrt
                       f64-sin-quarter-turn f64-cos-quarter-turn
-                      f64-sin-bounded f64-cos-bounded} op) :f64
+                      f64-sin-bounded f64-cos-bounded
+                      f64-exp-near-zero f64-log-near-one} op) :f64
         (contains? '#{f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered} op) :bool
         (= op 'f32-to-bits) :i64
         (= op 'f32-from-bits) :f32

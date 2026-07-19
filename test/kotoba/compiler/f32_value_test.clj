@@ -6,7 +6,7 @@
             [kotoba.compiler.ir :as ir]))
 
 (def source
-  (str "(ns pilot.f32 (:export [main from-bits bits rounded widen add divide unordered to-f32 rounded-i64 to-i64 truncating f32-s f32-lo f32-hi f64-s f64-lo f64-hi sin cos wide-sin wide-cos])) "
+  (str "(ns pilot.f32 (:export [main from-bits bits rounded widen add divide unordered to-f32 rounded-i64 to-i64 truncating f32-s f32-lo f32-hi f64-s f64-lo f64-hi sin cos wide-sin wide-cos exp log])) "
        "(defn main [] 0) "
        "(defn from-bits [x :i64] :f32 (f32-from-bits x)) "
        "(defn bits [x :f32] :i64 (f32-to-bits x)) "
@@ -28,7 +28,9 @@
        "(defn sin [x :f64] :f64 (f64-sin-quarter-turn x)) "
        "(defn cos [x :f64] :f64 (f64-cos-quarter-turn x)) "
        "(defn wide-sin [x :f64] :f64 (f64-sin-bounded x)) "
-       "(defn wide-cos [x :f64] :f64 (f64-cos-bounded x))"))
+       "(defn wide-cos [x :f64] :f64 (f64-cos-bounded x)) "
+       "(defn exp [x :f64] :f64 (f64-exp-near-zero x)) "
+       "(defn log [x :f64] :f64 (f64-log-near-one x))"))
 
 (defn- node-run [javascript]
   (shell/sh "node" "--input-type=module" "-e" javascript))
@@ -61,7 +63,12 @@
        "if(Math.abs(x['wide-sin'](v)-Math.sin(v))>5e-12||Math.abs(x['wide-cos'](v)-Math.cos(v))>5e-12)process.exit(21);}"
        "if(!Object.is(x['wide-sin'](-0),-0)||x['wide-cos'](-0)!==1)process.exit(22);"
        "for(const v of [NaN,Infinity,-Infinity,limit+Number.EPSILON*limit]){"
-       "for(const f of [x['wide-sin'],x['wide-cos']]){try{f(v);process.exit(23)}catch(e){}}}"))
+       "for(const f of [x['wide-sin'],x['wide-cos']]){try{f(v);process.exit(23)}catch(e){}}}"
+       "for(let i=0;i<=64;i++){const v=-0.5+i/64;if(Math.abs(x.exp(v)-Math.exp(v))>4e-15)process.exit(24);}"
+       "for(let i=0;i<=64;i++){const v=0.75+0.75*i/64;if(Math.abs(x.log(v)-Math.log(v))>4e-15)process.exit(25);}"
+       "for(const [f,vals] of [[x.exp,[NaN,Infinity,-Infinity,0.5000000000000001]],"
+       "[x.log,[NaN,Infinity,-Infinity,0,0.7499999999999999,1.5000000000000002]]]){"
+       "for(const v of vals){try{f(v);process.exit(26)}catch(e){}}}"))
 
 (deftest f32-reference-js-and-wasm-share-the-sealed-profile
   (let [js-artifact (compiler/compile-source source :js-kotoba-v1)
@@ -103,6 +110,10 @@
            (Double/doubleToLongBits ^double (ir/execute kir 'wide-sin [-0.0]))))
     (is (thrown? clojure.lang.ExceptionInfo
                  (ir/execute kir 'wide-cos [(Math/nextUp (* 8192.0 Math/PI))])))
+    (is (< (Math/abs (- (ir/execute kir 'exp [0.5]) (Math/exp 0.5))) 4.0e-15))
+    (is (< (Math/abs (- (ir/execute kir 'log [1.5]) (Math/log 1.5))) 4.0e-15))
+    (is (thrown? clojure.lang.ExceptionInfo (ir/execute kir 'exp [(Math/nextUp 0.5)])))
+    (is (thrown? clojure.lang.ExceptionInfo (ir/execute kir 'log [(Math/nextDown 0.75)])))
     (is (= 16777216.0 (double (ir/execute kir 'rounded-i64 [16777217]))))
     (is (thrown? clojure.lang.ExceptionInfo (ir/execute kir 'to-f32 [16777217])))
     (is (= :kotoba.typed/mixed-f32-f64-v3 (:value-abi wasm-artifact)))

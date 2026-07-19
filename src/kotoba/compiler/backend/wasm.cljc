@@ -197,6 +197,30 @@
                          "4586165620538955093" "-4620693217682128896"])]
     (list 'f64-add (f64-constant "4607182418800017408") (list 'f64-mul z p))))
 
+(defn- bounded-exp-form [x]
+  (let [p (f64-horner x ["4370323941990432151" "4389130328383466826"
+                          "4407590220077447199" "4425604618586929183"
+                          "4443145680587881629" "4460272573143870729"
+                          "4477122120089393304" "4493156764026750180"
+                          "4508805057796939612" "4523617214285662004"
+                          "4537941361671905306" "4551452160554016794"
+                          "4564047942368979991" "4575957461383581969"
+                          "4586165620538955093" "4595172819793696085"
+                          "4602678819172646912" "4607182418800017408"])]
+    (list 'f64-add (f64-constant "4607182418800017408") (list 'f64-mul x p))))
+
+(defn- bounded-log-form [x]
+  (let [one (f64-constant "4607182418800017408")
+        y (list 'f64-div (list 'f64-sub x one) (list 'f64-add x one))
+        z (list 'f64-mul y y)
+        p (f64-horner z ["4587023449039406616" "4587745830934523688"
+                          "4588638185040256542" "4589468260265693457"
+                          "4590207312512236308" "4591215111030249286"
+                          "4592670820000712476" "4594314991293244562"
+                          "4596373779694328218" "4599676419421066581"
+                          "4607182418800017408"])]
+    (list 'f64-mul (list 'f64-mul (f64-constant "4611686018427387904") y) p)))
+
 (defn- emit-typed-function-body
   [function function-indices intrinsic-indices descriptor-indices literal-indices signatures]
   (let [locals (volatile! [])
@@ -426,6 +450,26 @@
                        (emit* (f64-constant "4364452196894661639") env) [0xa2 0xa1 0x21 reduced-local]
                        [0x20 nearest-local 0xb0 0x42] (sleb 3) [0x83 0x21 quadrant-local]
                        (choose 0)))
+                    (= op 'f64-exp-near-zero)
+                    (let [value-local (allocate! 0x7c)
+                          value {:wasm-local value-local}]
+                      (concat (emit* (first args) env) [0x21 value-local]
+                              [0x20 value-local 0x20 value-local 0x62
+                               0x20 value-local 0x99]
+                              (emit* (f64-constant "4602678819172646912") env)
+                              [0x64 0x72 0x04 0x40 0x00 0x0b]
+                              (emit* (bounded-exp-form value) env)))
+                    (= op 'f64-log-near-one)
+                    (let [value-local (allocate! 0x7c)
+                          value {:wasm-local value-local}]
+                      (concat (emit* (first args) env) [0x21 value-local]
+                              [0x20 value-local 0x20 value-local 0x62
+                               0x20 value-local]
+                              (emit* (f64-constant "4604930618986332160") env)
+                              [0x63 0x72 0x20 value-local]
+                              (emit* (f64-constant "4609434218613702656") env)
+                              [0x64 0x72 0x04 0x40 0x00 0x0b]
+                              (emit* (bounded-log-form value) env)))
                     (contains? '#{f64-eq f64-lt f64-le f64-gt f64-ge} op)
                     (concat (emit* (first args) env) (emit* (second args) env)
                             [({'f64-eq 0x61 'f64-lt 0x63 'f64-gt 0x64
