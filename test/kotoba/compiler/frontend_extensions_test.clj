@@ -27,11 +27,11 @@
   (let [source "(defn main [] 1)"
         results (mapv #(compiler/compile-source source %) compiler/supported-targets)
         web (compiler/compile-source source :js-kotoba-v1)]
-    (is (= :kotoba.floating-point/ieee-754-f32-f64-v5 compiler/floating-point-policy))
+    (is (= :kotoba.floating-point/ieee-754-f32-f64-v6 compiler/floating-point-policy))
     (is (every? #(= compiler/floating-point-policy (:floating-point-policy %)) results))
     (is (= compiler/floating-point-policy
            (get-in web [:manifest :kotoba.artifact/floating-point-policy])))
-    (is (str/includes? (:source web) "floatingPointPolicy:'ieee-754-f32-f64-v5'")))
+    (is (str/includes? (:source web) "floatingPointPolicy:'ieee-754-f32-f64-v6'")))
   (is (nil? (rejection-message "(defn main [] :f64 1.5)")))
   (is (nil? (rejection-message
              "(ns float.identity (:export [identity])) (defn identity [x :f64] :f64 x)")))

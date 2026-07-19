@@ -127,7 +127,7 @@
     f64-neg 1 f64-abs 1 f64-sqrt 1
     f64-sin-quarter-turn 1 f64-cos-quarter-turn 1
     f64-sin-bounded 1 f64-cos-bounded 1
-    f64-exp-near-zero 1 f64-log-near-one 1
+    f64-exp-near-zero 1 f64-log-near-one 1 f64-atan2-bounded 2
     f64-eq 2 f64-lt 2 f64-le 2 f64-gt 2 f64-ge 2 f64-unordered 2
     i64-to-f64-checked 1 i64-to-f64-rounded 1
     f64-to-i64-checked 1 f64-to-i64-truncating 1})
@@ -1658,6 +1658,11 @@
       (contains? '#{f64-neg f64-abs f64-sqrt f64-sin-quarter-turn f64-cos-quarter-turn
                     f64-sin-bounded f64-cos-bounded f64-exp-near-zero f64-log-near-one} op)
       (do (require-expression-type! (first types) :f64 (first args)) :f64)
+
+      (= op 'f64-atan2-bounded)
+      (do (doseq [[type arg] (map vector types args)]
+            (require-expression-type! type :f64 arg))
+          :f64)
 
       (contains? '#{f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered} op)
       (do (doseq [[type arg] (map vector types args)]
