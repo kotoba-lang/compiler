@@ -1,6 +1,7 @@
 {:paths ["src" "resources"]
  :deps {org.clojure/clojure {:mvn/version "1.12.0"}
-        io.github.kotoba-lang/security {:local/root "../security"}
+        io.github.kotoba-lang/security {:git/url "https://github.com/kotoba-lang/security.git"
+                                        :git/sha "993e9ed370b9550ef1a3168b718dfa16b99516c7"}
         org.clojure/tools.reader {:mvn/version "1.5.2"}
         org.clojure/data.json {:mvn/version "2.5.1"}
         ;; Checked-KIR-only JavaScript backend, pinned immutably so standalone
