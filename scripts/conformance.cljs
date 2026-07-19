@@ -114,7 +114,7 @@
                     ":linker-binary-sha256" ":compiler-resource-sha256"
                     ":system-header-closure-sha256"]]
       (ensure! (contains-text? result needle) (str "attested result missing " needle)))
-    (ensure! (contains-text? receipt ":remaining 253") "receipt fuel mismatch")))
+    (ensure! (contains-text? receipt ":remaining 509") "receipt fuel mismatch")))
 
 (defn compile-artifacts! []
   (k "compile" (.join path root "examples" "capability.kotoba") "--target" "wasm32"
