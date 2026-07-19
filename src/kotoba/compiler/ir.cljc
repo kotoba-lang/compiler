@@ -31,7 +31,7 @@
      f32-eq f32-lt f32-le f32-gt f32-ge f32-unordered
      i64-to-f32-checked i64-to-f32-rounded f32-to-i64-checked f32-to-i64-truncating
      f64-to-bits f64-from-bits f64-add f64-sub f64-mul f64-div f64-min f64-max
-     f64-neg f64-abs f64-sqrt
+     f64-neg f64-abs f64-sqrt f64-sin-quarter-turn f64-cos-quarter-turn
      f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered
      i64-to-f64-checked i64-to-f64-rounded f64-to-i64-checked f64-to-i64-truncating
      map-new map-get map-assoc
@@ -72,6 +72,7 @@
                            (contains? '#{f64-to-bits f64-from-bits
                                          f64-add f64-sub f64-mul f64-div f64-min f64-max
                                          f64-neg f64-abs f64-sqrt
+                                         f64-sin-quarter-turn f64-cos-quarter-turn
                                          f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered
                                          i64-to-f64-checked i64-to-f64-rounded
                                          f64-to-i64-checked f64-to-i64-truncating}
@@ -118,6 +119,40 @@
 (defn- f32-divide [left right]
   #?(:clj (let [^float left left ^float right right] (/ left right))
      :cljs (js/Math.fround (/ left right))))
+
+(def ^:private quarter-turn 0.7853981633974483)
+
+(defn- checked-quarter-turn [value]
+  (when-not (and #?(:clj (Double/isFinite ^double value) :cljs (js/Number.isFinite value))
+                 (<= (#?(:clj Math/abs :cljs js/Math.abs) value) quarter-turn))
+    (trap! :f64-quarter-turn-domain {}))
+  value)
+
+(defn- f64-sin-quarter-turn [value]
+  (let [value (checked-quarter-turn value)]
+    (if (zero? value)
+      value
+      (let [z (* value value)
+            p (+ -7.647163731819816e-13 (* z 2.8114572543455206e-15))
+            p (+ 1.6059043836821613e-10 (* z p))
+            p (+ -2.505210838544172e-8 (* z p))
+            p (+ 2.7557319223985893e-6 (* z p))
+            p (+ -0.0001984126984126984 (* z p))
+            p (+ 0.008333333333333333 (* z p))
+            p (+ -0.16666666666666666 (* z p))]
+        (+ value (* (* value z) p))))))
+
+(defn- f64-cos-quarter-turn [value]
+  (let [value (checked-quarter-turn value)
+        z (* value value)
+        p (+ -1.1470745597729725e-11 (* z 4.779477332387385e-14))
+        p (+ 2.08767569878681e-9 (* z p))
+        p (+ -2.755731922398589e-7 (* z p))
+        p (+ 0.0000248015873015873 (* z p))
+        p (+ -0.001388888888888889 (* z p))
+        p (+ 0.041666666666666664 (* z p))
+        p (+ -0.5 (* z p))]
+    (+ 1.0 (* z p))))
 
 (defn- validate-runtime-value! [runtime-value type position]
   (case type
@@ -434,6 +469,14 @@
 
         (= op 'f64-sqrt)
         (#?(:clj Math/sqrt :cljs js/Math.sqrt)
+         (eval-expr (first args) env functions fuel heap call-stack cap-call))
+
+        (= op 'f64-sin-quarter-turn)
+        (f64-sin-quarter-turn
+         (eval-expr (first args) env functions fuel heap call-stack cap-call))
+
+        (= op 'f64-cos-quarter-turn)
+        (f64-cos-quarter-turn
          (eval-expr (first args) env functions fuel heap call-stack cap-call))
 
         (contains? '#{f64-eq f64-lt f64-le f64-gt f64-ge} op)

@@ -1,4 +1,4 @@
-(ns f32-bits (:export [main bits from-bits rounded widen add to-f32 to-i64 sqrt minimum maximum]))
+(ns f32-bits (:export [main bits from-bits rounded widen add to-f32 to-i64 sqrt minimum maximum sin cos]))
 (defn main [] 0)
 (defn bits [value :f32] :i64 (f32-to-bits value))
 (defn from-bits [value :i64] :f32 (f32-from-bits value))
@@ -10,3 +10,5 @@
 (defn sqrt [value :f32] :f32 (f32-sqrt value))
 (defn minimum [left :f32 right :f32] :f32 (f32-min left right))
 (defn maximum [left :f32 right :f32] :f32 (f32-max left right))
+(defn sin [value :f64] :f64 (f64-sin-quarter-turn value))
+(defn cos [value :f64] :f64 (f64-cos-quarter-turn value))

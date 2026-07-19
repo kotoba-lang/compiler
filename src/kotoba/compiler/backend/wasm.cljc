@@ -169,6 +169,34 @@
   (concat [0x60] (uleb (count param-types)) (map typed/wasm-type param-types)
           [1 (typed/wasm-type result)]))
 
+(defn- exact-i64 [text]
+  #?(:clj (Long/parseLong text) :cljs (js/BigInt text)))
+
+(defn- f64-constant [bits]
+  (list 'f64-from-bits (if (string? bits) (exact-i64 bits) bits)))
+
+(defn- f64-horner [z coefficient-bits]
+  (reduce (fn [polynomial bits]
+            (list 'f64-add (f64-constant bits) (list 'f64-mul z polynomial)))
+          (f64-constant (first coefficient-bits))
+          (rest coefficient-bits)))
+
+(defn- bounded-sin-form [x]
+  (let [z (list 'f64-mul x x)
+        p (f64-horner z ["4389130328383466826" "-4797767418267846625"
+                         "4460272573143870729" "-4730215272828025628"
+                         "4523617214285662004" "-4671919876300759014"
+                         "4575957461383581969" "-4628199217061079723"])]
+    (list 'f64-add x (list 'f64-mul (list 'f64-mul x z) p))))
+
+(defn- bounded-cos-form [x]
+  (let [z (list 'f64-mul x x)
+        p (f64-horner z ["4407590220077447199" "-4780226356266894179"
+                         "4477122120089393304" "-4714566979057836196"
+                         "4537941361671905306" "-4659324094485795817"
+                         "4586165620538955093" "-4620693217682128896"])]
+    (list 'f64-add (f64-constant "4607182418800017408") (list 'f64-mul z p))))
+
 (defn- emit-typed-function-body
   [function function-indices intrinsic-indices descriptor-indices literal-indices signatures]
   (let [locals (volatile! [])
@@ -334,6 +362,22 @@
                     (concat (emit* (first args) env) [0x99])
                     (= op 'f64-sqrt)
                     (concat (emit* (first args) env) [0x9f])
+                    (contains? '#{f64-sin-quarter-turn f64-cos-quarter-turn} op)
+                    (let [value-local (allocate! 0x7c)
+                          value {:wasm-local value-local}
+                          domain-check (concat
+                                        [0x20 value-local 0x20 value-local 0x62
+                                         0x20 value-local 0x99]
+                                        (emit* (f64-constant "4605249457297304856") env)
+                                        [0x64 0x72 0x04 0x40 0x00 0x0b])]
+                      (concat (emit* (first args) env) [0x21 value-local]
+                              domain-check
+                              (if (= op 'f64-sin-quarter-turn)
+                                (concat [0x20 value-local]
+                                        (emit* (f64-constant 0) env) [0x61 0x04 0x7c]
+                                        [0x20 value-local 0x05]
+                                        (emit* (bounded-sin-form value) env) [0x0b])
+                                (emit* (bounded-cos-form value) env))))
                     (contains? '#{f64-eq f64-lt f64-le f64-gt f64-ge} op)
                     (concat (emit* (first args) env) (emit* (second args) env)
                             [({'f64-eq 0x61 'f64-lt 0x63 'f64-gt 0x64

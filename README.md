@@ -25,7 +25,7 @@ in multiple roots, compilation rejects the ambiguity instead of selecting a
 package by argument order.
 
 All compilation results carry
-`:kotoba.floating-point/ieee-754-f32-f64-v2`; restricted JavaScript artifacts
+`:kotoba.floating-point/ieee-754-f32-f64-v3`; restricted JavaScript artifacts
 seal the equivalent policy. Scalar `:f32` and `:f64` provide exact bit
 conversion, explicit arithmetic, ordered comparisons, unordered detection,
 and checked-versus-lossy numeric conversions on Kotoba Script and Wasm targets.
@@ -40,6 +40,9 @@ transcendentals, and native or CLJS lowering remain rejected.
 The v2 profile adds NaN-propagating square root, minimum, and maximum. Minimum
 selects negative zero and maximum positive zero for opposite-signed zeros;
 binary32 rounds after each named operation.
+Qualified quarter-turn f64 sine and cosine use fixed Horner polynomials without
+FMA, trap outside finite `[-pi/4, pi/4]`, and guarantee absolute error no larger
+than `4e-15`. They do not delegate semantics to a host transcendental library.
 
 Conversions are explicit: `i64-to-f64-checked` rejects inexact integers,
 whereas `i64-to-f64-rounded` names the IEEE rounding request.

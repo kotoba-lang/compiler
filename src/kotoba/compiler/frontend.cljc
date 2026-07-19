@@ -125,6 +125,7 @@
   '{f64-to-bits 1 f64-from-bits 1
     f64-add 2 f64-sub 2 f64-mul 2 f64-div 2 f64-min 2 f64-max 2
     f64-neg 1 f64-abs 1 f64-sqrt 1
+    f64-sin-quarter-turn 1 f64-cos-quarter-turn 1
     f64-eq 2 f64-lt 2 f64-le 2 f64-gt 2 f64-ge 2 f64-unordered 2
     i64-to-f64-checked 1 i64-to-f64-rounded 1
     f64-to-i64-checked 1 f64-to-i64-truncating 1})
@@ -1652,7 +1653,7 @@
             (require-expression-type! type :f64 arg))
           :f64)
 
-      (contains? '#{f64-neg f64-abs f64-sqrt} op)
+      (contains? '#{f64-neg f64-abs f64-sqrt f64-sin-quarter-turn f64-cos-quarter-turn} op)
       (do (require-expression-type! (first types) :f64 (first args)) :f64)
 
       (contains? '#{f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered} op)
