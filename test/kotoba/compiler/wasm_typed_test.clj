@@ -4,7 +4,8 @@
             [clojure.test :refer [deftest is testing]]
             [kotoba.compiler.backend.wasm :as wasm]
             [kotoba.compiler.backend.wasm-typed :as typed]
-            [kotoba.compiler.core :as compiler]))
+            [kotoba.compiler.core :as compiler]
+            [kotoba.compiler.ir :as ir]))
 
 (defn- node-probe [compiled javascript]
   (let [encoded (.encodeToString (java.util.Base64/getEncoder) ^bytes (:bytes compiled))
@@ -124,6 +125,69 @@
     (is (= :kotoba.typed/externref-v1 (:value-abi compiled)))
     (is (= #{:reference-types} (:wasm-features compiled)))
     (is (zero? (:exit probe)) (:err probe))))
+
+(deftest structured-f64-and-f32-cross-the-sealed-wasm-abi
+  (let [source
+        "(ns typed.floating-structure
+           (:export [main vector-value vector-x vector-y moved-x point point-x point-y graph-x]))
+         (defn main [] 0)
+         (defn vector-value [] [:vector [:f64 :f32]]
+           (hetero-vector [:vector [:f64 :f32]] -0.0 (f64-to-f32-rounded 1.25)))
+         (defn vector-x [] :f64
+           (hetero-vector-at [:vector [:f64 :f32]] (vector-value) 0))
+         (defn vector-y [] :f32
+           (hetero-vector-at [:vector [:f64 :f32]] (vector-value) 1))
+         (defn moved-x [] :f64
+           (hetero-vector-at [:vector [:f64 :f32]]
+             (hetero-vector-assoc [:vector [:f64 :f32]] (vector-value) 0 2.5) 0))
+         (defn point [] [:record :geometry/point [[:x :f64] [:y :f32]]]
+           (record [:record :geometry/point [[:x :f64] [:y :f32]]]
+             (f64-div 0.0 0.0) (f64-to-f32-rounded -0.0)))
+         (defn point-x [] :f64
+           (record-get [:record :geometry/point [[:x :f64] [:y :f32]]] (point) :x))
+         (defn point-y [] :f32
+           (record-get [:record :geometry/point [[:x :f64] [:y :f32]]] (point) :y))
+         (defn graph-x [] :f64
+           (record-get [:record :geometry/point [[:x :f64] [:y :f32]]]
+             (option-value-of
+               [:option [:record :geometry/point [[:x :f64] [:y :f32]]]]
+               (typed-map-get
+                 [:map :keyword [:record :geometry/point [[:x :f64] [:y :f32]]]]
+                 (typed-map-new
+                   [:map :keyword [:record :geometry/point [[:x :f64] [:y :f32]]]]
+                   :origin
+                   (record [:record :geometry/point [[:x :f64] [:y :f32]]]
+                     4.5 (f64-to-f32-rounded 6.0)))
+                 :origin)
+               (record [:record :geometry/point [[:x :f64] [:y :f32]]]
+                 0.0 (f64-to-f32-rounded 0.0)))
+             :x))"
+        js-compiled (compiler/compile-source source :js-kotoba-v1)
+        compiled (compiler/compile-source source :wasm32-browser-kotoba-v1)
+        probe (node-probe
+               compiled
+               (str "const x=h.instance.exports,v=x['vector-value'](),p=x.point();"
+                    "if(!Object.is(x['vector-x'](),-0)||x['vector-y']()!==1.25||x['moved-x']()!==2.5)process.exit(2);"
+                    "if(!Number.isNaN(x['point-x']())||!Object.is(x['point-y'](),-0))process.exit(3);"
+                    "if(!Object.isFrozen(v)||!Object.isFrozen(p)||x['graph-x']()!==4.5)process.exit(4);"))]
+    (is (= :kotoba.typed/mixed-f32-f64-v3
+           (get-in compiled [:compatibility :value-abi])))
+    (is (Double/isNaN (double (ir/execute (:kir js-compiled) 'point-x []))))
+    (is (= (Double/doubleToRawLongBits -0.0)
+           (Double/doubleToRawLongBits
+            (double (ir/execute (:kir js-compiled) 'vector-x [])))))
+    (is (= 2.5 (ir/execute (:kir js-compiled) 'moved-x [])))
+    (is (= 4.5 (ir/execute (:kir js-compiled) 'graph-x [])))
+    (is (zero? (:exit probe)) (:err probe))))
+
+(deftest direct-floating-ordered-collections-fail-closed
+  (doseq [type ["[:set :f64]" "[:map :keyword :f64]" "[:map :f32 :i64]"]]
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo
+         #"direct floating"
+         (compiler/compile-source
+          (str "(defn main [] " type " 0)")
+          :wasm32-browser-kotoba-v1)))))
 
 (deftest algebraic-operations-have-sealed-wasm-runtime-parity
   (let [source

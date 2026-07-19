@@ -296,10 +296,7 @@
      (throw (ex-info "value type exceeds depth limit" {:phase :value :limit adt-depth-limit})))
    (cond
      (contains? leaf-value-types type)
-     (do (when (and (contains? #{:f32 :f64} type) (pos? depth))
-           (throw (ex-info "floating-point values are admitted only as scalars"
-                           {:phase :value :type type})))
-         type)
+     type
      (and (vector? type) (= 3 (count type)) (= :result (first type)))
      (do (validate-value-type! (second type) (inc depth) nodes)
          (validate-value-type! (nth type 2) (inc depth) nodes)
@@ -321,10 +318,16 @@
          (validate-value-type! item-type (inc depth) nodes))
        type)
      (and (vector? type) (= 2 (count type)) (= :set (first type)))
-     (do (validate-value-type! (second type) (inc depth) nodes)
+     (do (when (contains? #{:f32 :f64} (second type))
+           (throw (ex-info "direct floating set items are outside the structured scalar ABI"
+                           {:phase :value :type type})))
+         (validate-value-type! (second type) (inc depth) nodes)
          type)
      (and (vector? type) (= 3 (count type)) (= :map (first type)))
-     (do (validate-value-type! (second type) (inc depth) nodes)
+     (do (when (some #{:f32 :f64} [(second type) (nth type 2)])
+           (throw (ex-info "direct floating map keys or values are outside the structured scalar ABI"
+                           {:phase :value :type type})))
+         (validate-value-type! (second type) (inc depth) nodes)
          (validate-value-type! (nth type 2) (inc depth) nodes)
          type)
      (and (vector? type) (= 3 (count type)) (= :record (first type)))
