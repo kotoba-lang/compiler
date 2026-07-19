@@ -1,4 +1,4 @@
 {:format :kotoba.fuzz-baseline/v2
- :loader-source-sha256 "9d9c0641e3e86b5ea2363e38ef9e338935198eb78840b18c475136e367d0b233"
+ :loader-source-sha256 "dc102247f94f2c2d117e1e243ca6eeace398593097ff81765cae7915eb940047"
  :profiles {:x64 {:min-cov 60 :min-features 100 :min-corpus 20}
             :arm64 {:min-cov 60 :min-features 100 :min-corpus 18}}}

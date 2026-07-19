@@ -29,6 +29,8 @@
 (def ^:private comparisons '#{= < > <= >=})
 (def ^:private heap-operations '{pair 2 pair-first 1 pair-second 1})
 (def ^:private kgraph-operations '{kgraph-assert! 3 kgraph-get 2 kgraph-count 1 kgraph-entity-at 2})
+(def ^:private string-operations '{string-byte-length 1 string=? 2 string-concat 2})
+(def ^:private string-literal-byte-limit 4096)
 
 (defn- valid-name? [value]
   (and (simple-symbol? value) (<= (count (name value)) max-symbol-chars)))
@@ -44,6 +46,7 @@
 (defn- lowered-cost [form env]
   (cond
     (integer? form) 1
+    (string? form) 1
     (symbol? form) (get env form 1)
     :else
     (let [[op & args] form]
@@ -86,6 +89,10 @@
     (symbol? form)
     (when-not (contains? locals form)
       (reject! "runtime KIR contains an unbound symbol" {:symbol form}))
+
+    (string? form)
+    (when-not (<= (count (.getBytes ^String form "UTF-8")) string-literal-byte-limit)
+      (reject! "runtime KIR string literal exceeds byte limit" {:bytes (count (.getBytes ^String form "UTF-8"))}))
 
     (seq? form)
     (let [[op & args] form]
@@ -141,6 +148,12 @@
             (reject! "runtime KIR kgraph operation arity rejected" {:operation op}))
           (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
 
+        (contains? string-operations op)
+        (do
+          (when-not (= (get string-operations op) (count args))
+            (reject! "runtime KIR string operation arity rejected" {:operation op}))
+          (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
+
         (contains? '#{kernel-load-u8 kernel-load-u8-4k kernel-load-u8-16k
                       kernel-store-u8 kernel-store-u8-4k
                       kernel-load-u32 kernel-store-u32} op)
@@ -186,7 +199,7 @@
 (defn- verify-program! [program]
   (when-not (and (map? program)
                  (= #{:format :entry :exports :signature :effects :functions} (set (keys program)))
-                 (= :kotoba.kir/v3 (:format program))
+                 (contains? #{:kotoba.kir/v3 :kotoba.kir/v4} (:format program))
                  (= 'main (:entry program))
                  (= {:params [] :result :i64} (:signature program))
                  (set? (:effects program))
@@ -200,8 +213,9 @@
         (into {}
               (map (fn [function]
                      (when-not (and (map? function)
-                                    (= #{:name :params :result :effects :body}
-                                       (set (keys function)))
+                                    (contains? #{#{:name :params :result :effects :body}
+                                                 #{:name :params :result :effects :body :param-types}}
+                                               (set (keys function)))
                                     (valid-name? (:name function))
                                     (vector? (:params function))
                                     (<= (count (:params function)) max-parameters)
@@ -209,6 +223,10 @@
                                     (= (count (:params function))
                                        (count (distinct (:params function))))
                                     (= :i64 (:result function))
+                                    (or (not (contains? function :param-types))
+                                        (and (vector? (:param-types function))
+                                             (= (count (:param-types function)) (count (:params function)))
+                                             (every? #{:i64 :string} (:param-types function))))
                                     (set? (:effects function))
                                     (every? valid-effect? (:effects function)))
                        (reject! "runtime KIR function shape rejected" {:function (:name function)}))
@@ -263,8 +281,8 @@
     (when-not (= expected-lowering lowering)
       (reject! "native runtime lowering mode is not admitted"
                {:target target :lowering lowering}))
-    (when-not (= :kotoba.kir/v3 (:format program))
-      (reject! "native artifact requires runtime KIR v3"
+    (when-not (contains? #{:kotoba.kir/v3 :kotoba.kir/v4} (:format program))
+      (reject! "native artifact requires runtime KIR v3 or v4"
                {:target target :program-format (:format program)}))
     (verify-program! program)
     (let [expected (try (emit program)
@@ -287,7 +305,9 @@
                             :pair-second-offset 72 :pair-capacity 4096
                             :kgraph-assert-offset 80 :kgraph-get-offset 88
                             :kgraph-count-offset 96 :kgraph-entity-at-offset 104
-                            :kgraph-capacity 4096}]
+                            :kgraph-capacity 4096
+                            :string-equal-offset 112 :string-concat-offset 120
+                            :string-pool-capacity 65536}]
       (when-not (= expected-fuel-abi fuel-abi)
         (reject! "fuel ABI is not admitted" {:target target :fuel-abi fuel-abi}))
       (when-not (= expected-limits limits)
@@ -315,11 +335,13 @@
   (when-not (= kir-sha256 (artifact/sha256 (:program kexe)))
     (reject! "runtime KIR identity mismatch" {}))
   (verify-runtime! kexe)
-  (let [expected (compatibility-profile/descriptor
-                  {:hir-format :kotoba.hir/v2
-                   :kir-format (get-in kexe [:program :format])
+  (let [kir-format (get-in kexe [:program :format])
+        typed-values? (= :kotoba.kir/v4 kir-format)
+        expected (compatibility-profile/descriptor
+                  {:hir-format (if typed-values? :kotoba.hir/v3 :kotoba.hir/v2)
+                   :kir-format kir-format
                    :target target :target-profile target-profile
-                   :value-abi :kotoba.i64/direct-v1})]
+                   :value-abi (if typed-values? :kotoba.typed/externref-v1 :kotoba.i64/direct-v1)})]
     (when-not (= expected compatibility)
       (reject! "native compatibility metadata rejected" {:target target})))
   (let [kernel-operations '#{kernel-load-u8 kernel-load-u8-4k kernel-load-u8-16k

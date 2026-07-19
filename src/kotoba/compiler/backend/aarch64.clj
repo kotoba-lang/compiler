@@ -29,7 +29,10 @@
   (concat (insn 0xf94004f0) (insn 0xb5000050) (insn 0xd4200000)
           (insn 0xd1000610) (insn 0xf90004f0)))
 
-(defn- token-size [token] (if (and (map? token) (:call token)) 4 1))
+(defn- token-size [token]
+  (cond (and (map? token) (:call token)) 4
+        (and (map? token) (:string-literal token)) 16
+        :else 1))
 (defn- code-size [tokens] (reduce + (map token-size tokens)))
 (defn- sub-sp [amount] (insn (bit-or 0xd10003ff (bit-shift-left amount 10))))
 (defn- add-sp [amount] (insn (bit-or 0x910003ff (bit-shift-left amount 10))))
@@ -201,7 +204,14 @@
 
 (def ^:private heap-call-offsets
   {'pair 56 'pair-first 64 'pair-second 72
-   'kgraph-assert! 80 'kgraph-get 88 'kgraph-count 96 'kgraph-entity-at 104})
+   'kgraph-assert! 80 'kgraph-get 88 'kgraph-count 96 'kgraph-entity-at 104
+   ;; A string value IS a pair(offset,length) handle (see emit-string-literal
+   ;; below) -- string-byte-length is exactly pair-second, no new host
+   ;; function needed. string=?/string-concat resolve their handles' bytes
+   ;; host-side (content comparison / pool allocation), so they need a new
+   ;; offset each.
+   'string-byte-length 72
+   'string=? 112 'string-concat 120})
 
 (defn- emit-heap-call [op args env depth]
   (let [offset (get heap-call-offsets op)
@@ -215,6 +225,27 @@
     (vec (concat saved restored
                  (sub-sp 16) (str-sp 7 0)
                  (mov-reg 0 7) (ldr-context 16 offset) (insn 0xd63f0200)
+                 (ldr-sp 7 0) (add-sp 16)))))
+
+;; A string VALUE is a pair(offset, length) handle -- offset addresses a
+;; UTF-8 byte range either in the compiled artifact's own code+literal-data
+;; region (non-negative) or in the runtime string pool (negative, see
+;; tools/kexe_loader.c's checked_string_concat), uniformly resolved host-side.
+;; A literal's bytes are appended once per DISTINCT content to the artifact's
+;; :code array (read+exec, never written after mprotect -- literal data is
+;; read-only, no different from reading one's own instructions as data); its
+;; offset is only known once every function's code size is summed, so this
+;; emits a deferred {:string-literal content} token (finalize resolves it,
+;; token-size already reserves the 16 bytes a resolved load-constant needs)
+;; for JUST the offset half -- length is already known here, at literal-
+;; encounter time, so it needs no deferral.
+(defn- emit-string-literal [content]
+  (let [length (count (.getBytes ^String content "UTF-8"))]
+    (vec (concat [{:string-literal content}] (save-x0)     ; push offset
+                 (load-constant length) (save-x0)          ; push length
+                 (restore-to 2) (restore-to 1)              ; x2=length, x1=offset
+                 (sub-sp 16) (str-sp 7 0)
+                 (mov-reg 0 7) (ldr-context 16 56) (insn 0xd63f0200) ; call pair_new
                  (ldr-sp 7 0) (add-sp 16)))))
 
 (defn- emit-let [bindings body env depth]
@@ -237,6 +268,7 @@
 (defn emit-expr [form env depth]
   (cond
     (integer? form) (load-constant form)
+    (string? form) (emit-string-literal form)
     (symbol? form)
     (let [binding (get env form)]
       (if (map? binding)
@@ -262,7 +294,8 @@
         (= op 'cap-call)
         (emit-cap-call (first args) (second args) env depth)
         (contains? '#{pair pair-first pair-second
-                      kgraph-assert! kgraph-get kgraph-count kgraph-entity-at} op)
+                      kgraph-assert! kgraph-get kgraph-count kgraph-entity-at
+                      string-byte-length string=? string-concat} op)
         (emit-heap-call op args env depth)
         (and (= op '-) (= 1 (count args)))
         (vec (concat (emit-expr (first args) env depth) (insn 0xcb0003e0)))
@@ -306,10 +339,11 @@
                  save-frame params-to-saved expression restore-frame
                  (insn 0xa8c17bfd) (insn 0xd65f03c0))))) ; ldp fp,lr,[sp],#16; ret
 
-(defn- finalize [tokens function-offset offsets]
+(defn- finalize [tokens function-offset offsets literal-offsets]
   (loop [remaining tokens position 0 out []]
     (if-let [token (first remaining)]
-      (if (and (map? token) (:call token))
+      (cond
+        (and (map? token) (:call token))
         (let [absolute (+ function-offset position) target (get offsets (:call token))
               displacement (- target absolute)]
           (when-not target
@@ -319,21 +353,51 @@
           (recur (next remaining) (+ position 4)
                  (into out (insn (bit-or 0x94000000
                                          (bit-and (quot displacement 4) 0x03ffffff))))))
+
+        (and (map? token) (:string-literal token))
+        (let [content (:string-literal token) offset (get literal-offsets content)]
+          (when-not offset
+            (throw (ex-info "unknown AArch64 string literal" {:content content})))
+          (recur (next remaining) (+ position 16) (into out (load-constant-reg 0 offset))))
+
+        :else
         (recur (next remaining) (inc position) (conj out token)))
       out)))
+
+;; Every distinct string literal's content used anywhere in the program,
+;; collected once (order-preserving, first occurrence wins) so `finalize`
+;; can resolve every `{:string-literal content}` reference deterministically
+;; -- the SAME source compiled twice must produce byte-identical output for
+;; verifier.clj's independent re-emission check to hold.
+(defn- collect-string-literals [token-bodies]
+  (distinct (for [[_ tokens] token-bodies
+                  token tokens
+                  :when (and (map? token) (:string-literal token))]
+              (:string-literal token))))
 
 (defn emit-program [kir]
   (let [exported-names (set (or (:exports kir) (map :name (:functions kir))))
         token-bodies (mapv (fn [f] [f (emit-function f)]) (:functions kir))
         offsets (loop [items token-bodies offset 0 out {}]
                   (if-let [[f body] (first items)]
-                    (recur (next items) (+ offset (code-size body)) (assoc out (:name f) offset)) out))]
+                    (recur (next items) (+ offset (code-size body)) (assoc out (:name f) offset)) out))
+        code-size-total (reduce + 0 (map (fn [[_ body]] (code-size body)) token-bodies))
+        literal-contents (collect-string-literals token-bodies)
+        literal-offsets (loop [remaining literal-contents pos code-size-total out {}]
+                          (if-let [content (first remaining)]
+                            (recur (next remaining)
+                                   (+ pos (count (.getBytes ^String content "UTF-8")))
+                                   (assoc out content pos))
+                            out))
+        literal-bytes (vec (mapcat (fn [content]
+                                     (map #(bit-and (int %) 0xff) (.getBytes ^String content "UTF-8")))
+                                   literal-contents))]
     (loop [items token-bodies code [] exports {}]
       (if-let [[function tokens] (first items)]
-        (let [offset (get offsets (:name function)) body (finalize tokens offset offsets)]
+        (let [offset (get offsets (:name function)) body (finalize tokens offset offsets literal-offsets)]
           (recur (next items) (into code body)
                  (cond-> exports
                    (contains? exported-names (:name function))
                    (assoc (:name function)
                           {:offset offset :length (count body) :arity (count (:params function))}))))
-        {:code code :exports exports}))))
+        {:code (vec (concat code literal-bytes)) :exports exports}))))
