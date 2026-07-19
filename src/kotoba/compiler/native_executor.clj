@@ -443,7 +443,8 @@
                                 common-flags
                                 (deterministic-linker-flags)
                                 [(.getPath loader-source) "-o" (.getPath loader)]
-                                (when windows? ["-ladvapi32"]))))
+                                (when windows? ["-ladvapi32" "-luserenv" "-lws2_32"
+                                                "-lfwpuclnt" "-lrpcrt4"]))))
           build (run-process (build-command) toolchain-env {:timeout-ms 30000})
           first-loader-sha (when (zero? (:exit build)) (file-sha256 loader))
           reproduced-build (run-process (build-command) toolchain-env {:timeout-ms 30000})]
@@ -499,6 +500,29 @@
 (defn- trap-value [stderr]
   (when-let [[_ value] (re-find #"(?m)^KEXE_TRAP (\{.*\})$" stderr)]
     (edn/read-string value)))
+
+(defn- loader-failure-class [stderr]
+  (when-let [[_ stage win32]
+             (re-find #"(?m)^kexe-loader-windows: ([A-Za-z0-9_ ()-]+)(?:: win32=([0-9]+))?$"
+                      (or stderr ""))]
+    (str stage (when win32 (str "/win32=" win32)))))
+
+(defn- runtime-environment [host-os-value]
+  (if (= :windows host-os-value)
+    (if-let [system-root (or (System/getenv "SystemRoot")
+                             (System/getenv "WINDIR"))]
+      (if-let [local-app-data (System/getenv "LOCALAPPDATA")]
+        {"KEXE_STRUCTURED_REPORT" "1"
+         "SystemRoot" system-root
+         ;; CreateProcessW uses this to materialize the per-profile
+         ;; AppContainer environment. Do not inherit the rest of the user's
+         ;; environment (PATH, credentials, or arbitrary injection knobs).
+         "LOCALAPPDATA" local-app-data}
+        (throw (ex-info "Windows AppContainer execution requires LOCALAPPDATA"
+                        {:phase :execute})))
+      (throw (ex-info "Windows native execution requires SystemRoot"
+                      {:phase :execute})))
+    {"KEXE_STRUCTURED_REPORT" "1"}))
 
 (defn- valid-supervisor-report? [report exit]
   (let [status (:status report)
@@ -586,8 +610,9 @@
                              (str (:offset export)) (str (:arity export)) isa allow]
                             (map str args))
               started-at (quot (System/currentTimeMillis) 1000)
-              process (run-process command {"KEXE_STRUCTURED_REPORT" "1"}
-                                   {:timeout-ms 5000 :output-limit 65536})
+              process (run-process command (runtime-environment host-os-value)
+                                   {:timeout-ms (if (= :windows host-os-value) 60000 5000)
+                                    :output-limit 65536})
               finished-at (quot (System/currentTimeMillis) 1000)
               report (edn/read-string (str/trim (:stdout process)))
               trap (trap-value (:stderr process))
@@ -596,7 +621,12 @@
                          (= status :ok) (assoc :result (:result report))
                          trap (assoc :trap trap))]
           (when-not (valid-supervisor-report? report (:exit process))
-            (throw (ex-info "malformed native supervisor evidence"
+            (throw (ex-info (str "malformed native supervisor evidence"
+                                 " (exit=" (:exit process)
+                                 ", timed-out=" (:timed-out? process)
+                                 ", output-exceeded=" (:output-exceeded? process)
+                                 ", report-status=" status
+                                 ", loader-failure=" (loader-failure-class (:stderr process)) ")")
                             {:phase :execute :exit (:exit process)
                              :stdout (:stdout process) :stderr (:stderr process)})))
           {:artifact artifact :signer signer :target (:target artifact) :entry entry

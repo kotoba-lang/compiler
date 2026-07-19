@@ -7,6 +7,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <sddl.h>
+#include <userenv.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -58,6 +59,19 @@ static void fail_win(const char *message) {
 static void fail_input(const char *message) {
   fprintf(stderr, "kexe-loader-windows: %s\n", message);
   ExitProcess(65);
+}
+
+static HANDLE create_guest_job(void) {
+  HANDLE job = CreateJobObjectW(NULL, NULL);
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits;
+  if (job == NULL) fail_win("CreateJobObjectW");
+  ZeroMemory(&limits, sizeof(limits));
+  limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE |
+      JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
+  limits.BasicLimitInformation.ActiveProcessLimit = 1;
+  if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits)))
+    fail_win("SetInformationJobObject");
+  return job;
 }
 
 static int64_t SYSV cap_call(struct kexe_context *ctx, uint32_t id, int64_t value) {
@@ -124,20 +138,6 @@ static void parse_allow(struct kexe_context *ctx, const char *text) {
   }
 }
 
-static void install_job_boundary(void) {
-  HANDLE job = CreateJobObjectW(NULL, NULL);
-  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits;
-  if (job == NULL) fail_win("CreateJobObjectW");
-  ZeroMemory(&limits, sizeof(limits));
-  limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE |
-      JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
-  limits.BasicLimitInformation.ActiveProcessLimit = 1;
-  if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits)))
-    fail_win("SetInformationJobObject");
-  if (!AssignProcessToJobObject(job, GetCurrentProcess())) fail_win("AssignProcessToJobObject");
-  /* Intentionally retain the handle until process exit. */
-}
-
 static HANDLE restricted_token(void) {
   HANDLE process_token = NULL, token = NULL, impersonation = NULL;
   PSID low_sid = NULL;
@@ -161,6 +161,30 @@ static HANDLE restricted_token(void) {
     fail_win("DuplicateTokenEx impersonation");
   CloseHandle(token);
   return impersonation;
+}
+
+static void require_appcontainer_token(void) {
+  HANDLE token = NULL;
+  DWORD is_appcontainer = 0, returned = 0;
+  TOKEN_GROUPS *capability_groups = NULL;
+  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+    fail_win("OpenProcessToken AppContainer verification");
+  if (!GetTokenInformation(token, TokenIsAppContainer, &is_appcontainer,
+                           sizeof(is_appcontainer), &returned))
+    fail_win("GetTokenInformation TokenIsAppContainer");
+  GetTokenInformation(token, TokenCapabilities, NULL, 0, &returned);
+  if (GetLastError() != ERROR_INSUFFICIENT_BUFFER) fail_win("TokenCapabilities size");
+  capability_groups = (TOKEN_GROUPS *)malloc(returned);
+  if (capability_groups == NULL ||
+      !GetTokenInformation(token, TokenCapabilities, capability_groups,
+                           returned, &returned))
+    fail_win("GetTokenInformation TokenCapabilities");
+  CloseHandle(token);
+  if (!is_appcontainer)
+    fail_input("child contract requires an AppContainer process token");
+  if (capability_groups->GroupCount != 0)
+    fail_input("AppContainer child unexpectedly has capability SIDs");
+  free(capability_groups);
 }
 
 static void prohibit_dynamic_code(void) {
@@ -189,7 +213,7 @@ static void prohibit_dynamic_code(void) {
  * This must run while the process still holds its original (non-restricted)
  * privileges -- i.e. before restricted_token()/SetThreadToken -- mirroring
  * the "privileged setup, then restrict" ordering already used for the Job
- * object in install_job_boundary(). Every WFP call is fail-closed: any
+ * object in create_guest_job(). Every WFP call is fail-closed: any
  * failure here aborts the loader via fail_win() before guest entry, rather
  * than silently proceeding without network denial.
  *
@@ -197,13 +221,11 @@ static void prohibit_dynamic_code(void) {
  * (Base Filtering Engine) automatically tears down these filters when the
  * engine handle closes or this process exits/crashes; the handle is
  * intentionally retained (never closed) until process exit, the same
- * pattern install_job_boundary() uses for its Job handle.
+ * pattern run_appcontainer_parent() uses for its Job handle.
  *
- * NOTE (verification gap, honestly disclosed): FwpmEngineOpen0/FwpmFilterAdd0
- * are BFE management operations that Microsoft's own samples document as
- * requiring an administrative caller. This has not been exercised on a real
- * Windows host from this change -- the windows-arm64 CI job is the actual
- * first real execution of this code path (see docs/threat-model.md).
+ * Hosted x86_64 and Arm64 Windows CI exercises these BFE calls. They remain
+ * fail-closed defense in depth; the zero-capability AppContainer token is the
+ * primary network boundary.
  *
  * UPDATE (first real CI run, PR #67): FwpmEngineOpen0/FwpmFilterAdd0 did NOT
  * fail (the admin-privilege risk above did not materialize -- every
@@ -218,8 +240,8 @@ static void prohibit_dynamic_code(void) {
  * not guarantee precedence over higher-weighted filters that may already
  * exist there (from other software, or an OS-default permissive rule for
  * loopback/local traffic). This revision requests maximum explicit weight
- * instead, as a defensive hardening; whether that was in fact the cause is
- * unverified since this code cannot be exercised outside windows-arm64 CI.
+ * instead, as a defensive hardening; whether that was in fact the cause was
+ * unverified at that stage.
  * connect_and_require_denial() below was also expanded, at the same time,
  * to print an unambiguous diagnostic line on every resolution path (which
  * WSA error, synchronous vs. post-select, or a timeout), so a repeat
@@ -256,14 +278,14 @@ static void prohibit_dynamic_code(void) {
  * matching genuine (non-loopback) outbound/inbound traffic, which is the
  * actual guest-network-egress threat this boundary exists for. Two filters
  * per layer -- one general, one loopback-inclusive -- are required to deny
- * both without narrowing either. This has not been exercised on a real
- * Windows host from this change (see docs/threat-model.md for the honest
- * disclosure of what remains unverified, including that no probe in this
- * file exercises a genuine non-loopback destination).
+ * both without narrowing either. The authoritative AppContainer outbound
+ * probe below exercises a non-loopback TEST-NET-1 target and requires
+ * WSAEACCES.
  */
 static void install_network_denial(void) {
   HANDLE engine = NULL;
   FWPM_SESSION0 session;
+  FWPM_SUBLAYER0 sublayer;
   wchar_t module_path[MAX_PATH];
   FWP_BYTE_BLOB *app_id = NULL;
   FWPM_FILTER_CONDITION0 app_id_condition;
@@ -277,6 +299,8 @@ static void install_network_denial(void) {
   };
   DWORD status;
   size_t i;
+  static const GUID denial_sublayer_key =
+    {0x7a3b6d13, 0x0d5f, 0x4e87, {0x9e, 0x31, 0x42, 0x7c, 0x65, 0x1a, 0xb8, 0x04}};
 
   if (GetModuleFileNameW(NULL, module_path, MAX_PATH) == 0) fail_win("GetModuleFileNameW");
 
@@ -284,6 +308,21 @@ static void install_network_denial(void) {
   session.flags = FWPM_SESSION_FLAG_DYNAMIC;
   status = FwpmEngineOpen0(NULL, RPC_C_AUTHN_WINNT, NULL, &session, &engine);
   if (status != ERROR_SUCCESS) { SetLastError(status); fail_win("FwpmEngineOpen0"); }
+
+  /* Filter weight is compared only inside one sublayer. The universal
+     sublayer can lose arbitration to a terminating permit in a higher-weight
+     sublayer, which hosted Windows runners demonstrated. Own a maximum-weight
+     dynamic sublayer and make each block terminating. */
+  ZeroMemory(&sublayer, sizeof(sublayer));
+  sublayer.subLayerKey = denial_sublayer_key;
+  sublayer.displayData.name = L"kotoba-kexe-network-denial";
+  sublayer.displayData.description = L"Fail-closed per-process KEXE network boundary";
+  sublayer.weight = 0xffff;
+  status = FwpmSubLayerAdd0(engine, &sublayer, NULL);
+  if (status != ERROR_SUCCESS && status != (DWORD)FWP_E_ALREADY_EXISTS) {
+    SetLastError(status);
+    fail_win("FwpmSubLayerAdd0 denial");
+  }
 
   status = FwpmGetAppIdFromFileName0(module_path, &app_id);
   if (status != ERROR_SUCCESS) { SetLastError(status); fail_win("FwpmGetAppIdFromFileName0"); }
@@ -299,7 +338,8 @@ static void install_network_denial(void) {
   loopback_conditions[1].fieldKey = FWPM_CONDITION_FLAGS;
   loopback_conditions[1].matchType = FWP_MATCH_FLAGS_ALL_SET;
   loopback_conditions[1].conditionValue.type = FWP_UINT32;
-  loopback_conditions[1].conditionValue.uint32 = FWP_CONDITION_FLAG_IS_LOOPBACK;
+  loopback_conditions[1].conditionValue.uint32 =
+    FWP_CONDITION_FLAG_IS_NON_APPCONTAINER_LOOPBACK;
 
   for (i = 0; i < sizeof(layers) / sizeof(layers[0]); i++) {
     UINT64 filter_id = 0;
@@ -310,9 +350,10 @@ static void install_network_denial(void) {
        connections -- treat it as covering non-loopback traffic. */
     ZeroMemory(&filter, sizeof(filter));
     filter.layerKey = *layers[i];
-    filter.subLayerKey = FWPM_SUBLAYER_UNIVERSAL;
+    filter.subLayerKey = denial_sublayer_key;
     filter.displayData.name = L"kotoba-kexe-network-denial";
     filter.action.type = FWP_ACTION_BLOCK;
+    filter.flags = FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT;
     filter.weight.type = FWP_UINT8;
     filter.weight.uint8 = 15;
     filter.numFilterConditions = 1;
@@ -326,15 +367,16 @@ static void install_network_denial(void) {
     fprintf(stderr, "kexe-loader-windows: network denial filter installed: layer=%zu filter_id=%llu "
                     "kind=general\n", i, (unsigned long long)filter_id);
 
-    /* Filter B: loopback-inclusive block, app id AND FWP_CONDITION_FLAG_IS_LOOPBACK.
-       This is the filter this app's own loopback probes below actually
-       exercise; without it, the confirmed CI failure recurs. */
+    /* Filter B: standard-process loopback block, app id AND
+       FWP_CONDITION_FLAG_IS_NON_APPCONTAINER_LOOPBACK. The generic loopback
+       bit did not match this non-AppContainer process on hosted Windows. */
     filter_id = 0;
     ZeroMemory(&filter, sizeof(filter));
     filter.layerKey = *layers[i];
-    filter.subLayerKey = FWPM_SUBLAYER_UNIVERSAL;
+    filter.subLayerKey = denial_sublayer_key;
     filter.displayData.name = L"kotoba-kexe-network-denial-loopback";
     filter.action.type = FWP_ACTION_BLOCK;
+    filter.flags = FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT;
     filter.weight.type = FWP_UINT8;
     filter.weight.uint8 = 15;
     filter.numFilterConditions = 2;
@@ -363,12 +405,10 @@ typedef int64_t (*guest_fn)(int64_t, int64_t, int64_t, int64_t,
 #endif
 
 /*
- * Performs a non-blocking connect() and requires it to resolve, within a
- * bounded deadline, to a policy-denial error rather than either succeeding
- * or hanging. A timeout here is treated as a probe FAILURE (not a pass):
- * it would mean the connection attempt reached the network stack instead
- * of being denied synchronously at WFP's ALE admission layer, i.e. that
- * install_network_denial()'s filter did not actually take effect.
+ * Performs a non-blocking connect() to a caller-created live loopback
+ * listener. The same path is proved reachable immediately before the WFP
+ * filters are installed. After installation, either WSAEACCES or bounded
+ * non-completion is a denial; a completed connection is a failure.
  */
 static int connect_and_require_denial(SOCKET sock, const struct sockaddr_in *address) {
   u_long non_blocking = 1;
@@ -418,11 +458,8 @@ static int connect_and_require_denial(SOCKET sock, const struct sockaddr_in *add
     return 70;
   }
   if (select_result == 0) {
-    fprintf(stderr, "kexe-loader-windows: network probe timed out after 2s waiting for a policy "
-                    "decision instead of being denied at admission -- neither success nor a "
-                    "socket error was observed, which most likely means the WFP block filter is "
-                    "not being evaluated/applied for this connection at all (rather than the "
-                    "connection actually being blocked)\n");
+    fprintf(stderr, "kexe-loader-windows: network probe timed out; timeout is not proof of "
+                    "AppContainer policy denial\n");
     return 70;
   }
   if (getsockopt(sock, SOL_SOCKET, SO_ERROR, (char *)&error_value, &error_length) != 0) {
@@ -445,11 +482,12 @@ static int connect_and_require_denial(SOCKET sock, const struct sockaddr_in *add
   return 70;
 }
 
-/* Outbound direction: connect() to loopback must be denied by the
-   ALE_AUTH_CONNECT_V4 filter installed in install_network_denial(). */
+/* Outbound direction: AppContainer without internetClient must reject a
+   non-loopback connect with WSAEACCES.  TEST-NET-1 is non-routable, so no
+   external service is contacted; timeout/refusal is not accepted as proof. */
 static int network_outbound_probe_denied(void) {
   WSADATA wsa_data;
-  SOCKET sock;
+  SOCKET sock = INVALID_SOCKET;
   struct sockaddr_in address;
   int denial;
 
@@ -459,46 +497,28 @@ static int network_outbound_probe_denied(void) {
   }
   sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   if (sock == INVALID_SOCKET) {
-    fprintf(stderr, "kexe-loader-windows: network probe socket() failed: wsa=%d\n",
+    fprintf(stderr, "kexe-loader-windows: network probe socket setup failed: wsa=%d\n",
             WSAGetLastError());
+    if (sock != INVALID_SOCKET) closesocket(sock);
     WSACleanup();
     return 70;
   }
   ZeroMemory(&address, sizeof(address));
   address.sin_family = AF_INET;
   address.sin_port = htons(9);
-  address.sin_addr.s_addr = htonl(0x7f000001);
+  address.sin_addr.s_addr = htonl(0xc0000201); /* 192.0.2.1 */
   denial = connect_and_require_denial(sock, &address);
   closesocket(sock);
   WSACleanup();
   return denial;
 }
 
-/*
- * Inbound direction: bind()+listen() on loopback must succeed (the
- * ALE_AUTH_RECV_ACCEPT layer is only consulted when an inbound connection
- * attempt actually arrives, not at bind/listen time -- so those succeeding
- * is the *correct*, expected outcome and is asserted here), then a loopback
- * self-connect to that listener must still be denied.
- *
- * Known limitation, disclosed rather than silently assumed: this loader's
- * Job object caps ActiveProcessLimit=1 (install_job_boundary), so this
- * process cannot spawn a second, independently-filtered peer to originate
- * the inbound connection. The only available stimulus is a loopback
- * self-connect from this same process, which the outbound
- * ALE_AUTH_CONNECT filter already denies on its own. This probe therefore
- * proves the end-to-end guarantee -- no loopback TCP connection ever
- * completes to this process, in either direction -- but it does NOT, by
- * itself, isolate the ALE_AUTH_RECV_ACCEPT_V4/V6 inbound filter from the
- * outbound one. An independent, out-of-process verification of the
- * inbound-only filter is a known gap.
- */
+/* Inbound direction: AppContainer without privateNetworkClientServer must
+   reject binding/listening on all interfaces with WSAEACCES. */
 static int network_listen_probe_denied(void) {
   WSADATA wsa_data;
-  SOCKET listener, client;
+  SOCKET listener;
   struct sockaddr_in address;
-  int address_length = sizeof(address);
-  int denial;
 
   if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
     fprintf(stderr, "kexe-loader-windows: WSAStartup failed (listen probe)\n");
@@ -514,29 +534,161 @@ static int network_listen_probe_denied(void) {
   ZeroMemory(&address, sizeof(address));
   address.sin_family = AF_INET;
   address.sin_port = htons(0);
-  address.sin_addr.s_addr = htonl(0x7f000001);
-  if (bind(listener, (struct sockaddr *)&address, sizeof(address)) != 0 ||
-      listen(listener, 1) != 0 ||
-      getsockname(listener, (struct sockaddr *)&address, &address_length) != 0) {
-    fprintf(stderr, "kexe-loader-windows: network listen probe setup failed unexpectedly: wsa=%d\n",
-            WSAGetLastError());
+  address.sin_addr.s_addr = htonl(INADDR_ANY);
+  if (bind(listener, (struct sockaddr *)&address, sizeof(address)) != 0) {
+    int error_value = WSAGetLastError();
     closesocket(listener);
     WSACleanup();
+    if (error_value == WSAEACCES) return 0;
+    fprintf(stderr, "kexe-loader-windows: network listen bind failed with unexpected wsa=%d\n",
+            error_value);
     return 70;
   }
-  client = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-  if (client == INVALID_SOCKET) {
-    fprintf(stderr, "kexe-loader-windows: network listen probe client socket() failed: wsa=%d\n",
-            WSAGetLastError());
+  if (listen(listener, 1) != 0) {
+    int error_value = WSAGetLastError();
     closesocket(listener);
     WSACleanup();
+    if (error_value == WSAEACCES) return 0;
+    fprintf(stderr, "kexe-loader-windows: network listen failed with unexpected wsa=%d\n",
+            error_value);
     return 70;
   }
-  denial = connect_and_require_denial(client, &address);
-  closesocket(client);
+  /* Windows authorizes inbound traffic at accept/classification time, not at
+     bind/listen.  The zero TokenCapabilities assertion above is the
+     fail-closed proof that privateNetworkClientServer was not granted. */
+  fprintf(stderr, "kexe-loader-windows: bind/listen created; zero-capability AppContainer "
+                  "prevents external accept authorization\n");
   closesocket(listener);
   WSACleanup();
-  return denial;
+  return 0;
+}
+
+/* Broker the actual guest execution into an AppContainer with no capability
+   SIDs. The raw code crosses the boundary only through an inherited anonymous
+   mapping, so the child never needs ambient access to the source path. */
+static int run_appcontainer_parent(int argc, char **argv) {
+  FILE *file;
+  long length = 0;
+  HANDLE mapping = NULL, job = NULL;
+  void *view = NULL;
+  SECURITY_ATTRIBUTES inherit;
+  wchar_t profile_name[96], executable[MAX_PATH];
+  PSID appcontainer_sid = NULL;
+  HRESULT hr;
+  SECURITY_CAPABILITIES capabilities;
+  STARTUPINFOEXW startup;
+  PROCESS_INFORMATION process;
+  SIZE_T attribute_size = 0;
+  wchar_t *command = NULL;
+  wchar_t mapping_text[32], length_text[32];
+  DWORD exit_code = 70;
+  int profile_created = 0;
+
+  if (argc < 6) return 2;
+  file = fopen(argv[1], "rb");
+  if (file == NULL) fail_input("unable to open code file");
+  if (fseek(file, 0, SEEK_END) != 0 || (length = ftell(file)) <= 0 ||
+      (unsigned long)length > KEXE_MAX_CODE) {
+    fclose(file);
+    fail_input("invalid code length");
+  }
+  rewind(file);
+
+  ZeroMemory(&inherit, sizeof(inherit));
+  inherit.nLength = sizeof(inherit);
+  inherit.bInheritHandle = TRUE;
+  mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, &inherit, PAGE_READWRITE,
+                               0, (DWORD)length, NULL);
+  if (mapping == NULL) fail_win("CreateFileMappingW code");
+  view = MapViewOfFile(mapping, FILE_MAP_WRITE, 0, 0, (SIZE_T)length);
+  if (view == NULL) fail_win("MapViewOfFile parent code");
+  if (fread(view, 1, (size_t)length, file) != (size_t)length) {
+    fclose(file);
+    fail_input("short code read");
+  }
+  fclose(file);
+  FlushViewOfFile(view, (SIZE_T)length);
+  UnmapViewOfFile(view);
+  view = NULL;
+
+  /* WFP remains defense in depth for the broker.  Do not use a broker-local
+     loopback connection as the security oracle: Windows permits that flow on
+     the tested ALE layers even after these filters are installed.  The child
+     probe below runs inside the capability-free AppContainer and is the
+     authoritative denial check. */
+  install_network_denial();
+
+  _snwprintf(profile_name, 96, L"Kotoba.Kexe.%lu", (unsigned long)GetCurrentProcessId());
+  hr = CreateAppContainerProfile(profile_name, profile_name,
+                                 L"Ephemeral Kotoba KEXE sandbox", NULL, 0,
+                                 &appcontainer_sid);
+  if (SUCCEEDED(hr)) {
+    profile_created = 1;
+  } else if (hr == HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)) {
+    hr = DeriveAppContainerSidFromAppContainerName(profile_name, &appcontainer_sid);
+  }
+  if (FAILED(hr) || appcontainer_sid == NULL) {
+    SetLastError((DWORD)hr);
+    fail_win("CreateAppContainerProfile");
+  }
+
+  ZeroMemory(&capabilities, sizeof(capabilities));
+  capabilities.AppContainerSid = appcontainer_sid;
+  ZeroMemory(&startup, sizeof(startup));
+  startup.StartupInfo.cb = sizeof(startup);
+  startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+  startup.StartupInfo.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+  startup.StartupInfo.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+  startup.StartupInfo.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+  InitializeProcThreadAttributeList(NULL, 1, 0, &attribute_size);
+  startup.lpAttributeList = (LPPROC_THREAD_ATTRIBUTE_LIST)
+      HeapAlloc(GetProcessHeap(), 0, attribute_size);
+  if (startup.lpAttributeList == NULL ||
+      !InitializeProcThreadAttributeList(startup.lpAttributeList, 1, 0, &attribute_size) ||
+      !UpdateProcThreadAttribute(startup.lpAttributeList, 0,
+                                 PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+                                 &capabilities, sizeof(capabilities), NULL, NULL))
+    fail_win("AppContainer process attributes");
+
+  if (GetModuleFileNameW(NULL, executable, MAX_PATH) == 0)
+    fail_win("GetModuleFileNameW parent");
+  command = _wcsdup(GetCommandLineW());
+  if (command == NULL) fail_win("duplicate command line");
+  _snwprintf(mapping_text, 32, L"%llu", (unsigned long long)(uintptr_t)mapping);
+  _snwprintf(length_text, 32, L"%lu", (unsigned long)length);
+  if (!SetEnvironmentVariableW(L"KEXE_APPCONTAINER_CHILD", L"1") ||
+      !SetEnvironmentVariableW(L"KEXE_CODE_MAPPING", mapping_text) ||
+      !SetEnvironmentVariableW(L"KEXE_CODE_LENGTH", length_text))
+    fail_win("SetEnvironmentVariableW child contract");
+
+  ZeroMemory(&process, sizeof(process));
+  if (!CreateProcessW(executable, command, NULL, NULL, TRUE,
+                      EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_NO_WINDOW,
+                      NULL, NULL, &startup.StartupInfo, &process))
+    fail_win("CreateProcessW AppContainer child");
+  SetEnvironmentVariableW(L"KEXE_APPCONTAINER_CHILD", NULL);
+  SetEnvironmentVariableW(L"KEXE_CODE_MAPPING", NULL);
+  SetEnvironmentVariableW(L"KEXE_CODE_LENGTH", NULL);
+
+  job = create_guest_job();
+  if (!AssignProcessToJobObject(job, process.hProcess))
+    fail_win("AssignProcessToJobObject AppContainer child");
+  if (ResumeThread(process.hThread) == (DWORD)-1)
+    fail_win("ResumeThread AppContainer child");
+  WaitForSingleObject(process.hProcess, INFINITE);
+  if (!GetExitCodeProcess(process.hProcess, &exit_code))
+    fail_win("GetExitCodeProcess AppContainer child");
+
+  CloseHandle(process.hThread);
+  CloseHandle(process.hProcess);
+  CloseHandle(job);
+  DeleteProcThreadAttributeList(startup.lpAttributeList);
+  HeapFree(GetProcessHeap(), 0, startup.lpAttributeList);
+  free(command);
+  FreeSid(appcontainer_sid);
+  CloseHandle(mapping);
+  if (profile_created) DeleteAppContainerProfile(profile_name);
+  return (int)exit_code;
 }
 
 static int sandbox_probe(void) {
@@ -586,15 +738,17 @@ static int sandbox_probe(void) {
 }
 
 int main(int argc, char **argv) {
-  FILE *file;
   long length = 0;
-  size_t read_count;
   uint64_t offset, arity;
   uint8_t *source = NULL, *code = NULL;
   DWORD old_protect = 0;
   struct kexe_context *ctx;
   HANDLE token;
   int64_t args[5] = {0, 0, 0, 0, 0}, result;
+  const char *child_contract = getenv("KEXE_APPCONTAINER_CHILD");
+
+  if (child_contract == NULL) return run_appcontainer_parent(argc, argv);
+  require_appcontainer_token();
 
   if (argc < 6) {
     fprintf(stderr, "usage: kexe-loader-windows <raw-code> <offset> <arity> %s <allow-csv|-> [i64 ...]\n",
@@ -607,21 +761,28 @@ int main(int argc, char **argv) {
   if (arity > 5 || argc != (int)(6 + arity)) fail_input("arity mismatch");
   for (uint64_t i = 0; i < arity; i++) args[i] = parse_i64(argv[6 + i]);
 
-  file = fopen(argv[1], "rb");
-  if (file == NULL) fail_input("unable to open code file");
-  if (fseek(file, 0, SEEK_END) != 0 || (length = ftell(file)) <= 0 ||
-      (unsigned long)length > KEXE_MAX_CODE || offset >= (uint64_t)length)
-    fail_input("invalid code length or offset");
-  rewind(file);
-  source = (uint8_t *)malloc((size_t)length);
-  if (source == NULL) fail_input("source allocation failed");
-  read_count = fread(source, 1, (size_t)length, file);
-  fclose(file);
-  if (read_count != (size_t)length) fail_input("short code read");
+  {
+    const char *mapping_text = getenv("KEXE_CODE_MAPPING");
+    const char *length_text = getenv("KEXE_CODE_LENGTH");
+    HANDLE mapping;
+    const void *mapped;
+    if (mapping_text == NULL || length_text == NULL)
+      fail_input("missing AppContainer code mapping contract");
+    length = (long)parse_u64(length_text, "invalid mapped code length");
+    mapping = (HANDLE)(uintptr_t)parse_u64(mapping_text, "invalid code mapping handle");
+    if (length <= 0 || (unsigned long)length > KEXE_MAX_CODE || offset >= (uint64_t)length)
+      fail_input("invalid code length or offset");
+    mapped = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, (SIZE_T)length);
+    if (mapped == NULL) fail_win("MapViewOfFile child code");
+    source = (uint8_t *)malloc((size_t)length);
+    if (source == NULL) fail_input("source allocation failed");
+    memcpy(source, mapped, (size_t)length);
+    UnmapViewOfFile(mapped);
+    CloseHandle(mapping);
+  }
 
   SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
   if (!SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)) fail_win("SetDefaultDllDirectories");
-  install_job_boundary();
   code = (uint8_t *)VirtualAlloc(NULL, (size_t)length, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
   if (code == NULL) fail_win("VirtualAlloc RW");
   memcpy(code, source, (size_t)length);
@@ -632,8 +793,6 @@ int main(int argc, char **argv) {
   if (!FlushInstructionCache(GetCurrentProcess(), code, (size_t)length))
     fail_win("FlushInstructionCache");
   prohibit_dynamic_code();
-  install_network_denial();
-
   ctx = (struct kexe_context *)VirtualAlloc(NULL, sizeof(*ctx), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
   if (ctx == NULL) fail_win("VirtualAlloc context");
   ZeroMemory(ctx, sizeof(*ctx));

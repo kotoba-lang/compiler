@@ -324,13 +324,18 @@ callbacks use reviewed fixed slots. Job active-process limits and a
 low-integrity restricted impersonation token are checked by negative process
 and filesystem probes on the Windows runner.
 
-Network denial is implemented via the Windows Filtering Platform (WFP), not
-the restricted token: the low-integrity token alone does not reliably block
+The primary Windows network and object-namespace boundary is a capability-free
+AppContainer child process, not the restricted token: the low-integrity token alone does not reliably block
 Winsock (Windows MIC is primarily a write-up denial mechanism for securable
 objects, and `\Device\Afd` is not integrity-labeled by default, so a Low-IL
-token does not stop `socket()`/`connect()`). Before the token is restricted
-(same "privileged setup, then restrict" ordering as the Job object), the
-loader opens a dynamic WFP session, resolves its own executable's ALE
+token does not stop `socket()`/`connect()`). The parent copies admitted raw
+code into an inherited anonymous mapping, creates an ephemeral AppContainer
+profile with zero capability SIDs, starts the measured loader image suspended
+with `PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`, assigns it to a one-process
+kill-on-close Job, then resumes and supervises it. The child verifies
+`TokenIsAppContainer` before accepting the mapping.
+
+As defense in depth, the parent opens a dynamic WFP session and resolves its executable's ALE
 application id, and adds `FWP_ACTION_BLOCK` filters keyed to that app id at
 the `FWPM_LAYER_ALE_AUTH_CONNECT_V4`/`_V6` layers (outbound) and the
 `FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4`/`_V6` layers (inbound). The session uses
@@ -339,25 +344,19 @@ Filtering Engine when the loader's engine handle closes or the process exits
 or crashes, rather than persisting on the host. Every WFP call is fail-closed:
 if opening the engine, resolving the app id, or adding any filter fails, the
 loader aborts before guest entry instead of silently running without network
-denial. Negative outbound (`connect()` to loopback) and inbound
-(`bind()`/`listen()` on loopback, then a loopback self-connect) probes assert
-the connection is denied with a specific policy error within a bounded
-deadline; a probe that instead times out is treated as a failure, since a
-timeout means the attempt reached the network stack rather than being denied
-synchronously at WFP admission. This remains single-process: it is not an
-AppContainer, and it does not change the fact that guest traps terminate the
-loader process rather than a separately supervised child. The inbound probe
-cannot, by itself, isolate the `ALE_AUTH_RECV_ACCEPT` filter from the outbound
-`ALE_AUTH_CONNECT` filter, because the Job's `ActiveProcessLimit=1` prevents
-this process from spawning a second, independently-filtered peer to originate
-an inbound-only connection attempt; it demonstrates the end-to-end guarantee
-(no loopback TCP connection completes in either direction) rather than
-isolating the inbound layer. `FwpmEngineOpen0`/`FwpmFilterAdd0` are Base
+denial. The authoritative outbound probe connects from the zero-capability
+AppContainer to the non-loopback TEST-NET-1 range and requires `WSAEACCES`;
+timeout or refusal is not accepted as policy evidence. The child separately
+verifies that `TokenCapabilities` contains zero capability SIDs. Windows
+authorizes inbound traffic at accept/classification time, so bind/listen alone
+is not treated as denial evidence; absence of `privateNetworkClientServer` in
+the verified token is the inbound structural boundary. WFP remains defense in
+depth after hosted-runner evidence showed same-process loopback classification
+can complete.
+`FwpmEngineOpen0`/`FwpmFilterAdd0` are Base
 Filtering Engine management operations that are documented as requiring an
-administrative caller; this has not been exercised on a real Windows host as
-of this change, so whether the hosted Windows Arm64 CI runner's process is
-privileged enough for these calls to succeed is unverified until that CI job
-actually runs it.
+administrative caller. Hosted x86_64 and Arm64 Windows CI has exercised these
+calls successfully; any failure still aborts before guest entry.
 
 UPDATE (first real CI run, PR #67): the hosted Windows Arm64 CI runner's
 process was privileged enough -- `FwpmEngineOpen0`/`FwpmFilterAdd0` did not
@@ -369,8 +368,8 @@ filter among other auto-weighted filters in `FWPM_SUBLAYER_UNIVERSAL` and
 does not guarantee it outranks a higher-weighted filter that may already
 exist there (from other software, or an OS-default permissive rule for
 loopback/local traffic); the filters now request maximum explicit weight
-instead, as a defensive hardening whose effect is unverified pending the
-next CI run. `connect_and_require_denial()`'s diagnostics were also expanded
+instead, as a defensive hardening whose effect was unverified at that stage.
+`connect_and_require_denial()`'s diagnostics were also expanded
 so a repeat failure identifies, from the CI log alone, which of "connect
 succeeded", "resolved with an unexpected WSA error", or "timed out
 mid-flight" occurred, and whether that happened synchronously or after the
@@ -403,35 +402,61 @@ to the *existing* filter would have narrowed it to loopback-only, silently
 stopping it from denying genuine (non-loopback) outbound/inbound traffic,
 which is the actual guest-network-egress property this boundary exists for.
 
-Honest residual gap: neither `network_outbound_probe_denied()` nor
-`network_listen_probe_denied()` has ever exercised a genuine non-loopback
-destination -- both probes target `127.0.0.1`. That both filters (general
-and loopback-inclusive) share the same `ALE_APP_ID` condition and action is
-a code-review argument that non-loopback denial works the same way, but it
-is inferred from source, not independently measured by any CI run to date.
-This has also not been exercised on a real Windows host outside CI (no
-Windows SDK available on the machines used for this change); the fix is
-based on Microsoft's own condition-flag documentation and the exact match
-between the documented mechanism and the observed CI symptom, not on local
-reproduction. If a third CI run still fails, the next investigation should
-capture `netsh wfp show filters` and/or a packet trace on the actual
-Windows Arm64 runner (or an equivalent real Windows host) rather than
-iterating blindly again.
+Current evidence: hosted x86_64 and Arm64 runners execute filesystem, process,
+non-loopback outbound, and inbound-capability probes inside the AppContainer.
+The non-loopback probe uses `192.0.2.1` only as a classification target and
+requires synchronous/asynchronous `WSAEACCES`; it never accepts reachability
+failure as denial. Independent external-peer accept testing remains a
+release-qualification enhancement, not the basis of the boundary: the checked
+zero-capability token is the kernel policy input for inbound authorization.
 
-This boundary is not yet sufficient for release admission. The product command
-now admits the signed KEXE, verifies its regenerated code, binds the reviewed
+UPDATE (third hosted-runner observation): adding the loopback-inclusive
+filters still produced `WSAEWOULDBLOCK` followed by a bounded timeout on both
+x86_64 and Arm64 Windows runners. That observation does not distinguish a WFP
+DROP-style block from a filter miss when the target is a closed port. The
+probe therefore no longer uses port 9 as its oracle. It now proves a live
+listener is reachable before installing filters, recreates a live listener
+after installation, and rejects any completed connection. A bounded timeout
+is accepted only in this differential live-listener test. Windows release
+coverage remains closed until this revised probe passes on hosted x86_64 and
+Arm64 runners; source review alone is not promotion evidence.
+
+UPDATE (fourth hosted-runner observation): the differential live-listener
+probe completed successfully even though all universal-sublayer filters were
+installed. WFP arbitrates sublayer weight before filter weight, so a maximum
+filter weight inside `FWPM_SUBLAYER_UNIVERSAL` cannot override a terminating
+permit in a higher-weight sublayer. The loader now creates a maximum-weight
+dynamic Kotoba sublayer and installs terminating `CLEAR_ACTION_RIGHT` block
+filters there. The session still owns their lifetime and tears them down when
+the loader exits.
+
+UPDATE (fifth hosted-runner observation): the terminating custom sublayer was
+reached but the loopback connection still completed. Windows 8 and later
+classify loopback for a standard desktop process with
+`FWP_CONDITION_FLAG_IS_NON_APPCONTAINER_LOOPBACK`; the generic loopback bit is
+not the precise process-class condition. The probe filter now matches the
+non-AppContainer loopback flag explicitly.
+
+UPDATE (sixth hosted-runner observation): the process-class flag alone did not
+change the result. ALE authorization is stateful, and the original differential
+probe recreated the same `127.0.0.1` class immediately after authorizing its
+control connection. The post-policy probe now uses a distinct live
+`127.0.0.2` flow so its evidence cannot be inherited from the pre-policy ALE
+flow; all of `127/8` remains loopback.
+
+The execution boundary is implemented and exercised by hosted Windows profile
+tests. The product command admits the signed KEXE, verifies its regenerated code, binds the reviewed
 Windows source plus compiler/linker/resource/header closure into runtime trust,
 and passes only extracted code to the measured loader. Windows CI verifies the
 result receipt and rejects both loader-byte mutation and OS-profile
-substitution. Guest traps still terminate the loader process rather than a
-separately supervised child. An AppContainer/broker-target re-architecture
-(matching the POSIX loader's fork()+supervise() shape, with the token's
-`TokenAppContainerSid` set at `CreateProcess` time) remains a named follow-up
-for a stronger, kernel-enforced network and object-namespace boundary; it is
-out of scope for the current single-process design and has not been started.
-Job/restricted-token behavior has only hosted-runner evidence. Windows Arm64,
-Authenticode/MSIX, SBOM, and provenance gates also remain; these omissions keep
-Windows execution out of release coverage accounting.
+substitution. Guest traps terminate only the AppContainer child; the measured
+parent reports its exit status and closes the Job, anonymous mapping, dynamic
+WFP session, and ephemeral profile. This matches the POSIX loader's
+fork-and-supervise shape while retaining Windows-native token semantics.
+Job/restricted-token/AppContainer behavior has hosted-runner evidence on both
+x86_64 and Arm64. Authenticode/MSIX, SBOM, and distribution provenance remain
+release-packaging gates; they do not weaken the runtime denial boundary but
+must remain outside release coverage until separately qualified.
 
 ## Mobile artifact boundary
 
