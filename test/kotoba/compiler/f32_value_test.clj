@@ -6,7 +6,7 @@
             [kotoba.compiler.ir :as ir]))
 
 (def source
-  (str "(ns pilot.f32 (:export [main from-bits bits rounded widen add divide unordered to-f32 rounded-i64 to-i64 truncating f32-s f32-lo f32-hi f64-s f64-lo f64-hi])) "
+  (str "(ns pilot.f32 (:export [main from-bits bits rounded widen add divide unordered to-f32 rounded-i64 to-i64 truncating f32-s f32-lo f32-hi f64-s f64-lo f64-hi sin cos])) "
        "(defn main [] 0) "
        "(defn from-bits [x :i64] :f32 (f32-from-bits x)) "
        "(defn bits [x :f32] :i64 (f32-to-bits x)) "
@@ -24,7 +24,9 @@
        "(defn f32-hi [x :f32 y :f32] :f32 (f32-max x y)) "
        "(defn f64-s [x :f64] :f64 (f64-sqrt x)) "
        "(defn f64-lo [x :f64 y :f64] :f64 (f64-min x y)) "
-       "(defn f64-hi [x :f64 y :f64] :f64 (f64-max x y))"))
+       "(defn f64-hi [x :f64 y :f64] :f64 (f64-max x y)) "
+       "(defn sin [x :f64] :f64 (f64-sin-quarter-turn x)) "
+       "(defn cos [x :f64] :f64 (f64-cos-quarter-turn x))"))
 
 (defn- node-run [javascript]
   (shell/sh "node" "--input-type=module" "-e" javascript))
@@ -46,7 +48,13 @@
        "if(!Number.isNaN(x['f32-lo'](NaN,0))||!Number.isNaN(x['f32-hi'](0,NaN)))process.exit(13);"
        "if(x['f64-s'](4)!==2||!Number.isNaN(x['f64-s'](-1)))process.exit(14);"
        "if(!Object.is(x['f64-lo'](0,-0),-0)||!Object.is(x['f64-hi'](0,-0),0))process.exit(15);"
-       "if(!Number.isNaN(x['f64-lo'](NaN,0))||!Number.isNaN(x['f64-hi'](0,NaN)))process.exit(16);"))
+       "if(!Number.isNaN(x['f64-lo'](NaN,0))||!Number.isNaN(x['f64-hi'](0,NaN)))process.exit(16);"
+       "const q=Math.PI/4;if(x.sin(q)!==0.7071067811865475||x.cos(q)!==0.7071067811865476)process.exit(17);"
+       "if(!Object.is(x.sin(-0),-0)||x.cos(-0)!==1)process.exit(18);"
+       "for(let i=0;i<=64;i++){const v=-q+2*q*i/64;"
+       "if(Math.abs(x.sin(v)-Math.sin(v))>4e-15||Math.abs(x.cos(v)-Math.cos(v))>4e-15)process.exit(19);}"
+       "for(const v of [NaN,Infinity,-Infinity,q+Number.EPSILON]){for(const f of [x.sin,x.cos])"
+       "{try{f(v);process.exit(20)}catch(e){}}}"))
 
 (deftest f32-reference-js-and-wasm-share-the-sealed-profile
   (let [js-artifact (compiler/compile-source source :js-kotoba-v1)
@@ -73,6 +81,14 @@
            (Float/floatToIntBits
             ^float (ir/execute kir 'f32-lo [(float 0.0) (Float/intBitsToFloat Integer/MIN_VALUE)]))))
     (is (Double/isNaN ^double (ir/execute kir 'f64-s [-1.0])))
+    (is (= 4604544271217802188
+           (Double/doubleToLongBits ^double (ir/execute kir 'sin [(/ Math/PI 4.0)]))))
+    (is (= 4604544271217802189
+           (Double/doubleToLongBits ^double (ir/execute kir 'cos [(/ Math/PI 4.0)]))))
+    (is (= Long/MIN_VALUE
+           (Double/doubleToLongBits ^double (ir/execute kir 'sin [-0.0]))))
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (ir/execute kir 'sin [(Math/nextUp (/ Math/PI 4.0))])))
     (is (= 16777216.0 (double (ir/execute kir 'rounded-i64 [16777217]))))
     (is (thrown? clojure.lang.ExceptionInfo (ir/execute kir 'to-f32 [16777217])))
     (is (= :kotoba.typed/mixed-f32-f64-v3 (:value-abi wasm-artifact)))
