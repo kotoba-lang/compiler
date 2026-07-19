@@ -450,9 +450,9 @@ static int connect_and_require_denial(SOCKET sock, const struct sockaddr_in *add
     return 70;
   }
   if (select_result == 0) {
-    fprintf(stderr, "kexe-loader-windows: live-listener connection remained blocked for the "
-                    "bounded 2s deadline after its pre-filter control succeeded\n");
-    return 0;
+    fprintf(stderr, "kexe-loader-windows: network probe timed out; timeout is not proof of "
+                    "AppContainer policy denial\n");
+    return 70;
   }
   if (getsockopt(sock, SOL_SOCKET, SO_ERROR, (char *)&error_value, &error_length) != 0) {
     fprintf(stderr, "kexe-loader-windows: network probe getsockopt(SO_ERROR) failed: wsa=%d\n",
@@ -474,78 +474,43 @@ static int connect_and_require_denial(SOCKET sock, const struct sockaddr_in *add
   return 70;
 }
 
-/* Outbound direction: a connection to a known-live loopback listener must
-   not complete after the ALE_AUTH_CONNECT_V4 filter is installed. */
+/* Outbound direction: AppContainer without internetClient must reject a
+   non-loopback connect with WSAEACCES.  TEST-NET-1 is non-routable, so no
+   external service is contacted; timeout/refusal is not accepted as proof. */
 static int network_outbound_probe_denied(void) {
   WSADATA wsa_data;
-  SOCKET listener = INVALID_SOCKET, sock = INVALID_SOCKET;
+  SOCKET sock = INVALID_SOCKET;
   struct sockaddr_in address;
-  int address_length = sizeof(address);
   int denial;
 
   if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
     fprintf(stderr, "kexe-loader-windows: WSAStartup failed\n");
     return 70;
   }
-  listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-  if (listener == INVALID_SOCKET || sock == INVALID_SOCKET) {
+  if (sock == INVALID_SOCKET) {
     fprintf(stderr, "kexe-loader-windows: network probe socket setup failed: wsa=%d\n",
             WSAGetLastError());
     if (sock != INVALID_SOCKET) closesocket(sock);
-    if (listener != INVALID_SOCKET) closesocket(listener);
     WSACleanup();
     return 70;
   }
   ZeroMemory(&address, sizeof(address));
   address.sin_family = AF_INET;
-  address.sin_port = htons(0);
-  /* Use a different loopback flow from the pre-filter 127.0.0.1 control.
-     ALE is stateful: reusing a previously authorized five-tuple can bypass
-     classification until reauthorization. 127/8 is entirely loopback. */
-  address.sin_addr.s_addr = htonl(0x7f000002);
-  if (bind(listener, (struct sockaddr *)&address, sizeof(address)) != 0 ||
-      listen(listener, 1) != 0 ||
-      getsockname(listener, (struct sockaddr *)&address, &address_length) != 0) {
-    fprintf(stderr, "kexe-loader-windows: network probe live-listener setup failed: wsa=%d\n",
-            WSAGetLastError());
-    closesocket(sock);
-    closesocket(listener);
-    WSACleanup();
-    return 70;
-  }
+  address.sin_port = htons(9);
+  address.sin_addr.s_addr = htonl(0xc0000201); /* 192.0.2.1 */
   denial = connect_and_require_denial(sock, &address);
   closesocket(sock);
-  closesocket(listener);
   WSACleanup();
   return denial;
 }
 
-/*
- * Inbound direction: bind()+listen() on loopback must succeed (the
- * ALE_AUTH_RECV_ACCEPT layer is only consulted when an inbound connection
- * attempt actually arrives, not at bind/listen time -- so those succeeding
- * is the *correct*, expected outcome and is asserted here), then a loopback
- * self-connect to that listener must still be denied.
- *
- * Known limitation, disclosed rather than silently assumed: this loader's
- * Job object caps ActiveProcessLimit=1 (run_appcontainer_parent), so this
- * process cannot spawn a second, independently-filtered peer to originate
- * the inbound connection. The only available stimulus is a loopback
- * self-connect from this same process, which the outbound
- * ALE_AUTH_CONNECT filter already denies on its own. This probe therefore
- * proves the end-to-end guarantee -- no loopback TCP connection ever
- * completes to this process, in either direction -- but it does NOT, by
- * itself, isolate the ALE_AUTH_RECV_ACCEPT_V4/V6 inbound filter from the
- * outbound one. An independent, out-of-process verification of the
- * inbound-only filter is a known gap.
- */
+/* Inbound direction: AppContainer without privateNetworkClientServer must
+   reject binding/listening on all interfaces with WSAEACCES. */
 static int network_listen_probe_denied(void) {
   WSADATA wsa_data;
-  SOCKET listener, client;
+  SOCKET listener;
   struct sockaddr_in address;
-  int address_length = sizeof(address);
-  int denial;
 
   if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
     fprintf(stderr, "kexe-loader-windows: WSAStartup failed (listen probe)\n");
@@ -561,29 +526,29 @@ static int network_listen_probe_denied(void) {
   ZeroMemory(&address, sizeof(address));
   address.sin_family = AF_INET;
   address.sin_port = htons(0);
-  address.sin_addr.s_addr = htonl(0x7f000001);
-  if (bind(listener, (struct sockaddr *)&address, sizeof(address)) != 0 ||
-      listen(listener, 1) != 0 ||
-      getsockname(listener, (struct sockaddr *)&address, &address_length) != 0) {
-    fprintf(stderr, "kexe-loader-windows: network listen probe setup failed unexpectedly: wsa=%d\n",
-            WSAGetLastError());
+  address.sin_addr.s_addr = htonl(INADDR_ANY);
+  if (bind(listener, (struct sockaddr *)&address, sizeof(address)) != 0) {
+    int error_value = WSAGetLastError();
     closesocket(listener);
     WSACleanup();
+    if (error_value == WSAEACCES) return 0;
+    fprintf(stderr, "kexe-loader-windows: network listen bind failed with unexpected wsa=%d\n",
+            error_value);
     return 70;
   }
-  client = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-  if (client == INVALID_SOCKET) {
-    fprintf(stderr, "kexe-loader-windows: network listen probe client socket() failed: wsa=%d\n",
-            WSAGetLastError());
+  if (listen(listener, 1) != 0) {
+    int error_value = WSAGetLastError();
     closesocket(listener);
     WSACleanup();
+    if (error_value == WSAEACCES) return 0;
+    fprintf(stderr, "kexe-loader-windows: network listen failed with unexpected wsa=%d\n",
+            error_value);
     return 70;
   }
-  denial = connect_and_require_denial(client, &address);
-  closesocket(client);
+  fprintf(stderr, "kexe-loader-windows: network listen probe unexpectedly succeeded\n");
   closesocket(listener);
   WSACleanup();
-  return denial;
+  return 70;
 }
 
 /* Broker the actual guest execution into an AppContainer with no capability
