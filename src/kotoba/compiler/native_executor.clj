@@ -501,6 +501,12 @@
   (when-let [[_ value] (re-find #"(?m)^KEXE_TRAP (\{.*\})$" stderr)]
     (edn/read-string value)))
 
+(defn- loader-failure-class [stderr]
+  (when-let [[_ stage win32]
+             (re-find #"(?m)^kexe-loader-windows: ([A-Za-z0-9_ ()-]+)(?:: win32=([0-9]+))?$"
+                      (or stderr ""))]
+    (str stage (when win32 (str "/win32=" win32)))))
+
 (defn- valid-supervisor-report? [report exit]
   (let [status (:status report)
         expected-keys (case status
@@ -602,7 +608,8 @@
                                  " (exit=" (:exit process)
                                  ", timed-out=" (:timed-out? process)
                                  ", output-exceeded=" (:output-exceeded? process)
-                                 ", report-status=" status ")")
+                                 ", report-status=" status
+                                 ", loader-failure=" (loader-failure-class (:stderr process)) ")")
                             {:phase :execute :exit (:exit process)
                              :stdout (:stdout process) :stderr (:stderr process)})))
           {:artifact artifact :signer signer :target (:target artifact) :entry entry
