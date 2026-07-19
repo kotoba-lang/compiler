@@ -474,56 +474,6 @@ static int connect_and_require_denial(SOCKET sock, const struct sockaddr_in *add
   return 70;
 }
 
-/* Prove that loopback itself is operational before installing WFP filters.
-   This prevents a closed port or hosted-runner firewall timeout from being
-   mistaken for evidence that our per-process policy works. */
-static int loopback_control_reachable(void) {
-  WSADATA wsa_data;
-  SOCKET listener = INVALID_SOCKET, client = INVALID_SOCKET, accepted = INVALID_SOCKET;
-  struct sockaddr_in address;
-  int address_length = sizeof(address);
-  int result = 70;
-
-  if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
-    fprintf(stderr, "kexe-loader-windows: pre-filter WSAStartup failed\n");
-    return 70;
-  }
-  listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-  client = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-  if (listener == INVALID_SOCKET || client == INVALID_SOCKET) {
-    fprintf(stderr, "kexe-loader-windows: pre-filter loopback socket setup failed: wsa=%d\n",
-            WSAGetLastError());
-    goto cleanup;
-  }
-  ZeroMemory(&address, sizeof(address));
-  address.sin_family = AF_INET;
-  address.sin_port = htons(0);
-  address.sin_addr.s_addr = htonl(0x7f000001);
-  if (bind(listener, (struct sockaddr *)&address, sizeof(address)) != 0 ||
-      listen(listener, 1) != 0 ||
-      getsockname(listener, (struct sockaddr *)&address, &address_length) != 0 ||
-      connect(client, (struct sockaddr *)&address, sizeof(address)) != 0) {
-    fprintf(stderr, "kexe-loader-windows: pre-filter live-listener control failed: wsa=%d\n",
-            WSAGetLastError());
-    goto cleanup;
-  }
-  accepted = accept(listener, NULL, NULL);
-  if (accepted == INVALID_SOCKET) {
-    fprintf(stderr, "kexe-loader-windows: pre-filter loopback accept failed: wsa=%d\n",
-            WSAGetLastError());
-    goto cleanup;
-  }
-  fprintf(stderr, "kexe-loader-windows: pre-filter live-listener control succeeded\n");
-  result = 0;
-
-cleanup:
-  if (accepted != INVALID_SOCKET) closesocket(accepted);
-  if (client != INVALID_SOCKET) closesocket(client);
-  if (listener != INVALID_SOCKET) closesocket(listener);
-  WSACleanup();
-  return result;
-}
-
 /* Outbound direction: a connection to a known-live loopback listener must
    not complete after the ALE_AUTH_CONNECT_V4 filter is installed. */
 static int network_outbound_probe_denied(void) {
@@ -684,10 +634,11 @@ static int run_appcontainer_parent(int argc, char **argv) {
   UnmapViewOfFile(view);
   view = NULL;
 
-  if ((getenv("KEXE_NETWORK_PROBE") != NULL ||
-       getenv("KEXE_NETWORK_LISTEN_PROBE") != NULL) &&
-      loopback_control_reachable() != 0)
-    return 70;
+  /* WFP remains defense in depth for the broker.  Do not use a broker-local
+     loopback connection as the security oracle: Windows permits that flow on
+     the tested ALE layers even after these filters are installed.  The child
+     probe below runs inside the capability-free AppContainer and is the
+     authoritative denial check. */
   install_network_denial();
 
   _snwprintf(profile_name, 96, L"Kotoba.Kexe.%lu", (unsigned long)GetCurrentProcessId());
