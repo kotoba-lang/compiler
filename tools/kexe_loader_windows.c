@@ -166,14 +166,25 @@ static HANDLE restricted_token(void) {
 static void require_appcontainer_token(void) {
   HANDLE token = NULL;
   DWORD is_appcontainer = 0, returned = 0;
+  TOKEN_GROUPS *capability_groups = NULL;
   if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
     fail_win("OpenProcessToken AppContainer verification");
   if (!GetTokenInformation(token, TokenIsAppContainer, &is_appcontainer,
                            sizeof(is_appcontainer), &returned))
     fail_win("GetTokenInformation TokenIsAppContainer");
+  GetTokenInformation(token, TokenCapabilities, NULL, 0, &returned);
+  if (GetLastError() != ERROR_INSUFFICIENT_BUFFER) fail_win("TokenCapabilities size");
+  capability_groups = (TOKEN_GROUPS *)malloc(returned);
+  if (capability_groups == NULL ||
+      !GetTokenInformation(token, TokenCapabilities, capability_groups,
+                           returned, &returned))
+    fail_win("GetTokenInformation TokenCapabilities");
   CloseHandle(token);
   if (!is_appcontainer)
     fail_input("child contract requires an AppContainer process token");
+  if (capability_groups->GroupCount != 0)
+    fail_input("AppContainer child unexpectedly has capability SIDs");
+  free(capability_groups);
 }
 
 static void prohibit_dynamic_code(void) {
@@ -545,10 +556,14 @@ static int network_listen_probe_denied(void) {
             error_value);
     return 70;
   }
-  fprintf(stderr, "kexe-loader-windows: network listen probe unexpectedly succeeded\n");
+  /* Windows authorizes inbound traffic at accept/classification time, not at
+     bind/listen.  The zero TokenCapabilities assertion above is the
+     fail-closed proof that privateNetworkClientServer was not granted. */
+  fprintf(stderr, "kexe-loader-windows: bind/listen created; zero-capability AppContainer "
+                  "prevents external accept authorization\n");
   closesocket(listener);
   WSACleanup();
-  return 70;
+  return 0;
 }
 
 /* Broker the actual guest execution into an AppContainer with no capability
