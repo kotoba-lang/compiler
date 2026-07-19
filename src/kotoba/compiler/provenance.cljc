@@ -1,20 +1,37 @@
 (ns kotoba.compiler.provenance
-  (:require [kotoba.compiler.artifact :as artifact]
-            [kotoba.compiler.compatibility :as compatibility])
-  (:import (java.nio.charset StandardCharsets)
-           (java.security MessageDigest)))
+  #?(:clj (:require [kotoba.compiler.artifact :as artifact]
+                    [kotoba.compiler.compatibility :as compatibility])
+     :cljs (:require [kotoba.compiler.artifact :as artifact]
+                     [kotoba.compiler.compatibility :as compatibility]
+                     ["node:crypto" :as crypto]))
+  #?(:clj (:import (java.nio.charset StandardCharsets)
+                   (java.security MessageDigest))))
 
 (def schema :kotoba.provenance/v1)
 
-(defn- hex [bytes]
-  (apply str (map #(format "%02x" (bit-and (int %) 0xff)) bytes)))
-(defn- raw-sha256 [^bytes bytes]
-  (hex (.digest (MessageDigest/getInstance "SHA-256") bytes)))
-(defn- text-sha256 [^String value]
-  (raw-sha256 (.getBytes value StandardCharsets/UTF_8)))
+;; Same JVM `MessageDigest`/Node `node:crypto` split
+;; `kotoba.compiler.artifact/sha256` uses -- see that namespace's own
+;; comment for why. `hex` uses `clojure.core/format`, which doesn't exist
+;; in cljs at all (not just "throws" -- `format`'s cljs branch is
+;; ITSELF unused, `node:crypto`'s `.digest "hex"` already returns a hex
+;; string), so it's behind the reader-conditional too, not just its call
+;; site.
+#?(:clj (defn- hex [bytes]
+         (apply str (map #(format "%02x" (bit-and (int %) 0xff)) bytes))))
+(defn- raw-sha256 [bytes]
+  #?(:clj (hex (.digest (MessageDigest/getInstance "SHA-256") ^bytes bytes))
+     :cljs (-> (crypto/createHash "sha256") (.update bytes) (.digest "hex"))))
+(defn- text-sha256 [value]
+  #?(:clj (raw-sha256 (.getBytes ^String value StandardCharsets/UTF_8))
+     :cljs (raw-sha256 (js/Buffer.from value "utf8"))))
+(defn- byte-size [value]
+  #?(:clj (alength (.getBytes ^String value StandardCharsets/UTF_8))
+     :cljs (.-length (js/Buffer.from value "utf8"))))
 (defn- bytes-identity [format bytes]
-  (let [value (byte-array (map unchecked-byte bytes))]
-    {:format format :sha256 (raw-sha256 value) :size (alength value)}))
+  #?(:clj (let [value (byte-array (map unchecked-byte bytes))]
+           {:format format :sha256 (raw-sha256 value) :size (alength value)})
+     :cljs (let [value (js/Buffer.from (clj->js bytes))]
+            {:format format :sha256 (raw-sha256 value) :size (.-length value)})))
 
 (defn- outputs [result]
   (cond-> (sorted-map)
@@ -22,10 +39,10 @@
     (assoc :primary (bytes-identity :wasm (:bytes result)))
     (= :cljs/v1 (:format result))
     (assoc :primary {:format :cljs-source :sha256 (text-sha256 (:source result))
-                     :size (alength (.getBytes ^String (:source result) StandardCharsets/UTF_8))})
+                     :size (byte-size (:source result))})
     (= :javascript/v1 (:format result))
     (assoc :primary {:format :javascript-source :sha256 (text-sha256 (:source result))
-                     :size (alength (.getBytes ^String (:source result) StandardCharsets/UTF_8))})
+                     :size (byte-size (:source result))})
     (= :kexe/v1 (:format result))
     (assoc :primary {:format :kotoba.kexe/v1 :sha256 (get-in result [:artifact :sha256])})
     (:binary result) (assoc :binary (bytes-identity (:format (:binary result)) (:bytes (:binary result))))
@@ -55,6 +72,13 @@
     (cond-> (assoc result :provenance provenance)
       (:manifest result) (assoc-in [:manifest :kotoba.artifact/provenance] provenance))))
 
+(defn- sha256-equal? [a b]
+  #?(:clj (MessageDigest/isEqual
+           (.getBytes ^String a StandardCharsets/US_ASCII)
+           (.getBytes ^String b StandardCharsets/US_ASCII))
+     :cljs (and (= (count a) (count b))
+               (crypto/timingSafeEqual (js/Buffer.from a "ascii") (js/Buffer.from b "ascii")))))
+
 (defn verify!
   ([source policy result] (verify! source policy {} result))
   ([source policy build-metadata result]
@@ -63,9 +87,7 @@
     (when-not (and (map? actual)
                    (= (set (keys expected)) (set (keys actual)))
                    (artifact/valid-seal? actual)
-                   (MessageDigest/isEqual
-                    (.getBytes ^String (:sha256 actual) StandardCharsets/US_ASCII)
-                    (.getBytes ^String (:sha256 expected) StandardCharsets/US_ASCII)))
+                   (sha256-equal? (:sha256 actual) (:sha256 expected)))
       (throw (ex-info "compilation provenance rejected"
                       {:phase :provenance :reason :identity-mismatch})))
      actual)))

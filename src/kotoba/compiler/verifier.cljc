@@ -1,11 +1,19 @@
 (ns kotoba.compiler.verifier
-  (:require [clojure.set :as set]
-            [kotoba.compiler.artifact :as artifact]
-            [kotoba.compiler.backend.aarch64 :as aarch64]
-            [kotoba.compiler.backend.x86-64 :as x86-64]
-            [kotoba.compiler.compatibility :as compatibility-profile]
-            [kotoba.compiler.ir :as ir]
-            [kotoba.compiler.target :as target-profile]))
+  #?(:clj (:require [clojure.set :as set]
+                    [kotoba.compiler.artifact :as artifact]
+                    [kotoba.compiler.backend.aarch64 :as aarch64]
+                    [kotoba.compiler.backend.x86-64 :as x86-64]
+                    [kotoba.compiler.compatibility :as compatibility-profile]
+                    [kotoba.compiler.ir :as ir]
+                    [kotoba.compiler.target :as target-profile])
+     :cljs (:require [clojure.set :as set]
+                     [kotoba.compiler.artifact :as artifact]
+                     [kotoba.compiler.backend.aarch64 :as aarch64]
+                     [kotoba.compiler.backend.x86-64 :as x86-64]
+                     [kotoba.compiler.cljs-i64 :as i64]
+                     [kotoba.compiler.compatibility :as compatibility-profile]
+                     [kotoba.compiler.ir :as ir]
+                     [kotoba.compiler.target :as target-profile])))
 
 (defn- reject! [message data]
   (throw (ex-info message (assoc data :phase :verify))))
@@ -32,12 +40,23 @@
 (def ^:private string-operations '{string-byte-length 1 string=? 2 string-concat 2})
 (def ^:private string-literal-byte-limit 4096)
 
+;; Mirrors `kotoba.compiler.backend.wasm`'s `utf8` -- `.getBytes` is
+;; JVM-only, cljs has no `String`/`Charset`; `TextEncoder` is the
+;; UTF-8-safe equivalent.
+(defn- utf8-byte-count [s]
+  #?(:clj (alength (.getBytes ^String s "UTF-8"))
+     :cljs (.-length (.encode (js/TextEncoder.) s))))
+
 (defn- valid-name? [value]
   (and (simple-symbol? value) (<= (count (name value)) max-symbol-chars)))
 
+;; Same bigint-recognition guard `verify-expr!` needs (see its own
+;; comment): a cap-id straight from a KIR effect is a cljs `bigint`, which
+;; `integer?` alone does not reliably recognize.
 (defn- valid-effect? [effect]
   (and (vector? effect) (= 2 (count effect)) (= :cap/call (first effect))
-       (integer? (second effect)) (<= 0 (second effect) 255)))
+       #?(:clj (integer? (second effect)) :cljs (or (i64/bigint-value? (second effect)) (integer? (second effect))))
+       (<= 0 (second effect) 255)))
 
 (defn- bounded-sum [values]
   (reduce (fn [total value] (min (inc max-lowered-nodes) (+ total value)))
@@ -45,7 +64,10 @@
 
 (defn- lowered-cost [form env]
   (cond
-    (integer? form) 1
+    ;; Same bigint-recognition guard as `verify-expr!` below (see its own
+    ;; comment) -- `form` here walks the same KIR expression tree.
+    #?(:clj (integer? form) :cljs (or (i64/bigint-value? form) (integer? form)))
+    1
     (string? form) 1
     (symbol? form) (get env form 1)
     :else
@@ -82,8 +104,12 @@
   (when (> depth max-depth)
     (reject! "runtime KIR expression depth rejected" {:depth depth}))
   (cond
-    (integer? form)
-    (when-not (<= Long/MIN_VALUE form Long/MAX_VALUE)
+    ;; `integer?` alone does not reliably recognize a cljs `bigint` (see
+    ;; `kotoba.compiler.cljs-i64`'s own namespace docstring) -- mirrors
+    ;; `kotoba.compiler.backend.wasm`'s identical dispatch guard.
+    #?(:clj (integer? form) :cljs (or (i64/bigint-value? form) (integer? form)))
+    (when-not #?(:clj (<= Long/MIN_VALUE form Long/MAX_VALUE)
+                 :cljs (i64/in-i64-range? (i64/->bigint form)))
       (reject! "runtime KIR integer is outside i64" {:value form}))
 
     (symbol? form)
@@ -91,8 +117,8 @@
       (reject! "runtime KIR contains an unbound symbol" {:symbol form}))
 
     (string? form)
-    (when-not (<= (count (.getBytes ^String form "UTF-8")) string-literal-byte-limit)
-      (reject! "runtime KIR string literal exceeds byte limit" {:bytes (count (.getBytes ^String form "UTF-8"))}))
+    (when-not (<= (utf8-byte-count form) string-literal-byte-limit)
+      (reject! "runtime KIR string literal exceeds byte limit" {:bytes (utf8-byte-count form)}))
 
     (seq? form)
     (let [[op & args] form]
@@ -119,7 +145,9 @@
 
         (= op 'cap-call)
         (let [[cap-id value :as call-args] args]
-          (when-not (and (= 2 (count call-args)) (integer? cap-id) (<= 0 cap-id 255))
+          (when-not (and (= 2 (count call-args))
+                        #?(:clj (integer? cap-id) :cljs (or (i64/bigint-value? cap-id) (integer? cap-id)))
+                        (<= 0 cap-id 255))
             (reject! "runtime KIR capability call rejected" {}))
           (vswap! facts update :effects conj [:cap/call cap-id])
           (verify-expr! value locals signatures (inc depth) nodes facts))
@@ -286,9 +314,9 @@
                {:target target :program-format (:format program)}))
     (verify-program! program)
     (let [expected (try (emit program)
-                        (catch Exception e
+                        (catch #?(:clj Exception :cljs :default) e
                           (reject! "runtime KIR cannot be safely lowered"
-                                   {:target target :cause (.getMessage e)})))]
+                                   {:target target :cause (ex-message e)})))]
       (when-not (= (:exports expected) exports)
         (reject! "native export table rejected" {:target target}))
       (when-not (= (:code expected) code)
@@ -325,7 +353,9 @@
   (when-not (= effects (get-in kexe [:program :effects]))
     (reject! "artifact effects do not match runtime KIR" {}))
   (when-not (every? #(and (vector? %) (= :cap/call (first %))
-                          (= 2 (count %)) (integer? (second %))
+                          (= 2 (count %))
+                          #?(:clj (integer? (second %))
+                             :cljs (or (i64/bigint-value? (second %)) (integer? (second %))))
                           (<= 0 (second %) 255)) effects)
     (reject! "native artifact contains an unsupported effect" {:effects effects}))
   (when-not (and (vector? code) (<= 1 (count code) (* 1024 1024))
@@ -356,9 +386,9 @@
         (when (and (empty? effects) (not kernel-native?))
           (try
             (ir/execute (:program kexe) (get-in kexe [:program :entry]) [])
-            (catch Exception error
+            (catch #?(:clj Exception :cljs :default) error
               (reject! "native artifact oracle evaluation rejected"
-                       {:cause (.getMessage error)}))))]
+                       {:cause (ex-message error)}))))]
     (when-not (= expected-value (:value kexe))
       (reject! "native artifact oracle value rejected" {})))
   kexe)

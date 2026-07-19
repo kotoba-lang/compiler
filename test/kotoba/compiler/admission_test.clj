@@ -7,6 +7,28 @@
    (defn helper [x] (audit x))
    (defn main [] 42)")
 
+(def hybrid-policy
+  {:kotoba.security/crypto-policy-version 1 :mode :hybrid-required
+   :hybrid-epoch-floor 1})
+
+(def hybrid-envelope
+  {:envelope/provider {:provider/id :kagi :provider/fips-validated false}
+   :envelope/kem? true :envelope/hybrid? true :envelope/epoch 2
+   :envelope/algorithms [:x25519 :ml-kem-768]})
+
+(deftest production-artifact-admission-requires-real-hybrid-pqc
+  (let [base {:allow #{[:cap/call 7]} :crypto-required? true
+              :crypto-policy hybrid-policy :crypto-envelope hybrid-envelope}]
+    (is (true? (get-in (compiler/check-source effect-source base)
+                       [:admission :crypto :valid?])))
+    (doseq [envelope [(assoc hybrid-envelope :envelope/algorithms [:x25519])
+                      (assoc hybrid-envelope :envelope/hybrid? false)
+                      (assoc hybrid-envelope :envelope/epoch 0)]]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"hybrid PQC policy denies compilation"
+                            (compiler/check-source effect-source
+                                                   (assoc base :crypto-envelope envelope)))))))
+
 (deftest effects-propagate-and-all-exports-are-covered
   (let [{:keys [hir admission]}
         (compiler/check-source effect-source {:allow #{[:cap/call 7] [:cap/call 9]}})

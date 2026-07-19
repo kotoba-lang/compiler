@@ -39,31 +39,10 @@
 ;; per-backend allowance: :kotoba.hir/v3 covers ALL typed features uniformly,
 ;; so admitting the format for native without inspecting which features are
 ;; actually used would silently let unsupported ops reach the backend and
-;; crash confusingly instead of rejecting cleanly.
-(def ^:private non-string-typed-ops
-  '#{map-new map-get map-assoc
-     bool-not option-some option-none option-some? option-value
-     result-ok result-err result-ok? result-value result-error
-     result-ok-of result-err-of result-ok?-of result-value-of result-error-of result-match-of
-     variant-new variant-match
-     option-some-of option-none-of option-some?-of option-value-of option-match
-     hetero-vector-new hetero-vector-count hetero-vector-at hetero-vector-assoc hetero-vector-equal
-     typed-set-new typed-set-count typed-set-contains typed-set-conj typed-set-disj typed-set-equal
-     typed-map-new typed-map-count typed-map-contains typed-map-get
-     typed-map-entry-at typed-map-assoc typed-map-dissoc typed-map-equal
-     record-new record-get record-assoc record-equal
-     vector-count vector-get vector-at vector-drop vector-assoc vector-conj})
-
-(defn- only-string-typed-features? [hir]
-  (letfn [(walk [form]
-            (cond
-              (or (string? form) (integer? form) (symbol? form)) true
-              (seq? form)
-              (let [[op & args] form]
-                (and (not (contains? non-string-typed-ops op))
-                     (every? walk args)))
-              :else true))]
-    (every? #(walk (:body %)) (:functions hir))))
+;; crash confusingly instead of rejecting cleanly. Shared with
+;; `kotoba.compiler.nbb.cli` (the nbb-native fast path) via
+;; `kotoba.compiler.ir/only-string-typed-features?` so both compile paths
+;; admit the exact same native-typed-feature subset.
 
 (defn check-source
   ([source] (check-source source {}))
@@ -83,7 +62,7 @@
         _ (when (and (= :kotoba.hir/v3 (:format hir))
                      (not (contains? #{:js-kotoba-v1 :wasm32-kotoba-v1} backend))
                      (not (and (contains? #{:x86_64-kotoba-v1 :aarch64-kotoba-v1} backend)
-                               (only-string-typed-features? hir))))
+                               (ir/only-string-typed-features? hir))))
             (throw (ex-info "typed values currently require the kotoba-script web target, typed Wasm target, or (native targets) string-only typed features"
                             {:phase :target :target target :backend backend
                              :value-profile :kotoba.value/typed-v1})))

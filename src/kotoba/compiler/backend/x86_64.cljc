@@ -1,9 +1,54 @@
-(ns kotoba.compiler.backend.x86-64)
+(ns kotoba.compiler.backend.x86-64
+  ;; See `kotoba.compiler.backend.wasm`'s ns form for why the whole
+  ;; `:require` clause (not just an item inside it) is behind the
+  ;; reader-conditional -- the `:clj` branch needs no requires at all.
+  #?(:cljs (:require [kotoba.compiler.cljs-i64 :as i64])))
+
+;; `le32` only ever encodes small, non-negative, interpreter-internal
+;; displacements/offsets/immediate operands in this file (stack disps,
+;; jump/call targets, cap ids) -- never an arbitrary `.kotoba` i64 VALUE --
+;; so it stays plain JS-number-based on both runtimes, same reasoning
+;; `kotoba.compiler.backend.wasm`'s `uleb` comment gives: `(long n)` was
+;; already a no-op cast on :clj for values in this range; dropped for :cljs
+;; since cljs has no `long`.
+;; Mirrors `kotoba.compiler.backend.wasm`'s `utf8` -- `.getBytes` is JVM-only,
+;; cljs has no `String`/`Charset`; `TextEncoder` is the UTF-8-safe equivalent.
+(defn- utf8-bytes [s]
+  #?(:clj (.getBytes ^String s "UTF-8")
+     :cljs (js/Array.from (.encode (js/TextEncoder.) s))))
 
 (defn- le32 [n]
-  (mapv #(bit-and (unsigned-bit-shift-right (long n) (* 8 %)) 0xff) (range 4)))
+  (mapv #(bit-and (unsigned-bit-shift-right #?(:clj (long n) :cljs n) (* 8 %)) 0xff) (range 4)))
+
+;; `le64` DOES encode arbitrary `.kotoba` i64 literals (`emit-expr`'s
+;; `(integer? form)` case, below) across the FULL signed 64-bit range, so
+;; this is the highest-risk port in this file -- same class of bug
+;; `kotoba.compiler.backend.wasm`'s `sleb` comment documents at length: a
+;; naive cljs port using `bit-and`/`unsigned-bit-shift-right` on a plain
+;; number or bigint directly would either throw ("Cannot mix BigInt and
+;; other types") or silently truncate to 32 bits, corrupting the compiled
+;; machine code rather than erroring. The `:cljs` branch first reduces N to
+;; its UNSIGNED 64-bit bit-pattern via `BigInt.asUintN` (matching what
+;; `unsigned-bit-shift-right` on a JVM `long` already does implicitly --
+;; treat the two's-complement bits as unsigned for extraction purposes),
+;; then extracts 8 bits at a time via repeated division by a small,
+;; always-int32-safe bigint constant (256) rather than `i64/ashr`:
+;; `i64/ashr`'s own divisor is computed via a PLAIN (non-bigint)
+;; `bit-shift-left`, safe only for its existing caller's small, fixed
+;; 7-bit-at-a-time `sleb128` shift -- calling it here with shift>=32 hits
+;; JS's int32 bitwise-shift wraparound (shift amounts are taken mod 32,
+;; so `bit-shift-left 1 32` silently equals `bit-shift-left 1 0` = 1, not
+;; 2^32), confirmed live: it produced the low 4 bytes twice instead of the
+;; correct high 4 bytes. Repeated division by a fixed 256 avoids computing
+;; any large divisor at all.
 (defn- le64 [n]
-  (mapv #(bit-and (unsigned-bit-shift-right (long n) (* 8 %)) 0xff) (range 8)))
+  #?(:clj (mapv #(bit-and (unsigned-bit-shift-right (long n) (* 8 %)) 0xff) (range 8))
+     :cljs (let [u (js/BigInt.asUintN 64 (i64/->bigint n))
+                 base (js/BigInt 256)]
+             (loop [i 0 rem u out []]
+               (if (= i 8)
+                 out
+                 (recur (inc i) (/ rem base) (conj out (js/Number (bit-and rem (js/BigInt 0xff))))))))))
 
 (def ^:private param-pushes [[0x57] [0x56] [0x52] [0x51] [0x41 0x50]])
 (def ^:private arg-pops [[0x5f] [0x5e] [0x5a] [0x59] [0x41 0x58]])
@@ -90,8 +135,18 @@
           (vec (concat out pops (when align? [0x50]) [{:call op}]
                        (when align? [0x48 0x83 0xc4 0x08])))))))))
 
+;; `cap-id` arrives as an arbitrary `.kotoba` VALUE straight from the KIR
+;; effect (`cap-call`'s first arg), which on cljs is a `bigint` (see
+;; `le64`'s own doc comment above) -- but this function only ever does
+;; small, always-in-[0,255] bit/offset arithmetic on it (validated
+;; elsewhere, e.g. `kotoba.compiler.verifier`'s `valid-effect?`), so it's
+;; coerced to a plain JS number ONCE up front rather than propagating
+;; bigint through `quot`/`mod`/`bit-shift-left`: JS bigint arithmetic
+;; ops throw ("Cannot mix BigInt and other types") when combined with a
+;; plain-number operand like the literal `8` here, confirmed live.
 (defn- emit-cap-call [cap-id value env {:keys [temp-depth] :as ctx}]
-  (let [byte-offset (+ 16 (quot cap-id 8))
+  (let [cap-id #?(:clj cap-id :cljs (js/Number cap-id))
+        byte-offset (+ 16 (quot cap-id 8))
         mask (bit-shift-left 1 (mod cap-id 8))
         ;; Save context across the host ABI call. The fixed guest frame is
         ;; aligned; an even temp depth needs one additional 8-byte pad after
@@ -193,7 +248,7 @@
 ;; emit-heap-call's 2-arg (pair) shape exactly, just with a deferred first
 ;; "arg".
 (defn- emit-string-literal [content {:keys [temp-depth] :as ctx}]
-  (let [length (count (.getBytes ^String content "UTF-8"))
+  (let [length (count (utf8-bytes content))
         align? (even? temp-depth)]
     (vec (concat [{:string-literal content}] [0x50]       ; push offset (rax)
                  (into [0x48 0xb8] (le64 length)) [0x50]    ; push length (rax)
@@ -226,7 +281,11 @@
 
 (defn emit-expr [form env {:keys [param-count pad? temp-depth] :as ctx}]
   (cond
-    (integer? form) (into [0x48 0xb8] (le64 form))
+    ;; `integer?` alone does not reliably recognize a cljs `bigint` (see
+    ;; `kotoba.compiler.cljs-i64`'s own namespace docstring) -- mirrors
+    ;; `kotoba.compiler.backend.wasm`'s identical dispatch guard.
+    #?(:clj (integer? form) :cljs (or (i64/bigint-value? form) (integer? form)))
+    (into [0x48 0xb8] (le64 form))
     (string? form) (emit-string-literal form ctx)
     (symbol? form)
     (let [binding (get env form)]
@@ -385,11 +444,11 @@
         literal-offsets (loop [remaining literal-contents pos code-size-total out {}]
                           (if-let [content (first remaining)]
                             (recur (next remaining)
-                                   (+ pos (count (.getBytes ^String content "UTF-8")))
+                                   (+ pos (count (utf8-bytes content)))
                                    (assoc out content pos))
                             out))
         literal-bytes (vec (mapcat (fn [content]
-                                     (map #(bit-and (int %) 0xff) (.getBytes ^String content "UTF-8")))
+                                     (map #(bit-and (int %) 0xff) (utf8-bytes content)))
                                    literal-contents))]
     (loop [items token-bodies code [] exports {}]
       (if-let [[function emitted] (first items)]
