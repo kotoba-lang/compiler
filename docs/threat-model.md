@@ -430,6 +430,15 @@ is accepted only in this differential live-listener test. Windows release
 coverage remains closed until this revised probe passes on hosted x86_64 and
 Arm64 runners; source review alone is not promotion evidence.
 
+UPDATE (fourth hosted-runner observation): the differential live-listener
+probe completed successfully even though all universal-sublayer filters were
+installed. WFP arbitrates sublayer weight before filter weight, so a maximum
+filter weight inside `FWPM_SUBLAYER_UNIVERSAL` cannot override a terminating
+permit in a higher-weight sublayer. The loader now creates a maximum-weight
+dynamic Kotoba sublayer and installs terminating `CLEAR_ACTION_RIGHT` block
+filters there. The session still owns their lifetime and tears them down when
+the loader exits.
+
 This boundary is not yet sufficient for release admission. The product command
 now admits the signed KEXE, verifies its regenerated code, binds the reviewed
 Windows source plus compiler/linker/resource/header closure into runtime trust,

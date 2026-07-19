@@ -264,6 +264,7 @@ static void prohibit_dynamic_code(void) {
 static void install_network_denial(void) {
   HANDLE engine = NULL;
   FWPM_SESSION0 session;
+  FWPM_SUBLAYER0 sublayer;
   wchar_t module_path[MAX_PATH];
   FWP_BYTE_BLOB *app_id = NULL;
   FWPM_FILTER_CONDITION0 app_id_condition;
@@ -277,6 +278,8 @@ static void install_network_denial(void) {
   };
   DWORD status;
   size_t i;
+  static const GUID denial_sublayer_key =
+    {0x7a3b6d13, 0x0d5f, 0x4e87, {0x9e, 0x31, 0x42, 0x7c, 0x65, 0x1a, 0xb8, 0x04}};
 
   if (GetModuleFileNameW(NULL, module_path, MAX_PATH) == 0) fail_win("GetModuleFileNameW");
 
@@ -284,6 +287,21 @@ static void install_network_denial(void) {
   session.flags = FWPM_SESSION_FLAG_DYNAMIC;
   status = FwpmEngineOpen0(NULL, RPC_C_AUTHN_WINNT, NULL, &session, &engine);
   if (status != ERROR_SUCCESS) { SetLastError(status); fail_win("FwpmEngineOpen0"); }
+
+  /* Filter weight is compared only inside one sublayer. The universal
+     sublayer can lose arbitration to a terminating permit in a higher-weight
+     sublayer, which hosted Windows runners demonstrated. Own a maximum-weight
+     dynamic sublayer and make each block terminating. */
+  ZeroMemory(&sublayer, sizeof(sublayer));
+  sublayer.subLayerKey = denial_sublayer_key;
+  sublayer.displayData.name = L"kotoba-kexe-network-denial";
+  sublayer.displayData.description = L"Fail-closed per-process KEXE network boundary";
+  sublayer.weight = 0xffff;
+  status = FwpmSubLayerAdd0(engine, &sublayer, NULL);
+  if (status != ERROR_SUCCESS && status != FWP_E_ALREADY_EXISTS) {
+    SetLastError(status);
+    fail_win("FwpmSubLayerAdd0 denial");
+  }
 
   status = FwpmGetAppIdFromFileName0(module_path, &app_id);
   if (status != ERROR_SUCCESS) { SetLastError(status); fail_win("FwpmGetAppIdFromFileName0"); }
@@ -310,9 +328,10 @@ static void install_network_denial(void) {
        connections -- treat it as covering non-loopback traffic. */
     ZeroMemory(&filter, sizeof(filter));
     filter.layerKey = *layers[i];
-    filter.subLayerKey = FWPM_SUBLAYER_UNIVERSAL;
+    filter.subLayerKey = denial_sublayer_key;
     filter.displayData.name = L"kotoba-kexe-network-denial";
     filter.action.type = FWP_ACTION_BLOCK;
+    filter.flags = FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT;
     filter.weight.type = FWP_UINT8;
     filter.weight.uint8 = 15;
     filter.numFilterConditions = 1;
@@ -332,9 +351,10 @@ static void install_network_denial(void) {
     filter_id = 0;
     ZeroMemory(&filter, sizeof(filter));
     filter.layerKey = *layers[i];
-    filter.subLayerKey = FWPM_SUBLAYER_UNIVERSAL;
+    filter.subLayerKey = denial_sublayer_key;
     filter.displayData.name = L"kotoba-kexe-network-denial-loopback";
     filter.action.type = FWP_ACTION_BLOCK;
+    filter.flags = FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT;
     filter.weight.type = FWP_UINT8;
     filter.weight.uint8 = 15;
     filter.numFilterConditions = 2;
