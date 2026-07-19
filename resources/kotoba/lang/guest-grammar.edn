@@ -19,16 +19,6 @@
                       :abi-bound {:max-arity 5 :disposition :intentional-security-constraint}
                       :missing #{}}}
 
- :function-semantics
- {:named-multi-arity {:status :implemented-partial
-                      :backends #{:compiler :kotoba-wasm :kotoba-cljs}
-                      :arities {:min 0 :max 5}
-                      :lowering "deterministic $arityN static function names"
-                      :supports #{:direct-call :recursion :hof-callback :no-init-reduce}
-                      :variadic "[fixed ... & rest] statically specialized through arity 5"
-                      :abi-bound {:max-arity 5 :disposition :intentional-security-constraint}
-                      :missing #{}}}
-
  ;; P0 strict-grammar (ADR-2607180900): default ON for safe emit/run.
  ;; Unknown call heads not in admitted sets fail closed with a catalog hint.
  :strict-grammar
