@@ -75,7 +75,7 @@
                           (compiler/compile-source source :x86_64-kotoba-v1)))))
 
 (def arithmetic-source
-  (str "(ns pilot.f64-arithmetic (:export [main add divide neg absolute equal less unordered nan-bits payload-bits])) "
+  (str "(ns pilot.f64-arithmetic (:export [main add divide neg absolute equal less unordered nan-bits payload-bits to-f64 rounded to-i64 truncating])) "
        "(defn main [] 0) "
        "(defn add [x :f64 y :f64] :f64 (f64-add x y)) "
        "(defn divide [x :f64 y :f64] :f64 (f64-div x y)) "
@@ -85,7 +85,11 @@
        "(defn less [x :f64 y :f64] :bool (f64-lt x y)) "
        "(defn unordered [x :f64 y :f64] :bool (f64-unordered x y)) "
        "(defn nan-bits [] (f64-to-bits (f64-div 0.0 0.0))) "
-       "(defn payload-bits [] (f64-to-bits (f64-from-bits 9218868437227405313)))"))
+       "(defn payload-bits [] (f64-to-bits (f64-from-bits 9218868437227405313))) "
+       "(defn to-f64 [x :i64] :f64 (i64-to-f64-checked x)) "
+       "(defn rounded [x :i64] :f64 (i64-to-f64-rounded x)) "
+       "(defn to-i64 [x :f64] :i64 (f64-to-i64-checked x)) "
+       "(defn truncating [x :f64] :i64 (f64-to-i64-truncating x))"))
 
 (deftest f64-arithmetic-special-value-matrix-matches-reference-js-and-wasm
   (let [kir (:kir (compiler/compile-source arithmetic-source :js-kotoba-v1))
@@ -101,7 +105,16 @@
                         "if(!x.equal(0,-0)||x.equal(NaN,NaN)||!x.less(-1,0))process.exit(5);"
                         "if(!x.unordered(NaN,1)||x.unordered(1,2))process.exit(6);"
                         "if(x['nan-bits']()!==9221120237041090560n||"
-                        "x['payload-bits']()!==9221120237041090560n)process.exit(7)};")
+                        "x['payload-bits']()!==9221120237041090560n)process.exit(7);"
+                        "if(x['to-f64'](9007199254740992n)!==9007199254740992)process.exit(8);"
+                        "try{x['to-f64'](9007199254740993n);process.exit(9)}catch(e){}"
+                        "if(x.rounded(9007199254740993n)!==9007199254740992)process.exit(10);"
+                        "if(x['to-i64'](-0)!==0n||x['to-i64'](42)!==42n)process.exit(11);"
+                        "for(const v of [1.5,NaN,Infinity,9223372036854775808])"
+                        "{try{x['to-i64'](v);process.exit(12)}catch(e){}}"
+                        "if(x.truncating(1.9)!==1n||x.truncating(-1.9)!==-1n)process.exit(13);"
+                        "for(const v of [NaN,Infinity,-Infinity,9223372036854775808])"
+                        "{try{x.truncating(v);process.exit(14)}catch(e){}}};")
         js-result (node-run
                    (str "import('data:text/javascript;base64," js-encoded
                         "').then(m=>{" assertions "check(m.instantiateKotoba({}));})"))
@@ -113,5 +126,11 @@
     (is (= 9221120237041090560 (ir/execute kir 'payload-bits [])))
     (is (true? (ir/execute kir 'unordered [Double/NaN 1.0])))
     (is (false? (ir/execute kir 'equal [Double/NaN Double/NaN])))
+    (is (= 9007199254740992.0 (ir/execute kir 'to-f64 [9007199254740992])))
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (ir/execute kir 'to-f64 [9007199254740993])))
+    (is (= 1 (ir/execute kir 'truncating [1.9])))
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (ir/execute kir 'to-i64 [1.5])))
     (is (zero? (:exit js-result)) (:err js-result))
     (is (zero? (:exit wasm-result)) (:err wasm-result))))

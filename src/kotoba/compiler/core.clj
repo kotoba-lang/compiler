@@ -21,7 +21,7 @@
            [java.security MessageDigest]))
 
 (def compiler-version compatibility/compiler-version)
-(def floating-point-policy :kotoba.floating-point/ieee-754-f64-arithmetic-v1)
+(def floating-point-policy :kotoba.floating-point/ieee-754-f64-conversions-v1)
 
 (defn- text-sha256 [text]
   (let [digest (.digest (MessageDigest/getInstance "SHA-256")

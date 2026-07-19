@@ -125,7 +125,9 @@
   '{f64-to-bits 1 f64-from-bits 1
     f64-add 2 f64-sub 2 f64-mul 2 f64-div 2
     f64-neg 1 f64-abs 1
-    f64-eq 2 f64-lt 2 f64-le 2 f64-gt 2 f64-ge 2 f64-unordered 2})
+    f64-eq 2 f64-lt 2 f64-le 2 f64-gt 2 f64-ge 2 f64-unordered 2
+    i64-to-f64-checked 1 i64-to-f64-rounded 1
+    f64-to-i64-checked 1 f64-to-i64-truncating 1})
 (def reserved-function-names
   (set/union forbidden-heads arithmetic comparisons (set (keys heap-operations))
              (set (keys kgraph-operations))
@@ -1623,6 +1625,12 @@
 
       (= op 'f64-from-bits)
       (do (require-expression-type! (first types) :i64 (first args)) :f64)
+
+      (contains? '#{i64-to-f64-checked i64-to-f64-rounded} op)
+      (do (require-expression-type! (first types) :i64 (first args)) :f64)
+
+      (contains? '#{f64-to-i64-checked f64-to-i64-truncating} op)
+      (do (require-expression-type! (first types) :f64 (first args)) :i64)
 
       (contains? '#{f64-add f64-sub f64-mul f64-div} op)
       (do (doseq [[type arg] (map vector types args)]

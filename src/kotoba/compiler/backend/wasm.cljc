@@ -299,6 +299,27 @@
                               [0x20 value-local 0x20 value-local 0x62 0x04 0x7c]
                               [0x42] (sleb 9221120237041090560) [0xbf]
                               [0x05 0x20 value-local 0x0b]))
+                    (= op 'i64-to-f64-rounded)
+                    (concat (emit* (first args) env) [0xb9])
+                    (= op 'i64-to-f64-checked)
+                    (let [source-local (allocate! 0x7e)
+                          result-local (allocate! 0x7c)]
+                      (concat (emit* (first args) env) [0x21 source-local]
+                              [0x20 source-local 0xb9 0x21 result-local]
+                              ;; The truncation itself traps if rounding crossed
+                              ;; the signed-i64 boundary.  Otherwise require an
+                              ;; exact round-trip before returning the f64.
+                              [0x20 result-local 0xb0 0x20 source-local 0x52
+                               0x04 0x40 0x00 0x0b 0x20 result-local]))
+                    (= op 'f64-to-i64-truncating)
+                    (concat (emit* (first args) env) [0xb0])
+                    (= op 'f64-to-i64-checked)
+                    (let [source-local (allocate! 0x7c)
+                          result-local (allocate! 0x7e)]
+                      (concat (emit* (first args) env) [0x21 source-local]
+                              [0x20 source-local 0xb0 0x21 result-local]
+                              [0x20 result-local 0xb9 0x20 source-local 0x62
+                               0x04 0x40 0x00 0x0b 0x20 result-local]))
                     (contains? '#{f64-add f64-sub f64-mul f64-div} op)
                     (concat (emit* (first args) env) (emit* (second args) env)
                             [({'f64-add 0xa0 'f64-sub 0xa1 'f64-mul 0xa2 'f64-div 0xa3} op)])
