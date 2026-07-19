@@ -12,7 +12,7 @@ code bytes. A structurally independent target verifier decodes all emitted
 instructions before admission.
 
 The shared value policy is
-`:kotoba.floating-point/ieee-754-f32-f64-v3`. It admits scalar f32 and
+`:kotoba.floating-point/ieee-754-f32-f64-v4`. It admits scalar f32 and
 f64 values only on restricted Kotoba Script and Wasm: decimal source literals are
 normalized to exact i64 bit patterns, and only `f64-to-bits`/
 `f64-from-bits` cross the KIR alongside explicit basic arithmetic, unary
@@ -29,6 +29,9 @@ semantics; other transcendentals remain outside the core profile.
 The first qualified transcendental slice is finite quarter-turn f64 sine and
 cosine. Fixed coefficient bits, fixed Horner order, no FMA, a closed input
 domain, and a `4e-15` absolute-error contract are part of the artifact policy.
+The bounded wide-angle layer uses fixed split-`pi/2` reduction through
+`8192*pi`, a specified ties-away-from-zero quadrant rule, and a `5e-12`
+absolute-error contract. Larger angles fail closed.
 
 Native verification does not trust a sealed KIR merely because its hash is
 valid. Before re-emission, an independent KIR profile checker validates exact

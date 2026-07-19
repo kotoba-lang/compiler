@@ -32,6 +32,7 @@
      i64-to-f32-checked i64-to-f32-rounded f32-to-i64-checked f32-to-i64-truncating
      f64-to-bits f64-from-bits f64-add f64-sub f64-mul f64-div f64-min f64-max
      f64-neg f64-abs f64-sqrt f64-sin-quarter-turn f64-cos-quarter-turn
+     f64-sin-bounded f64-cos-bounded
      f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered
      i64-to-f64-checked i64-to-f64-rounded f64-to-i64-checked f64-to-i64-truncating
      map-new map-get map-assoc
@@ -73,6 +74,7 @@
                                          f64-add f64-sub f64-mul f64-div f64-min f64-max
                                          f64-neg f64-abs f64-sqrt
                                          f64-sin-quarter-turn f64-cos-quarter-turn
+                                         f64-sin-bounded f64-cos-bounded
                                          f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered
                                          i64-to-f64-checked i64-to-f64-rounded
                                          f64-to-i64-checked f64-to-i64-truncating}
@@ -153,6 +155,37 @@
         p (+ 0.041666666666666664 (* z p))
         p (+ -0.5 (* z p))]
     (+ 1.0 (* z p))))
+
+(def ^:private bounded-angle-limit 25735.927018207585)
+
+(defn- reduce-bounded-angle [value]
+  (when-not (and #?(:clj (Double/isFinite ^double value) :cljs (js/Number.isFinite value))
+                 (<= (#?(:clj Math/abs :cljs js/Math.abs) value) bounded-angle-limit))
+    (trap! :f64-bounded-angle-domain {}))
+  (let [scaled (* value 0.6366197723675814)
+        nearest (#?(:clj (fn [x] (if (neg? x) (Math/ceil (- x 0.5)) (Math/floor (+ x 0.5))))
+                    :cljs (fn [x] (if (neg? x) (js/Math.ceil (- x 0.5)) (js/Math.floor (+ x 0.5)))))
+                 scaled)
+        reduced (- (- value (* nearest 1.5707963267948966))
+                   (* nearest 6.123233995736766e-17))
+        quadrant (mod #?(:clj (long nearest) :cljs nearest) 4)]
+    [reduced quadrant]))
+
+(defn- f64-sin-bounded [value]
+  (let [[reduced quadrant] (reduce-bounded-angle value)]
+    (case quadrant
+      0 (f64-sin-quarter-turn reduced)
+      1 (f64-cos-quarter-turn reduced)
+      2 (- (f64-sin-quarter-turn reduced))
+      (- (f64-cos-quarter-turn reduced)))))
+
+(defn- f64-cos-bounded [value]
+  (let [[reduced quadrant] (reduce-bounded-angle value)]
+    (case quadrant
+      0 (f64-cos-quarter-turn reduced)
+      1 (- (f64-sin-quarter-turn reduced))
+      2 (- (f64-cos-quarter-turn reduced))
+      (f64-sin-quarter-turn reduced))))
 
 (defn- validate-runtime-value! [runtime-value type position]
   (case type
@@ -477,6 +510,14 @@
 
         (= op 'f64-cos-quarter-turn)
         (f64-cos-quarter-turn
+         (eval-expr (first args) env functions fuel heap call-stack cap-call))
+
+        (= op 'f64-sin-bounded)
+        (f64-sin-bounded
+         (eval-expr (first args) env functions fuel heap call-stack cap-call))
+
+        (= op 'f64-cos-bounded)
+        (f64-cos-bounded
          (eval-expr (first args) env functions fuel heap call-stack cap-call))
 
         (contains? '#{f64-eq f64-lt f64-le f64-gt f64-ge} op)
