@@ -57,15 +57,32 @@
                     "if(x['and-bits'](-1n,0x5555555555555555n)!==0x5555555555555555n)process.exit(3);"))]
     (is (zero? (:exit probe)) (:err probe))))
 
-(deftest oversized-typed-local-index-set-fails-before-invalid-wasm-emission
-  (let [bindings (str/join " " (mapcat (fn [index]
-                                           [(str "x" index) (str (double index))])
-                                         (range 129)))
-        source (str "(defn main [] :f64 (let [" bindings "] x128))")]
-    (is (thrown-with-msg?
-         clojure.lang.ExceptionInfo
-         #"typed Wasm local index exceeds the sealed one-byte profile"
-         (compiler/compile-source source :wasm32-browser-kotoba-v1)))))
+(deftest local-indices-above-127-use-canonical-uleb128
+  (let [typed-bindings (str/join " " (mapcat (fn [index]
+                                                 [(str "x" index) (str (double index))])
+                                               (range 131)))
+        untyped-bindings (str/join " " (mapcat (fn [index]
+                                                   [(str "x" index) (str index)])
+                                                 (range 131)))
+        typed (compiler/compile-source
+               (str "(defn main [] :f64 (let [" typed-bindings "] x130))")
+               :wasm32-browser-kotoba-v1)
+        untyped (compiler/compile-source
+                 (str "(defn main [] (let [" untyped-bindings "] x130))")
+                 :wasm32-browser-kotoba-v1)
+        typed-encoded (.encodeToString (java.util.Base64/getEncoder) (:bytes typed))
+        untyped-encoded (.encodeToString (java.util.Base64/getEncoder) (:bytes untyped))
+        result (shell/sh "node" "--input-type=module" "-e"
+                         (str "Promise.all(["
+                              "WebAssembly.instantiate(Buffer.from('" typed-encoded "','base64'),{}),"
+                              "WebAssembly.instantiate(Buffer.from('" untyped-encoded "','base64'),{})"
+                              "]).then(([typed,untyped])=>{"
+                              "if(typed.instance.exports.main()!==130)process.exit(2);"
+                              "if(untyped.instance.exports.main()!==130n)process.exit(3);"
+                              "console.log('wasm-local-uleb128-ok')})"
+                              ".catch(e=>{console.error(e);process.exit(99)})"))]
+    (is (zero? (:exit result)) (:err result))
+    (is (= "wasm-local-uleb128-ok\n" (:out result)))))
 
 (deftest compatibility-is-sealed-and-host-admitted-before-instantiation
   (let [compiled (compiler/compile-source "(defn main [] 42)" :wasm32-browser-kotoba-v1)

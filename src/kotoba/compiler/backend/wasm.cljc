@@ -46,6 +46,26 @@
                       (and (= n' (js/BigInt -1)) (not (zero? (bit-and b 0x40)))))]
          (if done (conj out b) (recur n' (conj out (bit-or b 0x80))))))))
 
+(defn- encode-local-operands [tokens]
+  (loop [remaining (seq tokens) encoded []]
+    (if-not remaining
+      encoded
+      (let [token (first remaining)]
+        (if (contains? #{::local-get ::local-set ::local-tee} token)
+          (let [index (second remaining)]
+            (when-not (and (integer? index) (<= 0 index))
+              (throw (ex-info "invalid Wasm local index"
+                              {:phase :wasm-local-encoding
+                               :operation token :index index})))
+            (recur (nnext remaining)
+                   (into encoded
+                         (concat [(case token
+                                    ::local-get 0x20
+                                    ::local-set 0x21
+                                    ::local-tee 0x22)]
+                                 (uleb index)))))
+          (recur (next remaining) (conj encoded token)))))))
+
 (defn- section [id payload] (into [id] (concat (uleb (count payload)) payload)))
 (defn- utf8 [s]
   #?(:clj (mapv #(bit-and (int %) 0xff) (.getBytes ^String s "UTF-8"))
@@ -108,7 +128,7 @@
     ;; -- e.g. `when`'s trailing `0`); `sleb` above accepts either.
     #?(:clj (integer? form) :cljs (or (i64/bigint-value? form) (integer? form)))
     (into [0x42] (sleb form))                                    ; i64.const
-    (symbol? form) [0x20 (get env form)]                         ; local.get
+    (symbol? form) [::local-get (get env form)]                         ; local.get
     :else
     (let [[op & args] form]
       (cond
@@ -118,7 +138,7 @@
             (if-let [[name value] (first pairs)]
               (let [value-code (emit-expr value env (assoc ctx :next-local cursor))]
                 (recur (next pairs) (assoc env name cursor)
-                       (into out (concat value-code [0x21 cursor])) (inc cursor))) ; local.set
+                       (into out (concat value-code [::local-set cursor])) (inc cursor))) ; local.set
               (into out (emit-expr body env (assoc ctx :next-local cursor))))))
 
         (= op 'if)
@@ -379,9 +399,9 @@
                                         (second (first branches))
                                         (second (first (nth type 2))))
                                  signatures)
-                    setup (concat (emit* value-form env) [0x21 value-local]
-                                  (i32-const (descriptor-id type)) [0x20 value-local]
-                                  [0x10 (get intrinsic-indices 'typed-tag) 0x21 tag-local])
+                    setup (concat (emit* value-form env) [::local-set value-local]
+                                  (i32-const (descriptor-id type)) [::local-get value-local]
+                                  [0x10 (get intrinsic-indices 'typed-tag) ::local-set tag-local])
                     emit-branches
                     (fn emit-branches [index remaining]
                       (let [[_ binder body] (first remaining)
@@ -389,17 +409,17 @@
                             binder-local (allocate! (typed/wasm-type payload-type))
                             branch-env (assoc env binder {:index binder-local :type payload-type})
                             body-code (concat (emit-get type {:wasm-local value-local} index payload-type env)
-                                              [0x21 binder-local] (emit* body branch-env))]
+                                              [::local-set binder-local] (emit* body branch-env))]
                         (if (= 1 (count remaining))
                           body-code
-                          (concat [0x20 tag-local] (i32-const index) [0x46 0x04
+                          (concat [::local-get tag-local] (i32-const index) [0x46 0x04
                                   (typed/wasm-type result-type)]
                                   body-code [0x05]
                                   (emit-branches (inc index) (rest remaining)) [0x0b]))))]
                 (concat setup (emit-branches 0 branches))))
             (emit* [form env]
               (cond
-                (and (map? form) (contains? form :wasm-local)) [0x20 (:wasm-local form)]
+                (and (map? form) (contains? form :wasm-local)) [::local-get (:wasm-local form)]
                 #?(:clj (integer? form)
                    :cljs (or (i64/bigint-value? form) (integer? form)))
                 (into [0x42] (sleb form))
@@ -408,7 +428,7 @@
                                (if (keyword? form) (str form) form)]]
                   (concat (i32-const (get literal-indices literal))
                           [0x10 (get intrinsic-indices 'typed-literal)]))
-                (symbol? form) [0x20 (:index (get env form))]
+                (symbol? form) [::local-get (:index (get env form))]
                 :else
                 (let [[op & args] form]
                   (cond
@@ -424,7 +444,7 @@
                                 local (allocate! (typed/wasm-type type))]
                             (recur (next remaining)
                                    (assoc current-env name {:index local :type type})
-                                   (concat code value-code [0x21 local])))
+                                   (concat code value-code [::local-set local])))
                           (concat code (emit* body current-env)))))
                     (= op 'if)
                     (let [[test then else] args
@@ -437,37 +457,37 @@
                               (emit* then env) [0x05] (emit* else env) [0x0b]))
                     (= op 'f64-to-bits)
                     (let [value-local (allocate! 0x7c)]
-                      (concat (emit* (first args) env) [0x21 value-local]
-                              [0x20 value-local 0x20 value-local 0x62 0x04 0x7e]
+                      (concat (emit* (first args) env) [::local-set value-local]
+                              [::local-get value-local ::local-get value-local 0x62 0x04 0x7e]
                               [0x42] (sleb 9221120237041090560)
-                              [0x05 0x20 value-local 0xbd 0x0b]))
+                              [0x05 ::local-get value-local 0xbd 0x0b]))
                     (= op 'f64-from-bits)
                     (let [value-local (allocate! 0x7c)]
-                      (concat (emit* (first args) env) [0xbf 0x21 value-local]
-                              [0x20 value-local 0x20 value-local 0x62 0x04 0x7c]
+                      (concat (emit* (first args) env) [0xbf ::local-set value-local]
+                              [::local-get value-local ::local-get value-local 0x62 0x04 0x7c]
                               [0x42] (sleb 9221120237041090560) [0xbf]
-                              [0x05 0x20 value-local 0x0b]))
+                              [0x05 ::local-get value-local 0x0b]))
                     (= op 'i64-to-f64-rounded)
                     (concat (emit* (first args) env) [0xb9])
                     (= op 'i64-to-f64-checked)
                     (let [source-local (allocate! 0x7e)
                           result-local (allocate! 0x7c)]
-                      (concat (emit* (first args) env) [0x21 source-local]
-                              [0x20 source-local 0xb9 0x21 result-local]
+                      (concat (emit* (first args) env) [::local-set source-local]
+                              [::local-get source-local 0xb9 ::local-set result-local]
                               ;; The truncation itself traps if rounding crossed
                               ;; the signed-i64 boundary.  Otherwise require an
                               ;; exact round-trip before returning the f64.
-                              [0x20 result-local 0xb0 0x20 source-local 0x52
-                               0x04 0x40 0x00 0x0b 0x20 result-local]))
+                              [::local-get result-local 0xb0 ::local-get source-local 0x52
+                               0x04 0x40 0x00 0x0b ::local-get result-local]))
                     (= op 'f64-to-i64-truncating)
                     (concat (emit* (first args) env) [0xb0])
                     (= op 'f64-to-i64-checked)
                     (let [source-local (allocate! 0x7c)
                           result-local (allocate! 0x7e)]
-                      (concat (emit* (first args) env) [0x21 source-local]
-                              [0x20 source-local 0xb0 0x21 result-local]
-                              [0x20 result-local 0xb9 0x20 source-local 0x62
-                               0x04 0x40 0x00 0x0b 0x20 result-local]))
+                      (concat (emit* (first args) env) [::local-set source-local]
+                              [::local-get source-local 0xb0 ::local-set result-local]
+                              [::local-get result-local 0xb9 ::local-get source-local 0x62
+                               0x04 0x40 0x00 0x0b ::local-get result-local]))
                     (contains? '#{f64-add f64-sub f64-mul f64-div f64-min f64-max} op)
                     (concat (emit* (first args) env) (emit* (second args) env)
                             [({'f64-add 0xa0 'f64-sub 0xa1 'f64-mul 0xa2 'f64-div 0xa3
@@ -482,16 +502,16 @@
                     (let [value-local (allocate! 0x7c)
                           value {:wasm-local value-local}
                           domain-check (concat
-                                        [0x20 value-local 0x20 value-local 0x62
-                                         0x20 value-local 0x99]
+                                        [::local-get value-local ::local-get value-local 0x62
+                                         ::local-get value-local 0x99]
                                         (emit* (f64-constant "4605249457297304856") env)
                                         [0x64 0x72 0x04 0x40 0x00 0x0b])]
-                      (concat (emit* (first args) env) [0x21 value-local]
+                      (concat (emit* (first args) env) [::local-set value-local]
                               domain-check
                               (if (= op 'f64-sin-quarter-turn)
-                                (concat [0x20 value-local]
+                                (concat [::local-get value-local]
                                         (emit* (f64-constant 0) env) [0x61 0x04 0x7c]
-                                        [0x20 value-local 0x05]
+                                        [::local-get value-local 0x05]
                                         (emit* (bounded-sin-form value) env) [0x0b])
                                 (emit* (bounded-cos-form value) env))))
                     (contains? '#{f64-sin-bounded f64-cos-bounded} op)
@@ -501,9 +521,9 @@
                           quadrant-local (allocate! 0x7e)
                           reduced-local (allocate! 0x7c)
                           reduced {:wasm-local reduced-local}
-                          sin-code (concat [0x20 reduced-local]
+                          sin-code (concat [::local-get reduced-local]
                                            (emit* (f64-constant 0) env) [0x61 0x04 0x7c]
-                                           [0x20 reduced-local 0x05]
+                                           [::local-get reduced-local 0x05]
                                            (emit* (bounded-sin-form reduced) env) [0x0b])
                           cos-code (emit* (bounded-cos-form reduced) env)
                           neg-sin (concat sin-code [0x9a])
@@ -515,50 +535,50 @@
                           choose (fn choose [quadrant]
                                    (if (= quadrant 3)
                                      (nth branch-code quadrant)
-                                     (concat [0x20 quadrant-local 0x42] (sleb quadrant) [0x51 0x04 0x7c]
+                                     (concat [::local-get quadrant-local 0x42] (sleb quadrant) [0x51 0x04 0x7c]
                                              (nth branch-code quadrant) [0x05]
                                              (choose (inc quadrant)) [0x0b])))]
                       (concat
-                       (emit* (first args) env) [0x21 value-local]
+                       (emit* (first args) env) [::local-set value-local]
                        ;; Reject NaN, infinities, and values outside ±8192π.
-                       [0x20 value-local 0x20 value-local 0x62
-                        0x20 value-local 0x99]
+                       [::local-get value-local ::local-get value-local 0x62
+                        ::local-get value-local 0x99]
                        (emit* (f64-constant "4672803451707862296") env)
                        [0x64 0x72 0x04 0x40 0x00 0x0b]
                        ;; scaled=x*(2/π), then nearest integer with ties away from zero.
-                       [0x20 value-local]
+                       [::local-get value-local]
                        (emit* (f64-constant "4603909380684499075") env)
-                       [0xa2 0x21 scaled-local 0x20 scaled-local]
+                       [0xa2 ::local-set scaled-local ::local-get scaled-local]
                        (emit* (f64-constant "0") env) [0x66 0x04 0x7c]
-                       [0x20 scaled-local]
+                       [::local-get scaled-local]
                        (emit* (f64-constant "4602678819172646912") env) [0xa0 0x9c 0x05]
-                       [0x20 scaled-local]
+                       [::local-get scaled-local]
                        (emit* (f64-constant "-4620693217682128896") env) [0xa0 0x9b 0x0b]
-                       [0x21 nearest-local]
+                       [::local-set nearest-local]
                        ;; r=(x-n*pi/2_hi)-n*pi/2_lo.
-                       [0x20 value-local 0x20 nearest-local]
+                       [::local-get value-local ::local-get nearest-local]
                        (emit* (f64-constant "4609753056924675352") env) [0xa2 0xa1]
-                       [0x20 nearest-local]
-                       (emit* (f64-constant "4364452196894661639") env) [0xa2 0xa1 0x21 reduced-local]
-                       [0x20 nearest-local 0xb0 0x42] (sleb 3) [0x83 0x21 quadrant-local]
+                       [::local-get nearest-local]
+                       (emit* (f64-constant "4364452196894661639") env) [0xa2 0xa1 ::local-set reduced-local]
+                       [::local-get nearest-local 0xb0 0x42] (sleb 3) [0x83 ::local-set quadrant-local]
                        (choose 0)))
                     (= op 'f64-exp-near-zero)
                     (let [value-local (allocate! 0x7c)
                           value {:wasm-local value-local}]
-                      (concat (emit* (first args) env) [0x21 value-local]
-                              [0x20 value-local 0x20 value-local 0x62
-                               0x20 value-local 0x99]
+                      (concat (emit* (first args) env) [::local-set value-local]
+                              [::local-get value-local ::local-get value-local 0x62
+                               ::local-get value-local 0x99]
                               (emit* (f64-constant "4602678819172646912") env)
                               [0x64 0x72 0x04 0x40 0x00 0x0b]
                               (emit* (bounded-exp-form value) env)))
                     (= op 'f64-log-near-one)
                     (let [value-local (allocate! 0x7c)
                           value {:wasm-local value-local}]
-                      (concat (emit* (first args) env) [0x21 value-local]
-                              [0x20 value-local 0x20 value-local 0x62
-                               0x20 value-local]
+                      (concat (emit* (first args) env) [::local-set value-local]
+                              [::local-get value-local ::local-get value-local 0x62
+                               ::local-get value-local]
                               (emit* (f64-constant "4604930618986332160") env)
-                              [0x63 0x72 0x20 value-local]
+                              [0x63 0x72 ::local-get value-local]
                               (emit* (f64-constant "4609434218613702656") env)
                               [0x64 0x72 0x04 0x40 0x00 0x0b]
                               (emit* (bounded-log-form value) env)))
@@ -568,32 +588,32 @@
                           y {:wasm-local y-local}
                           x {:wasm-local x-local}
                           finite-check (fn [local]
-                                         (concat [0x20 local 0x20 local 0x62
-                                                  0x20 local 0x99]
+                                         (concat [::local-get local ::local-get local 0x62
+                                                  ::local-get local 0x99]
                                                  (emit* (f64-constant "9218868437227405311") env)
                                                  [0x64 0x72]))]
-                      (concat (emit* (first args) env) [0x21 y-local]
-                              (emit* (second args) env) [0x21 x-local]
+                      (concat (emit* (first args) env) [::local-set y-local]
+                              (emit* (second args) env) [::local-set x-local]
                               (finite-check y-local) (finite-check x-local)
                               [0x72 0x04 0x40 0x00 0x0b]
                               (emit* (bounded-atan2-form y x) env)))
                     (= op 'f64-exp-bounded)
                     (let [value-local (allocate! 0x7c)
                           value {:wasm-local value-local}]
-                      (concat (emit* (first args) env) [0x21 value-local]
-                              [0x20 value-local 0x20 value-local 0x62
-                               0x20 value-local 0x99]
+                      (concat (emit* (first args) env) [::local-set value-local]
+                              [::local-get value-local ::local-get value-local 0x62
+                               ::local-get value-local 0x99]
                               (emit* (f64-constant "4644950930959776239") env)
                               [0x64 0x72 0x04 0x40 0x00 0x0b]
                               (emit* (wide-exp-form value) env)))
                     (= op 'f64-log-bounded)
                     (let [value-local (allocate! 0x7c)
                           value {:wasm-local value-local}]
-                      (concat (emit* (first args) env) [0x21 value-local]
-                              [0x20 value-local 0x20 value-local 0x62
-                               0x20 value-local]
+                      (concat (emit* (first args) env) [::local-set value-local]
+                              [::local-get value-local ::local-get value-local 0x62
+                               ::local-get value-local]
                               (emit* (f64-constant "2301339409586323456") env)
-                              [0x63 0x72 0x20 value-local]
+                              [0x63 0x72 ::local-get value-local]
                               (emit* (f64-constant "6913025428013711360") env)
                               [0x64 0x72 0x04 0x40 0x00 0x0b]
                               (emit* (wide-log-form value) env)))
@@ -605,28 +625,28 @@
                     (= op 'f64-unordered)
                     (let [left-local (allocate! 0x7c)
                           right-local (allocate! 0x7c)]
-                      (concat (emit* (first args) env) [0x21 left-local]
-                              (emit* (second args) env) [0x21 right-local]
-                              [0x20 left-local 0x20 left-local 0x62
-                               0x20 right-local 0x20 right-local 0x62 0x72
+                      (concat (emit* (first args) env) [::local-set left-local]
+                              (emit* (second args) env) [::local-set right-local]
+                              [::local-get left-local ::local-get left-local 0x62
+                               ::local-get right-local ::local-get right-local 0x62 0x72
                                0x10 (get intrinsic-indices 'typed-bool)]))
                     (= op 'f32-to-bits)
                     (let [value-local (allocate! 0x7d)]
-                      (concat (emit* (first args) env) [0x21 value-local]
-                              [0x20 value-local 0x20 value-local 0x5c 0x04 0x7e]
+                      (concat (emit* (first args) env) [::local-set value-local]
+                              [::local-get value-local ::local-get value-local 0x5c 0x04 0x7e]
                               [0x42] (sleb 2143289344)
-                              [0x05 0x20 value-local 0xbc 0xac 0x0b]))
+                              [0x05 ::local-get value-local 0xbc 0xac 0x0b]))
                     (= op 'f32-from-bits)
                     (let [bits-local (allocate! 0x7e)
                           value-local (allocate! 0x7d)]
-                      (concat (emit* (first args) env) [0x21 bits-local]
-                              [0x20 bits-local 0x42] (sleb -2147483648) [0x53]
-                              [0x20 bits-local 0x42] (sleb 2147483647) [0x55 0x72]
+                      (concat (emit* (first args) env) [::local-set bits-local]
+                              [::local-get bits-local 0x42] (sleb -2147483648) [0x53]
+                              [::local-get bits-local 0x42] (sleb 2147483647) [0x55 0x72]
                               [0x04 0x40 0x00 0x0b]
-                              [0x20 bits-local 0xa7 0xbe 0x21 value-local]
-                              [0x20 value-local 0x20 value-local 0x5c 0x04 0x7d]
+                              [::local-get bits-local 0xa7 0xbe ::local-set value-local]
+                              [::local-get value-local ::local-get value-local 0x5c 0x04 0x7d]
                               [0x42] (sleb 2143289344) [0xa7 0xbe]
-                              [0x05 0x20 value-local 0x0b]))
+                              [0x05 ::local-get value-local 0x0b]))
                     (= op 'f64-to-f32-rounded)
                     (concat (emit* (first args) env) [0xb6])
                     (= op 'f32-to-f64-exact)
@@ -636,19 +656,19 @@
                     (= op 'i64-to-f32-checked)
                     (let [source-local (allocate! 0x7e)
                           result-local (allocate! 0x7d)]
-                      (concat (emit* (first args) env) [0x21 source-local]
-                              [0x20 source-local 0xb4 0x21 result-local]
-                              [0x20 result-local 0xae 0x20 source-local 0x52
-                               0x04 0x40 0x00 0x0b 0x20 result-local]))
+                      (concat (emit* (first args) env) [::local-set source-local]
+                              [::local-get source-local 0xb4 ::local-set result-local]
+                              [::local-get result-local 0xae ::local-get source-local 0x52
+                               0x04 0x40 0x00 0x0b ::local-get result-local]))
                     (= op 'f32-to-i64-truncating)
                     (concat (emit* (first args) env) [0xae])
                     (= op 'f32-to-i64-checked)
                     (let [source-local (allocate! 0x7d)
                           result-local (allocate! 0x7e)]
-                      (concat (emit* (first args) env) [0x21 source-local]
-                              [0x20 source-local 0xae 0x21 result-local]
-                              [0x20 result-local 0xb4 0x20 source-local 0x5c
-                               0x04 0x40 0x00 0x0b 0x20 result-local]))
+                      (concat (emit* (first args) env) [::local-set source-local]
+                              [::local-get source-local 0xae ::local-set result-local]
+                              [::local-get result-local 0xb4 ::local-get source-local 0x5c
+                               0x04 0x40 0x00 0x0b ::local-get result-local]))
                     (contains? '#{f32-add f32-sub f32-mul f32-div f32-min f32-max} op)
                     (concat (emit* (first args) env) (emit* (second args) env)
                             [({'f32-add 0x92 'f32-sub 0x93 'f32-mul 0x94 'f32-div 0x95
@@ -667,10 +687,10 @@
                     (= op 'f32-unordered)
                     (let [left-local (allocate! 0x7d)
                           right-local (allocate! 0x7d)]
-                      (concat (emit* (first args) env) [0x21 left-local]
-                              (emit* (second args) env) [0x21 right-local]
-                              [0x20 left-local 0x20 left-local 0x5c
-                               0x20 right-local 0x20 right-local 0x5c 0x72
+                      (concat (emit* (first args) env) [::local-set left-local]
+                              (emit* (second args) env) [::local-set right-local]
+                              [::local-get left-local ::local-get left-local 0x5c
+                               ::local-get right-local ::local-get right-local 0x5c 0x72
                                0x10 (get intrinsic-indices 'typed-bool)]))
                     (contains? '#{+ - * quot bit-xor bit-and} op)
                     (let [opcode ({'+ 0x7c '- 0x7d '* 0x7e 'quot 0x7f
@@ -695,13 +715,13 @@
                     (let [[value index fallback] args
                           value-local (allocate! 0x6f)
                           index-local (allocate! 0x7e)]
-                      (concat (emit* value env) [0x21 value-local]
-                              (emit* index env) [0x21 index-local]
-                              [0x20 index-local 0x42 0 0x59 0x20 index-local]
-                              (i32-const (descriptor-id :vector-i64)) [0x20 value-local]
+                      (concat (emit* value env) [::local-set value-local]
+                              (emit* index env) [::local-set index-local]
+                              [::local-get index-local 0x42 0 0x59 ::local-get index-local]
+                              (i32-const (descriptor-id :vector-i64)) [::local-get value-local]
                               [0x10 (get intrinsic-indices 'typed-count) 0x54 0x71 0x04 0x7e]
                               (i32-const (descriptor-id :vector-i64))
-                              [0x20 value-local 0x20 index-local
+                              [::local-get value-local ::local-get index-local
                                0x10 (get intrinsic-indices 'typed-vector-at-i64) 0x05]
                               (emit* fallback env) [0x0b]))
                     (= op 'vector-drop)
@@ -774,12 +794,12 @@
                           result-type (typed/infer-type none-body
                                                        (into {} (map (fn [[key item]] [key (:type item)]) env))
                                                        signatures)]
-                      (concat (emit* value env) [0x21 value-local]
-                              (i32-const (descriptor-id type)) [0x20 value-local]
+                      (concat (emit* value env) [::local-set value-local]
+                              (i32-const (descriptor-id type)) [::local-get value-local]
                               [0x10 (get intrinsic-indices 'typed-tag) 0x04
                                (typed/wasm-type result-type)]
                               (emit-get type {:wasm-local value-local} 0 binder-type env)
-                              [0x21 binder-local]
+                              [::local-set binder-local]
                               (emit* some-body (assoc env binder {:index binder-local :type binder-type}))
                               [0x05] (emit* none-body env) [0x0b]))
                     (= op 'result-match-of)
@@ -793,16 +813,16 @@
                                                        (assoc (into {} (map (fn [[key item]] [key (:type item)]) env))
                                                               ok-name ok-type)
                                                        signatures)]
-                      (concat (emit* value env) [0x21 value-local]
-                              (i32-const (descriptor-id type)) [0x20 value-local]
+                      (concat (emit* value env) [::local-set value-local]
+                              (i32-const (descriptor-id type)) [::local-get value-local]
                               [0x10 (get intrinsic-indices 'typed-tag) 0x04
                                (typed/wasm-type result-type)]
                               (emit-get type {:wasm-local value-local} 0 ok-type env)
-                              [0x21 ok-local]
+                              [::local-set ok-local]
                               (emit* ok-body (assoc env ok-name {:index ok-local :type ok-type}))
                               [0x05]
                               (emit-get type {:wasm-local value-local} 0 err-type env)
-                              [0x21 err-local]
+                              [::local-set err-local]
                               (emit* err-body (assoc env err-name {:index err-local :type err-type}))
                               [0x0b]))
                     (= op 'variant-match) (emit-match (first args) (second args) (nth args 2) env)
@@ -827,8 +847,8 @@
                                          result-value-of (second type)
                                          result-error-of (nth type 2))
                           value-local (allocate! 0x6f)]
-                      (concat (emit* value env) [0x21 value-local]
-                              (i32-const (descriptor-id type)) [0x20 value-local]
+                      (concat (emit* value env) [::local-set value-local]
+                              (i32-const (descriptor-id type)) [::local-get value-local]
                               [0x10 (get intrinsic-indices 'typed-tag)]
                               (i32-const wanted) [0x46 0x04 (typed/wasm-type payload-type)]
                               (emit-get type {:wasm-local value-local} 0 payload-type env)
@@ -897,28 +917,21 @@
                                        :operation op :form form})))))))]
       (let [prefix (mapcat (fn [[index type]]
                              (when (typed/reference-type? type)
-                               (concat (i32-const (descriptor-id type)) [0x20 index]
+                               (concat (i32-const (descriptor-id type)) [::local-get index]
                                        [0x10 (get intrinsic-indices 'typed-assert-ref)
-                                        0x21 index])))
+                                        ::local-set index])))
                            (map-indexed vector (:param-types function)))
             body-code (emit* (:body function) env)
             body-code (if (typed/reference-type? (:result function))
                         (concat (i32-const (descriptor-id (:result function))) body-code
                                 [0x10 (get intrinsic-indices 'typed-assert-ref)])
                         body-code)
-            _ (when (> (+ param-count (count @locals)) 128)
-                (throw (ex-info "typed Wasm local index exceeds the sealed one-byte profile"
-                                {:phase :wasm-typed-lowering
-                                 :function (:name function)
-                                 :locals (count @locals)
-                                 :params param-count
-                                 :limit 128})))
             declarations (if (empty? @locals) [0]
                            (concat (uleb (count @locals))
                                    (mapcat (fn [type] [1 type]) @locals)))
             charge [0x23 0 0x50 0x04 0x40 0x00 0x0b
                     0x23 0 0x42 1 0x7d 0x24 0]
-            instructions (concat prefix charge body-code)
+            instructions (encode-local-operands (concat prefix charge body-code))
             body (concat declarations instructions [0x0b])]
         (concat (uleb (count body)) body)))))
 
@@ -933,10 +946,11 @@
         ;; global. It is never exported and cannot be replenished by guest code.
         charge [0x23 0 0x50 0x04 0x40 0x00 0x0b ; global.get;eqz;if;unreachable;end
                 0x23 0 0x42 1 0x7d 0x24 0]       ; global.get;const 1;sub;global.set
-        instructions (concat charge (emit-expr (:body function) param-env
-                                {:function-indices function-indices
-                                 :intrinsic-indices intrinsic-indices
-                                 :next-local (count (:params function))}))
+        instructions (encode-local-operands
+                      (concat charge (emit-expr (:body function) param-env
+                                      {:function-indices function-indices
+                                       :intrinsic-indices intrinsic-indices
+                                       :next-local (count (:params function))})))
         body (concat declarations instructions [0x0b])]
     (concat (uleb (count body)) body)))
 
