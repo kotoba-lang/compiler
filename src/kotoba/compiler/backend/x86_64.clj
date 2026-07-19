@@ -11,20 +11,6 @@
   ;; context v2: fuel is qword [r9+8].
   [0x49 0x83 0x79 0x08 0x00 0x75 0x02 0x0f 0x0b 0x49 0xff 0x49 0x08])
 
-(defn- normalize-expr [form env]
-  (cond
-    (integer? form) form
-    (symbol? form) (get env form form)
-    :else
-    (let [[op & args] form]
-      (if (= op 'let)
-        (let [[bindings body] args
-              env' (reduce (fn [e [name value]]
-                             (assoc e name (normalize-expr value e)))
-                           env (partition 2 bindings))]
-          (normalize-expr body env'))
-        (apply list op (map #(normalize-expr % env) args))))))
-
 (defn- token-size [token]
   (if (and (map? token) (or (:call token) (:tail-self token))) 5 1))
 (defn- code-size [tokens] (reduce + (map token-size tokens)))
@@ -33,6 +19,16 @@
 (defn- load-param [param-index param-count pad? temp-depth]
   (let [disp (* 8 (+ (if pad? 1 0) (- param-count 1 param-index) temp-depth))]
     (into [0x48 0x8b 0x84 0x24] (le32 disp))))
+
+;; A `let`-bound value's own 8-byte pushed stack slot, addressed relative to
+;; the CURRENT temp-depth (8-byte units pushed since function entry) rather
+;; than a fixed offset -- unlike params (fixed disp from the frame's own
+;; base, via `load-param`), a let value can be read after further nested
+;; pushes (more arithmetic temporaries, nested lets), so its offset from the
+;; live rsp must be recomputed from how much *more* has been pushed since it
+;; was stored.
+(defn- load-let [let-depth temp-depth]
+  (into [0x48 0x8b 0x84 0x24] (le32 (* 8 (- temp-depth let-depth 1)))))
 
 (defn- emit-binary [left right opcode env ctx]
   (let [ctx (assoc ctx :tail? false)]
@@ -69,7 +65,17 @@
     (when (> argc 5)
       (throw (ex-info "x86-64 fuel ABI supports at most five arguments"
                       {:phase :x86-64 :function op :arity argc})))
-    (if (and tail? (= op function-name))
+    ;; The tail-self-call fast path reuses the CURRENT frame's own param
+    ;; slots via a fixed disp from the function's baseline (`emit-tail-self-
+    ;; call`'s `stores`, computed from param-count/pad? alone, with no
+    ;; per-call depth term) -- correct only when nothing else (a `let`'s
+    ;; still-live bindings) is currently pushed between rsp and that
+    ;; baseline. `:tail?` already excludes every other non-tail position
+    ;; (arithmetic/comparison/heap-call/cap-call operands all set it false);
+    ;; the added `(zero? temp-depth)` guard is specifically for a self-call
+    ;; in tail position from inside a `let`'s body, which is otherwise still
+    ;; `:tail? true` but no longer at the function's own baseline depth.
+    (if (and tail? (= op function-name) (zero? temp-depth))
       (emit-tail-self-call args env ctx)
       (loop [remaining args depth temp-depth out []]
       (if-let [arg (first remaining)]
@@ -168,13 +174,41 @@
                  (emit-expr value env (update ctx :temp-depth inc))
                  [0x5a] (if (= width 8) [0xee] [0xef])))))
 
+(defn- emit-let [bindings body env {:keys [temp-depth] :as ctx}]
+  ;; Genuinely sequential: each binding's value is evaluated exactly once, in
+  ;; source order, and pushed onto its own 8-byte stack slot before the next
+  ;; binding (or the body) is emitted -- unlike a compile-time substitution
+  ;; pass, an unreferenced or repeatedly-referenced side-effecting binding
+  ;; (kgraph-assert!, cap-call, pair, ...) still runs exactly once, and a
+  ;; binding referenced from inside an `if` branch still runs unconditionally
+  ;; before the branch is chosen (ADR-2607198300 follow-up). The body
+  ;; inherits ctx's own :tail? (a let's body is in tail position exactly
+  ;; when the let itself is); binding values never are.
+  (let [pairs (partition 2 bindings)]
+    (loop [remaining pairs d temp-depth env env code []]
+      (if-let [[name value] (first remaining)]
+        (recur (next remaining) (inc d)
+               (assoc env name {:let-depth d})
+               (concat code (emit-expr value env (assoc ctx :tail? false :temp-depth d)) [0x50]))
+        (let [body-code (emit-expr body env (assoc ctx :temp-depth d))
+              n (count pairs)]
+          (vec (concat code body-code
+                       (when (pos? n) (concat [0x48 0x81 0xc4] (le32 (* 8 n)))))))))))
+
 (defn emit-expr [form env {:keys [param-count pad? temp-depth] :as ctx}]
   (cond
     (integer? form) (into [0x48 0xb8] (le64 form))
-    (symbol? form) (load-param (get env form) param-count pad? temp-depth)
+    (symbol? form)
+    (let [binding (get env form)]
+      (if (map? binding)
+        (load-let (:let-depth binding) temp-depth)
+        (load-param binding param-count pad? temp-depth)))
     :else
     (let [[op & args] form]
       (cond
+        (= op 'let)
+        (emit-let (first args) (second args) env ctx)
+
         (= op 'if)
         (let [[test then else] args
               test-code (emit-expr test env (assoc ctx :tail? false))
@@ -259,12 +293,11 @@
                     {:phase :x86-64 :function name :arity (count params)})))
   (let [n (count params)
         pad? (even? n)
-        normalized (normalize-expr body {})
         env (zipmap params (range))
         prologue (concat fuel-charge (mapcat #(nth param-pushes %) (range n))
                          (when pad? [0x50]))
-        expression (emit-expr normalized env {:param-count n :pad? pad? :temp-depth 0
-                                              :function-name name :tail? true})
+        expression (emit-expr body env {:param-count n :pad? pad? :temp-depth 0
+                                        :function-name name :tail? true})
         frame-bytes (* 8 (+ n (if pad? 1 0)))
         epilogue (concat [0x48 0x81 0xc4] (le32 frame-bytes) [0xc3])]
     {:tokens (vec (concat prologue expression epilogue))

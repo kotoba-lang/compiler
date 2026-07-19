@@ -335,3 +335,85 @@
         "kgraph-entity-at past the distinct-entity count traps closed, like a forged pair handle")
     (is (= {:kind :signal :signal expected-signal}
            (get-in out-of-range [:evidence :trap])))))
+
+;; ADR-2607198300 follow-up: `let` genuinely sequences (evaluates each binding
+;; exactly once, in order, before the body) instead of the prior compile-time
+;; substitution pass, which silently dropped an unreferenced side-effecting
+;; binding, silently duplicated a repeatedly-referenced one, and silently made
+;; an unconditionally-intended effect conditional if its one reference sat
+;; inside an `if` branch. Each deftest below exercises one of those three
+;; failure modes and would have failed before the fix (either wrong `:result`,
+;; wrong `:report`, or -- for the unused-binding case -- an unchanged not-found
+;; sentinel proving the assert never ran).
+
+(deftest let-runs-an-unreferenced-side-effecting-binding-exactly-once
+  (let [{:keys [envelope trust]}
+        (signed "(defn main []
+                   (let [_unused (kgraph-assert! 1 1 42)]
+                     (kgraph-get 1 1)))"
+               {:allow #{}})
+        {:keys [trust options]} (execution-options trust)
+        result (executor/execute envelope trust {:allow #{}} {:args []} options)]
+    (is (= 42 (get-in result [:evidence :result]))
+        "an unreferenced kgraph-assert! binding still runs -- a real let, not inlining-by-reference")))
+
+(deftest let-runs-a-repeatedly-referenced-side-effecting-binding-exactly-once
+  (let [{:keys [envelope trust]}
+        (signed "(defn main []
+                   (let [x (pair 1 1)]
+                     (+ x x)))"
+               {:allow #{}})
+        {:keys [trust options]} (execution-options trust)
+        result (executor/execute envelope trust {:allow #{}} {:args []} options)]
+    (is (= 2 (get-in result [:evidence :result]))
+        "x is the same handle both times (1+1=2) -- pair ran once and was reused, not
+         re-evaluated per reference (which would return the first call's handle (1)
+         plus the second call's handle (2), summing to 3)")
+    (is (= {:capacity 4096 :used 1} (get-in result [:report :heap]))
+        "exactly one pair allocation happened")))
+
+(deftest let-runs-a-side-effecting-binding-unconditionally-even-when-its-one-reference-is-in-a-dead-if-branch
+  (let [{:keys [envelope trust]}
+        (signed "(defn main []
+                   (let [x (pair 1 1)]
+                     (if 0 x 999)))"
+               {:allow #{}})
+        {:keys [trust options]} (execution-options trust)
+        result (executor/execute envelope trust {:allow #{}} {:args []} options)]
+    (is (= 999 (get-in result [:evidence :result]))
+        "the else branch is taken (test is 0/falsy)")
+    (is (= {:capacity 4096 :used 1} (get-in result [:report :heap]))
+        "pair still ran -- a real let evaluates its binding before the if is even
+         reached, unlike substitution, which would inline `pair` only into the
+         (never-executed) then-branch and never run it at all")))
+
+(deftest nested-lets-compose-with-correct-depth-relative-addressing
+  (let [{:keys [envelope trust]}
+        (signed "(defn main []
+                   (let [a (pair 10 20)]
+                     (let [b (pair 30 40)]
+                       (+ (pair-first a) (pair-second b)))))"
+               {:allow #{}})
+        {:keys [trust options]} (execution-options trust)
+        result (executor/execute envelope trust {:allow #{}} {:args []} options)]
+    (is (= 50 (get-in result [:evidence :result]))
+        "pair-first of the outer let's binding (10) + pair-second of the inner let's
+         binding (40) -- proves the outer binding is still reachable at the correct
+         stack depth after the inner let has pushed its own slot")
+    (is (= {:capacity 4096 :used 2} (get-in result [:report :heap])))))
+
+(deftest let-composes-with-recursion-within-the-fuel-budget
+  (let [{:keys [envelope trust]}
+        (signed "(defn count-down [n acc]
+                   (let [_touch (pair n acc)]
+                     (if (= n 0) acc (count-down (- n 1) (+ acc 1)))))
+                 (defn main [] (count-down 50 0))"
+               {:allow #{}})
+        {:keys [trust options]} (execution-options trust)
+        result (executor/execute envelope trust {:allow #{}} {:args []} options)]
+    (is (= 50 (get-in result [:evidence :result]))
+        "50 levels of ordinary (non-tail-optimized self-call from inside a let,
+         intentionally falling back off the tail-call fast path -- see emit-call's
+         zero-temp-depth guard) recursion, well within the 256-call fuel budget")
+    (is (= {:capacity 4096 :used 51} (get-in result [:report :heap]))
+        "one pair per call: the initial call plus 50 recursive calls")))
