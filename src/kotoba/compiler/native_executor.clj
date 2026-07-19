@@ -588,7 +588,7 @@
                             (map str args))
               started-at (quot (System/currentTimeMillis) 1000)
               process (run-process command {"KEXE_STRUCTURED_REPORT" "1"}
-                                   {:timeout-ms (if (= :windows host-os-value) 15000 5000)
+                                   {:timeout-ms (if (= :windows host-os-value) 60000 5000)
                                     :output-limit 65536})
               finished-at (quot (System/currentTimeMillis) 1000)
               report (edn/read-string (str/trim (:stdout process)))
