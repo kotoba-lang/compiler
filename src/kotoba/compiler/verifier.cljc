@@ -38,7 +38,8 @@
 (def ^:private heap-operations '{pair 2 pair-first 1 pair-second 1})
 (def ^:private kgraph-operations '{kgraph-assert! 3 kgraph-get 2 kgraph-count 1 kgraph-entity-at 2})
 (def ^:private string-operations '{string-byte-length 1 string=? 2 string-concat 2})
-(def ^:private xml-operations '{xml-path-count 2 xml-path-text 3 xml-path-attr 4})
+(def ^:private xml-operations
+  '{xml-path-count 2 xml-name-count 2 xml-name-text 3 xml-path-text 3 xml-path-attr 4})
 (def ^:private decimal-operations '{decimal-f64-parse 1 decimal-f64x3-parse 1})
 (def ^:private string-literal-byte-limit 4096)
 

@@ -144,7 +144,8 @@
 (def sequencing-operations '#{do})
 (def string-operations '{string-byte-length 1 string=? 2 string-concat 2
                          string-replace-all 3 keyword-from-string 1 keyword-name 1})
-(def xml-operations '{xml-path-count 2 xml-path-text 3 xml-path-attr 4})
+(def xml-operations
+  '{xml-path-count 2 xml-name-count 2 xml-name-text 3 xml-path-text 3 xml-path-attr 4})
 (def decimal-operations '{decimal-f64-parse 1 decimal-f64x3-parse 1})
 (def f64-operations
   '{f64-to-bits 1 f64-from-bits 1
@@ -2039,6 +2040,17 @@
       (do (doseq [[arg type] (map vector args types)]
             (require-expression-type! type :string arg))
           :i64)
+
+      (= op 'xml-name-count)
+      (do (doseq [[arg type] (map vector args types)]
+            (require-expression-type! type :string arg))
+          :i64)
+
+      (= op 'xml-name-text)
+      (do (require-expression-type! (nth types 0) :string (nth args 0))
+          (require-expression-type! (nth types 1) :string (nth args 1))
+          (require-expression-type! (nth types 2) :i64 (nth args 2))
+          [:option :string])
 
       (= op 'xml-path-text)
       (do (require-expression-type! (nth types 0) :string (nth args 0))

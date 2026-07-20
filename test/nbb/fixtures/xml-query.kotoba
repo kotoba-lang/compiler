@@ -1,10 +1,16 @@
 (ns fixture.xml-query
-  (:export [main count-links link-text link-name]))
+  (:export [main count-links count-elements element-text link-text link-name]))
 
 (defn main [] 0)
 
 (defn count-links [xml :string] :i64
   (xml-path-count xml "robot/link"))
+
+(defn count-elements [xml :string name :string] :i64
+  (xml-name-count xml name))
+
+(defn element-text [xml :string name :string index :i64] [:option :string]
+  (xml-name-text xml name index))
 
 (defn link-text [xml :string index :i64] [:option :string]
   (xml-path-text xml "robot/link" index))

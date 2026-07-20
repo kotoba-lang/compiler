@@ -278,7 +278,7 @@
                       i32-shift-left i32-shift-right u32-shift-right xorshift32
                       string-byte-length map-get vector-count vector-get vector-f64-count
                       vector-at hetero-vector-count typed-set-count
-                      typed-map-count xml-path-count string-index-count
+                      typed-map-count xml-path-count xml-name-count string-index-count
                       disjoint-set-i64-count document-count} op) :i64
         (= op 'f64-to-bits) :i64
         (= op 'f64-from-bits) :f64
@@ -307,7 +307,7 @@
         (contains? '#{document-contains document-equal?} op) :bool
         (contains? '#{string-concat string-replace-all keyword-name} op) :string
         (contains? '#{keyword-from-string document-kind} op) :keyword
-        (contains? '#{xml-path-text xml-path-attr} op) [:option :string]
+        (contains? '#{xml-name-text xml-path-text xml-path-attr} op) [:option :string]
         (= op 'decimal-f64-parse) [:option :f64]
         (= op 'decimal-f64x3-parse) [:option [:vector [:f64 :f64 :f64]]]
         (= op 'vector-new) :vector-i64
