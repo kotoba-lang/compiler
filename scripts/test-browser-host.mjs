@@ -34,7 +34,9 @@ const typedHosted = await instantiateKotoba(typedMain42);
 assert.deepEqual(typedHosted.typedAbi, {
   version: 5,
   descriptors: [["option", "i64"]],
-  literals: []
+  literals: [],
+  schemas: new Map(),
+  contracts: new Map()
 });
 assert.ok(Object.isFrozen(typedHosted.typedAbi));
 
@@ -76,6 +78,6 @@ await assert.rejects(
 assert.equal(browserProfile.format, "kotoba.browser-host/v1");
 assert.equal(browserProfile.maxModuleBytes, 1048576);
 assert.equal(browserProfile.pairCapacity, 4096);
-assert.equal(browserProfile.typedAbiVersion, 9);
+assert.equal(browserProfile.typedAbiVersion, 10);
 assert.ok(Object.isFrozen(browserProfile));
 console.log("browser-host: admission, identity, execution, and denial vectors passed");
