@@ -608,6 +608,13 @@ function createTypedRuntime(abi, typedCapCall, allow) {
         reject("invalid-xml", "XML declaration is invalid");
       cursor = end + 2;
     }
+    comments();
+    if (text.startsWith("<!DOCTYPE", cursor)) {
+      const end = text.indexOf(">", cursor + 9);
+      if (end < 0 || !/^<!DOCTYPE[ \t\r\n]+html[ \t\r\n]*>$/u.test(text.slice(cursor, end + 1)))
+        reject("invalid-xml", "XML doctype is not the sealed XHTML5 declaration");
+      cursor = end + 1;
+    }
     comments(); element(1, ""); comments(); skip();
     if (cursor !== text.length) reject("invalid-xml", "XML trailing content is rejected");
     return Object.freeze(output.map(node => Object.freeze(node)));

@@ -81,15 +81,15 @@
   (let [source
         "(ns xml.query (:export [main count-links count-elements element-text link-text link-name]))
          (defn main [] 0)
-         (defn count-links [xml :string] :i64 (xml-path-count xml \"robot/link\"))
+         (defn count-links [xml :string] :i64 (xml-path-count xml \"html/robot/link\"))
          (defn count-elements [xml :string name :string] :i64 (xml-name-count xml name))
          (defn element-text [xml :string name :string index :i64] [:option :string]
            (xml-name-text xml name index))
          (defn link-text [xml :string index :i64] [:option :string]
-           (xml-path-text xml \"robot/link\" index))
+           (xml-path-text xml \"html/robot/link\" index))
          (defn link-name [xml :string index :i64] [:option :string]
-           (xml-path-attr xml \"robot/link\" index \"name\"))"
-        xml "<?xml version=\"1.0\" encoding=\"utf-8\"?><robot><link name=\"base\"> Hello <span>typed</span> Wasm </link><link name=\"tip\"/></robot>"
+           (xml-path-attr xml \"html/robot/link\" index \"name\"))"
+        xml "<?xml version=\"1.0\" encoding=\"utf-8\"?><!DOCTYPE html><html><robot><link name=\"base\"> Hello <span>typed</span> Wasm </link><link name=\"tip\"/></robot></html>"
         compiled (compiler/compile-source source :wasm32-browser-kotoba-v1)
         probe (node-probe
                compiled

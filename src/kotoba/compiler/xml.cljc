@@ -147,6 +147,14 @@
               (trap! :invalid-xml-declaration)))
           (vreset! cursor (+ end 2))))
       (comments!)
+      (when (starts? "<!DOCTYPE")
+        (let [end (str/index-of text ">" (+ @cursor 9))]
+          (when (nil? end) (trap! :invalid-xml-doctype))
+          (let [declaration (subs text @cursor (inc end))]
+            (when-not (re-matches #"<!DOCTYPE[ \t\r\n]+html[ \t\r\n]*>" declaration)
+              (trap! :invalid-xml-doctype)))
+          (vreset! cursor (inc end))))
+      (comments!)
       (element! 1 "")
       (comments!)
       (skip!)
