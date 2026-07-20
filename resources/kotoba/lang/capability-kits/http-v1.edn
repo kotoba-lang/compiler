@@ -1,0 +1,28 @@
+{:kotoba.capability-kit/name :http
+ :kotoba.capability-kit/version 1
+ :capability {:name :http/post :id 4}
+ :semantics {:operation :post
+             :schemes #{:https}
+             :destination-authority :host-exact-origin-allowlist
+             :redirects :transport-must-not-follow-outside-allowlist
+             :ambient-network false
+             :execution :synchronous-reference}
+ :limits {:url-bytes 4096 :headers 32 :body-bytes 65536 :timeout-ms [1 30000]}
+ :request
+ [:record :kotoba.http/post-request
+  [[:url :string]
+   [:headers [:set [:record :kotoba.http/header
+                    [[:name :keyword] [:value :string]]]]]
+   [:body :string]
+   [:timeout-ms :i64]]]
+ :result
+ [:variant :kotoba.http/result
+  [[:ok [:record :kotoba.http/response
+          [[:status :i64]
+           [:headers [:set [:record :kotoba.http/header
+                            [[:name :keyword] [:value :string]]]]]
+           [:body :string]]]]
+   [:error [:record :kotoba.http/error
+             [[:code :keyword] [:message :string] [:retryable :bool]]]]]]
+ :qualification {:reference :implemented :wasm-aot :pending
+                 :native-aot :pending :jit :pending}}
