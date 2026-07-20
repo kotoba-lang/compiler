@@ -324,6 +324,22 @@
                     "x['keyword-match']()!==1n)process.exit(2);"))]
     (is (zero? (:exit probe)) (:err probe))))
 
+(deftest string-equality-remains-i64-through-recursive-reference-calls
+  (let [source
+        "(ns typed.recursive-string (:export [main matches]))
+         (defn matches [target :string remaining :i64] :i64
+           (if (= remaining 0)
+             (string=? target \"root\")
+             (matches target (- remaining 1))))
+         (defn main [] :i64 (+ (matches \"root\" 3) (matches \"other\" 2)))"
+        compiled (compiler/compile-source source :wasm32-kotoba-v1)
+        probe (node-probe
+               compiled
+               (str "const x=h.instance.exports;"
+                    "if(x.main()!==1n||x.matches('root',4n)!==1n||"
+                    "x.matches('other',4n)!==0n)process.exit(2);"))]
+    (is (zero? (:exit probe)) (:err probe))))
+
 (deftest typed-if-needs-no-unsealed-synthetic-boolean-literal
   (let [source
         "(ns typed.import-like (:export [main]))
