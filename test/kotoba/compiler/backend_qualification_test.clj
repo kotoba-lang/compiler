@@ -22,7 +22,9 @@
       (is (= 9 (:capability-count receipt)))
       (is (= :passed (:manifest-gate receipt)))
       (is (= :pending (:execution-status receipt)))
-      (is (seq (:gaps receipt))))))
+      (is (seq (:gaps receipt)))
+      (when (= :cljs backend)
+        (is (= [:full-i64-structured-values] (:gaps receipt)))))))
 
 (deftest stale-manifest-and-false-qualification-claims-fail-closed
   (is (thrown-with-msg?

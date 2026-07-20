@@ -17,7 +17,15 @@
   fuel-exhaustion global-depletion property) was independently verified by
   hand before this commit; see ADR-2607151500."
   (:require [clojure.test :refer [deftest is testing]]
-            [kotoba.compiler.core :as compiler]))
+            [clojure.java.shell :as shell]
+            [kotoba.compiler.core :as compiler]
+            [kotoba.compiler.provider.clock :as clock]
+            [kotoba.compiler.provider.http :as http]
+            [kotoba.compiler.provider.llm :as llm]
+            [kotoba.compiler.provider.log :as log]
+            [kotoba.compiler.provider.state :as state]
+            [kotoba.compiler.provider.storage :as storage]
+            [kotoba.compiler.provider.ui :as ui]))
 
 (defn- compile-cljs
   ([source] (compiler/compile-source source :cljs-kotoba-v1))
@@ -174,6 +182,145 @@
     (call ns 'set-cap-dispatch! (fn [cap-id value] (+ (* cap-id 100) value)))
     (is (= 142 (call ns 'main))
         "cap-id 1 and value 42 both reach the installed host function unchanged")))
+
+;; ───────────────────────── typed provider ABI ─────────────────────────
+
+(defn- typed-function [name capability request-type result-type]
+  (str "(defn " name " [request " (pr-str request-type) "] "
+       (pr-str result-type) " (typed-cap-call " capability " "
+       (pr-str request-type) " " (pr-str result-type) " request))"))
+
+(defn- application-provider-source []
+  (str "(ns app.cljs-providers (:export [state ui-commit ui-event http llm storage clock log-append log-read]) "
+       "(:capabilities #{:state/transact :ui/commit :ui/next-event :http/post "
+       ":llm/generate :storage/transact :clock/now :log/append :log/read}))"
+       (typed-function "state" ":state/transact" state/request-type state/result-type)
+       (typed-function "ui-commit" ":ui/commit" ui/commit-request-type ui/commit-result-type)
+       (typed-function "ui-event" ":ui/next-event" ui/event-request-type ui/event-result-type)
+       (typed-function "http" ":http/post" http/request-type http/result-type)
+       (typed-function "llm" ":llm/generate" llm/request-type llm/result-type)
+       (typed-function "storage" ":storage/transact" storage/request-type storage/result-type)
+       (typed-function "clock" ":clock/now" clock/request-type clock/result-type)
+       (typed-function "log-append" ":log/append" log/append-request-type log/append-result-type)
+       (typed-function "log-read" ":log/read" log/read-request-type log/read-result-type)))
+
+(def application-effects
+  {:allow #{[:cap/call 4] [:cap/call 5] [:cap/call 6] [:cap/call 7]
+            [:cap/call 8] [:cap/call 9] [:cap/call 10] [:cap/call 11]
+            [:cap/call 12]}})
+
+(deftest typed-provider-dispatch-runs-all-application-kit-contracts
+  (let [ui-kit (ui/create-provider)
+        log-kit (log/create-provider)
+        providers
+        {4 (http/provider {:allowed-origins #{"https://api.example.test"}
+                           :transport (fn [_] {:status 200 :headers {} :body "ok"})})
+         5 (get-in log-kit [:providers 5])
+         6 (get-in log-kit [:providers 6])
+         7 (clock/provider {:wall-now (constantly 1700000000000)
+                            :monotonic-now (constantly 1)})
+         8 (state/provider)
+         9 (get-in ui-kit [:providers 9])
+         10 (get-in ui-kit [:providers 10])
+         11 (llm/provider {:allowed-models #{:example/text-v1}
+                           :transport (fn [_] {:text "ok" :finish-reason :llm/stop
+                                              :input-tokens 1 :output-tokens 1})})
+         12 (storage/provider {:storage-namespace :example/data
+                               :transport (fn [_] {:tag :missing})})}
+        compiled (compile-cljs (application-provider-source) application-effects)
+        ns (eval-in-fresh-ns (:source compiled))
+        invoke #(apply call ns %)]
+    (call ns 'set-typed-providers! {:allow (set (keys providers)) :providers providers})
+    (is (= [state/result-type :missing false]
+           (invoke ['state [state/request-type :get [state/get-type :profile/name]]])))
+    (is (= [ui/commit-result-type 1 0]
+           (invoke ['ui-commit [ui/commit-request-type 0 [ui/node-set-type []]]])))
+    (is (= [ui/event-result-type false]
+           (invoke ['ui-event [ui/event-request-type 0]])))
+    (is (= [http/result-type :ok
+            [http/response-type 200 [http/header-set-type []] "ok"]]
+           (invoke ['http [http/request-type "https://api.example.test/v1"
+                           [http/header-set-type []] "" 1000]])))
+    (is (= [llm/result-type :ok
+            [llm/completion-type "ok" :llm/stop [llm/usage-type 1 1]]]
+           (invoke ['llm [llm/request-type :example/text-v1 "" "hello" 16 0]])))
+    (is (= [storage/result-type :missing false]
+           (invoke ['storage [storage/request-type :get
+                              [storage/get-type :profile/name]]])))
+    (is (= [clock/result-type :wall [clock/wall-type 1700000000000 1]]
+           (invoke ['clock [clock/request-type :wall false]])))
+    (is (= [log/append-result-type 1]
+           (invoke ['log-append [log/append-request-type :log/info :app/ready
+                                 "ready" [log/field-set-type []]]])))
+    (is (= 1 (nth (invoke ['log-read [log/read-request-type 0 1]]) 2)))))
+
+(deftest typed-provider-boundary-denies-and-validates-both-sides
+  (let [request-type [:record :demo.cljs/request [[:text :string]]]
+        result-type [:record :demo.cljs/result [[:ok :bool]]]
+        source (str "(ns demo.cljs (:export [invoke]) (:capabilities #{:http/post}))"
+                    (typed-function "invoke" ":http/post" request-type result-type))
+        compiled (compile-cljs source {:allow #{[:cap/call 4]}})
+        ns (eval-in-fresh-ns (:source compiled))
+        request [request-type "hello"]]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"typed capability denied"
+                          (call ns 'invoke request)))
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo #"typed provider contract mismatch"
+         (call ns 'set-typed-providers!
+               {:allow #{4}
+                :providers {4 {:request-type :string :result-type result-type
+                               :invoke identity}}})))
+    (call ns 'set-typed-providers!
+          {:allow #{4}
+           :providers {4 {:request-type request-type :result-type result-type
+                          :invoke (fn [_] [request-type "forged"])}}})
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"invalid-typed-value"
+                          (call ns 'invoke request)))
+    (let [called? (atom false)]
+      (call ns 'set-typed-providers!
+            {:allow #{4}
+             :providers {4 {:request-type request-type :result-type result-type
+                            :invoke (fn [_] (reset! called? true)
+                                      [result-type true])}}})
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"invalid-typed-value"
+                            (call ns 'invoke [request-type 1])))
+      (is (false? @called?))
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo #"invalid-typed-value"
+           (call ns 'invoke [request-type (apply str (repeat 16385 "😀"))])))
+      (is (false? @called?)))))
+
+(deftest real-nbb-executes-the-typed-provider-codec
+  (let [request-type [:record :demo.nbb/request
+                      [[:name :string] [:tags [:set :keyword]]]]
+        result-type [:record :demo.nbb/result [[:accepted [:option :bool]]]]
+        source (str "(ns demo.nbb (:export [invoke]) (:capabilities #{:http/post}))"
+                    (typed-function "invoke" ":http/post" request-type result-type))
+        compiled (compile-cljs source {:allow #{[:cap/call 4]}})
+        request [request-type "ことば😀" [[:set :keyword] [:app/safe]]]
+        result [result-type [[:option :bool] true true]]
+        script (doto (java.io.File/createTempFile "kotoba-typed-provider-" ".cljs")
+                 (.deleteOnExit))]
+    (spit script
+          (str (:source compiled) "\n"
+               "(set-typed-providers! "
+               (pr-str {:allow #{4}
+                        :providers {4 {:request-type request-type
+                                       :result-type result-type
+                                       :invoke (list 'fn ['request] result)}}}) ")\n"
+               "(when-not (= " (pr-str result) " (invoke " (pr-str request) ")) "
+               "  (throw (ex-info \"typed-provider-nbb-mismatch\" {})))\n"
+               "(println \"typed-provider-nbb-ok\")\n"))
+    (let [execution (shell/sh "npx" "nbb" (.getPath script))]
+      (is (zero? (:exit execution)) (:err execution))
+      (is (= "typed-provider-nbb-ok\n" (:out execution))))))
+
+(deftest cljs-typed-admission-remains-narrow-to-boundaries
+  (is (thrown-with-msg?
+       clojure.lang.ExceptionInfo #"typed values currently require"
+       (compile-cljs
+        "(defn main [] [:record :demo/one [[:x :i64]]]
+           (record [:record :demo/one [[:x :i64]]] 1))"))))
 
 ;; ───────────────────────── cross-backend consistency ─────────────────────────
 

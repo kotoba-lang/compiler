@@ -13,5 +13,5 @@
            :evidence {}}
   :cljs {:manifest-gate :required
          :execution-status :pending
-         :gaps [:typed-provider-dispatch-abi :request-result-host-codec]
+         :gaps [:full-i64-structured-values]
          :evidence {}}}}

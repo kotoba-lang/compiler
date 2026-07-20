@@ -67,13 +67,16 @@
                              :floating-point-policy floating-point-policy})))
         _ (when (and (= :kotoba.hir/v3 (:format hir))
                      (not (contains? #{:js-kotoba-v1 :wasm32-kotoba-v1} backend))
+                     (not (and (= :cljs-kotoba-v1 backend)
+                               (ir/only-cljs-provider-typed-features? hir)))
                      (not (and (contains? #{:x86_64-kotoba-v1 :aarch64-kotoba-v1} backend)
                                (ir/only-string-typed-features? hir))))
-            (throw (ex-info "typed values currently require the kotoba-script web target, typed Wasm target, or (native targets) string-only typed features"
+            (throw (ex-info "typed values currently require the kotoba-script web target, typed Wasm/CLJS target, or (native targets) string-only typed features"
                             {:phase :target :target target :backend backend
                              :value-profile :kotoba.value/typed-v1})))
         _ (when (and (nil? (:entry hir))
-                     (not (contains? #{:js-kotoba-v1 :wasm32-kotoba-v1} backend)))
+                     (not (contains? #{:js-kotoba-v1 :wasm32-kotoba-v1
+                                      :cljs-kotoba-v1} backend)))
             (throw (ex-info "entryless libraries currently require the kotoba-script web target or Wasm target"
                             {:phase :target :target target :backend backend})))
         admission (admission/check hir policy)
