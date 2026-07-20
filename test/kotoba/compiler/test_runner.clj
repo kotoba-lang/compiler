@@ -30,6 +30,7 @@
             [kotoba.compiler.signing-test]
             [kotoba.compiler.source-path-test]
             [kotoba.compiler.typed-value-conformance-test]
+            [kotoba.compiler.typed-capability-test]
             [kotoba.compiler.wasm-typed-test]
             [kotoba.compiler.value-test]
             [kotoba.compiler.verifier-profile-test]))
@@ -59,6 +60,7 @@
                                           'kotoba.compiler.signing-test
                                           'kotoba.compiler.source-path-test
                                           'kotoba.compiler.typed-value-conformance-test
+                                          'kotoba.compiler.typed-capability-test
                                           'kotoba.compiler.wasm-typed-test
                                           'kotoba.compiler.native-executor-test
                                           'kotoba.compiler.receipt-test

@@ -629,6 +629,17 @@
           (let [result (cap-call cap-id (eval-expr value env functions fuel heap call-stack cap-call))]
             #?(:clj (long result) :cljs (i64/->bigint result))))
 
+        (= op 'typed-cap-call)
+        (let [[cap-id request-type result-type request-form] args]
+          (when-not cap-call
+            (trap! :capability-denied {:capability cap-id :typed true}))
+          (let [request (eval-expr request-form env functions fuel heap call-stack cap-call)]
+            (validate-runtime-value! request request-type
+                                     {:capability cap-id :boundary :request})
+            (validate-runtime-value! (cap-call cap-id request-type result-type request)
+                                     result-type
+                                     {:capability cap-id :boundary :result})))
+
         (= op 'pair)
         (let [[left right] (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
           (allocate-pair! heap left right))
@@ -1393,7 +1404,7 @@
   wraps modulo 2^64; bounded strings preserve Unicode text; invalid values,
   division, and resource exhaustion trap."
   ([kir function-name args] (execute kir function-name args {}))
-  ([kir function-name args {:keys [fuel cap-call pair-capacity kgraph-capacity]
+  ([kir function-name args {:keys [fuel cap-call typed-cap-call pair-capacity kgraph-capacity]
                             :or {fuel default-fuel pair-capacity default-pair-capacity
                                  kgraph-capacity default-kgraph-capacity}}]
    (when (and (contains? kir :exports)
@@ -1410,7 +1421,17 @@
    (when-not (and (integer? kgraph-capacity) (<= 0 kgraph-capacity default-kgraph-capacity))
      (throw (ex-info "kgraph capacity is outside runtime limits"
                      {:phase :ir :kgraph-capacity kgraph-capacity})))
-   (let [functions (into {} (map (juxt :name identity) (:functions kir)))
+   (let [cap-dispatch (when (or cap-call typed-cap-call)
+                        (fn
+                          ([cap-id value]
+                           (if cap-call
+                             (cap-call cap-id value)
+                             (trap! :capability-denied {:capability cap-id})))
+                          ([cap-id request-type result-type request]
+                           (if typed-cap-call
+                             (typed-cap-call cap-id request-type result-type request)
+                             (trap! :capability-denied {:capability cap-id :typed true})))))
+         functions (into {} (map (juxt :name identity) (:functions kir)))
          function (get functions function-name)
          param-types (or (:param-types function)
                          (vec (repeat (count (:params function)) :i64)))]
@@ -1441,7 +1462,7 @@
                                     functions
                                     (volatile! fuel) {:cells (volatile! []) :capacity pair-capacity
                                                       :datoms (volatile! []) :kgraph-capacity kgraph-capacity}
-                                    [] cap-call)]
+                                    [] cap-dispatch)]
        #?(:clj
           ;; A host JVM with a small native stack can exhaust that stack just
           ;; before the fixed Kotoba call budget does.  Host resource errors

@@ -172,7 +172,7 @@
              (set (keys f64-operations))
              (set (keys f32-operations))
              (set (keys i32-operations))
-             '#{let if cap-call ns defn defn- some some? nil? vector-i64 vector-f64 vector-new vector-f64-new
+             '#{let if cap-call typed-cap-call ns defn defn- some some? nil? vector-i64 vector-f64 vector-new vector-f64-new
                 hetero-vector typed-set record match-result match-variant match-option}))
 (def max-functions 1024)
 (def max-arity-clauses 8)
@@ -1251,6 +1251,15 @@
           (list* 'cap-call (resolve-capability-keyword! (first args) form)
                  (map desugar-expr (rest args)))
           (apply list op (map desugar-expr args)))
+        typed-cap-call
+        (if (and (seq args) (keyword? (first args)))
+          (let [[capability request-type result-type request & extra] args]
+            (list* 'typed-cap-call
+                   (resolve-capability-keyword! capability form)
+                   request-type result-type
+                   (when (some? request) (desugar-expr request))
+                   (map desugar-expr extra)))
+          (apply list op (map desugar-expr args)))
         xorshift32
         (do
           (when-not (= 1 (count args))
@@ -1350,6 +1359,14 @@
           (when-not (and (= 2 (count call-args)) (kotoba-integer? cap-id) (<= 0 cap-id 255))
             (reject! "cap-call requires a literal capability id in [0,255] and one value" form))
           (validate-expr value locals functions (inc depth) budget))
+
+        (= op 'typed-cap-call)
+        (let [[cap-id request-type result-type request :as call-args] args]
+          (when-not (and (= 4 (count call-args)) (kotoba-integer? cap-id) (<= 0 cap-id 255))
+            (reject! "typed-cap-call requires a literal capability id in [0,255], request type, result type, and one request" form))
+          (validate-value-type! request-type)
+          (validate-value-type! result-type)
+          (validate-expr request locals functions (inc depth) budget))
 
         (contains? arithmetic op)
             (do (when (or (empty? args) (and (contains? '#{quot bit-xor bit-and} op) (not= 2 (count args))))
@@ -2007,6 +2024,13 @@
                (reject! "if branches must have the same value type" form))
              then-type)
         do (last (mapv #(infer-expression-type % locals signatures) args))
+        typed-cap-call
+        (let [[_ request-type result-type request] args]
+          (validate-value-type! request-type)
+          (validate-value-type! result-type)
+          (require-expression-type! (infer-expression-type request locals signatures)
+                                    request-type request)
+          result-type)
         result-ok-of
         (let [[type payload] args]
           (validate-value-type! type)
@@ -2297,6 +2321,9 @@
                     (= op 'cap-call)
                     (do (vswap! effects conj [:cap/call (first args)])
                         (walk (second args)))
+                    (= op 'typed-cap-call)
+                    (do (vswap! effects conj [:cap/call (first args)])
+                        (walk (nth args 3)))
                     (contains? function-names op)
                     (do (vswap! calls conj op) (doseq [arg args] (walk arg)))
                     :else (doseq [arg args] (walk arg))))
