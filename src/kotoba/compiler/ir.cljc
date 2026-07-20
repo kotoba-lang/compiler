@@ -14,6 +14,7 @@
 (def ^:private default-fuel 512)
 (def ^:private default-pair-capacity 4096)
 (def ^:private default-kgraph-capacity 4096)
+(def ^:dynamic *runtime-schemas* nil)
 
 ;; Shared between `kotoba.compiler.core` (JVM `clojure -M:run` path) and
 ;; `kotoba.compiler.nbb.cli` (nbb-native fast path) -- both admit
@@ -334,7 +335,11 @@
        (* exponent 2.3190468138462996e-17))))
 
 (defn- validate-runtime-value! [runtime-value type position]
-  (case type
+  (if (and (vector? type) (= :ref (first type)) (= 2 (count type)))
+    (if-let [descriptor (get *runtime-schemas* (second type))]
+      (validate-runtime-value! runtime-value descriptor position)
+      (trap! :unknown-schema-reference {:schema (second type) :position position}))
+    (case type
     :i64
     (when-not #?(:clj (and (integer? runtime-value)
                             (<= Long/MIN_VALUE runtime-value Long/MAX_VALUE))
@@ -404,7 +409,7 @@
       (value/bounded-typed-value! type runtime-value)
       (catch #?(:clj Exception :cljs :default) error
         (trap! :invalid-parametric-value
-               {:type type :position position :message (ex-message error)}))))
+               {:type type :position position :message (ex-message error)})))))
   runtime-value)
 
 ;; #?(:cljs ...): every i64 arithmetic op coerces both operands via
@@ -1437,7 +1442,12 @@
                          (vec (repeat (count (:params function)) :i64)))]
      (when-not (and (sequential? args) (= (count args) (count param-types)))
        (throw (ex-info "arguments do not match function arity" {:phase :ir :args args})))
-     (doseq [[arg type] (map vector args param-types)]
+     (doseq [[arg declared-type] (map vector args param-types)]
+       (let [type (if (and (vector? declared-type) (= :ref (first declared-type)))
+                    (or (get (:schemas kir) (second declared-type))
+                        (throw (ex-info "argument references an unknown schema"
+                                        {:phase :ir :schema (second declared-type)})))
+                    declared-type)]
        (case type
          :i64 (when-not #?(:clj (and (integer? arg) (<= Long/MIN_VALUE arg Long/MAX_VALUE))
                           :cljs (and (or (i64/bigint-value? arg) (integer? arg))
@@ -1452,8 +1462,9 @@
          :result-i64 (value/bounded-result-i64! arg)
          :vector-i64 (value/bounded-vector-i64! arg)
          :vector-f64 (value/bounded-vector-f64! arg)
-         (value/bounded-typed-value! type arg)))
-     (let [invoke #(invoke-function function
+         (value/bounded-typed-value! type arg))))
+     (let [invoke #(binding [*runtime-schemas* (:schemas kir)]
+                     (invoke-function function
                                     (mapv (fn [arg type]
                                             (if (= type :i64)
                                               (#?(:clj long :cljs i64/->bigint) arg)
@@ -1462,7 +1473,7 @@
                                     functions
                                     (volatile! fuel) {:cells (volatile! []) :capacity pair-capacity
                                                       :datoms (volatile! []) :kgraph-capacity kgraph-capacity}
-                                    [] cap-dispatch)]
+                                    [] cap-dispatch))]
        #?(:clj
           ;; A host JVM with a small native stack can exhaust that stack just
           ;; before the fixed Kotoba call budget does.  Host resource errors

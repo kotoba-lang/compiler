@@ -474,6 +474,10 @@
                       (concat (emit-test test env)
                               [0x04 (typed/wasm-type result-type)]
                               (emit* then env) [0x05] (emit* else env) [0x0b]))
+                    (= op 'typed-cap-call)
+                    (let [[cap-id _ _ request] args]
+                      (concat (i32-const cap-id) (emit* request env)
+                              [0x10 (get intrinsic-indices 'typed-cap-call)]))
                     (= op 'f64-to-bits)
                     (let [value-local (allocate! 0x7c)]
                       (concat (emit* (first args) env) [::local-set value-local]
@@ -1047,6 +1051,7 @@
         exported-names (set (or (:exports kir) (map :name functions)))
         exported-functions (filterv #(contains? exported-names (:name %)) functions)
         has-cap? (contains? (set (map first (:effects kir))) :cap/call)
+        has-typed-cap? (uses-operation? functions '#{typed-cap-call})
         heap-ops (let [found (volatile! #{})]
                    (letfn [(walk [form]
                              (cond
@@ -1113,6 +1118,9 @@
                          (when has-decimal-x3?
                            [['decimal-f64x3-parse "kotoba:typed" "decimal-f64x3-parse" [0x60 1 0x6f 1 0x6f]]]))))
         imports (vec (concat typed-imports
+                      (when has-typed-cap?
+                        [['typed-cap-call "kotoba:typed" "cap-call"
+                          [0x60 2 0x7f 0x6f 1 0x6f]]])
                       (when has-cap? [['cap-call "kotoba:cap" "call"
                                        [0x60 2 0x7e 0x7e 1 0x7e]]])
                       (when (seq heap-ops)

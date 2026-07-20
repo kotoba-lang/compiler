@@ -42,3 +42,24 @@
        clojure.lang.ExceptionInfo #"expression type mismatch"
        (compiler/check-source
         "(defn main [] :string (typed-cap-call 4 :string :string 1))"))))
+
+(deftest schema-reference-is-closed-and-resolved-at-the-runtime-boundary
+  (let [schema-type [:record :demo/request [[:url :string]]]
+        source "(ns demo.ref-cap
+                  (:export [invoke])
+                  (:capabilities #{:http/post})
+                  (:schemas {:demo/request [:record :demo/request [[:url :string]]] }))
+                (defn invoke [request [:ref :demo/request]] [:ref :demo/request]
+                  (typed-cap-call :http/post [:ref :demo/request] [:ref :demo/request] request))"
+        kir (ir/lower (:hir (compiler/check-source source {:allow #{[:cap/call 4]}})))
+        request [schema-type "https://example.test"]]
+    (is (= request
+           (ir/execute kir 'invoke [request]
+                       {:typed-cap-call (fn [_ request-ref result-ref value]
+                                          (is (= [:ref :demo/request] request-ref result-ref))
+                                          value)})))
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo #"outside the closed namespace table"
+         (compiler/check-source
+          "(ns missing.ref (:export [identity]))
+           (defn identity [x [:ref :missing/schema]] [:ref :missing/schema] x)")))))
