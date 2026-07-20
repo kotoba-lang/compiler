@@ -115,7 +115,7 @@
          (contains? '#{document-null document-bool document-i64 document-f64
                       document-string document-keyword document-vector document-map
                       document-count document-vector-at document-vector-assoc
-                      document-vector-conj document-vector-drop
+                      document-vector-conj document-vector-drop document-vector-remove
                       document-contains document-get document-assoc
                       document-dissoc document-merge document-string-value document-keyword-value
                       document-bool-value document-i64-value document-f64-value}
@@ -315,6 +315,7 @@
         (contains? '#{document-null document-bool document-i64 document-f64
                       document-string document-keyword document-vector document-map
                       document-vector-assoc document-vector-conj document-vector-drop
+                      document-vector-remove
                       document-assoc document-dissoc document-merge} op) :document
         (contains? '#{document-get document-vector-at} op) [:option :document]
         (= op 'document-string-value) [:option :string]

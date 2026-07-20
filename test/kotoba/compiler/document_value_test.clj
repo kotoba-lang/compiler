@@ -87,7 +87,7 @@
                   (reduce (fn [item _] ["vector" [item]]) ["null"] (range 9)))))))
 
 (def vector-source
-  "(ns document.vector (:export [main first-item kind changed tail missing bad-assoc bad-drop]))
+  "(ns document.vector (:export [main first-item kind changed tail removed missing bad-assoc bad-drop]))
    (defn main [] :i64 (first-item))
    (defn items [] :document (document-vector (document-i64 1) (document-i64 2)))
    (defn first-item [] :i64
@@ -103,6 +103,7 @@
        (document-vector-assoc (items) 1 (document-i64 7))
        (document-i64 9)))
    (defn tail [] :document (document-vector-drop (changed) 1))
+   (defn removed [] :document (document-vector-remove (changed) 1))
    (defn missing [] :bool
      (option-some?-of [:option :document] (document-vector-at (items) 9)))
    (defn bad-assoc [] :document (document-vector-assoc (items) -1 (document-null)))
@@ -117,16 +118,18 @@
                   (is (= :fixed (execute 'kind)))
                   (is (= ["vector" [["i64" 7] ["i64" 9]]]
                          (execute 'tail)))
+                  (is (= ["vector" [["i64" 1] ["i64" 9]]]
+                         (execute 'removed)))
                   (is (false? (execute 'missing))))
         js-probe (script-probe
                   script
                   (str "if(x['first-item']()!==1n||x.kind()!==':fixed'||x.missing()!==false)process.exit(2);"
-                       "const t=x.tail();if(t[1].length!==2||t[1][0][1]!==7n||t[1][1][1]!==9n)process.exit(3);"
+                       "const t=x.tail(),r=x.removed();if(t[1].length!==2||t[1][0][1]!==7n||t[1][1][1]!==9n||r[1].length!==2||r[1][1][1]!==9n)process.exit(3);"
                        "for(const name of ['bad-assoc','bad-drop']){let rejected=false;try{x[name]()}catch(e){rejected=true}if(!rejected)process.exit(4)}"))
         wasm-probe (node-probe
                     wasm
                     (str "const x=h.instance.exports;if(x['first-item']()!==1n||x.kind()!==':fixed'||x.missing()!==false)process.exit(2);"
-                         "const t=x.tail();if(t[1].length!==2||t[1][0][1]!==7n||t[1][1][1]!==9n)process.exit(3);"
+                         "const t=x.tail(),r=x.removed();if(t[1].length!==2||t[1][0][1]!==7n||t[1][1][1]!==9n||r[1].length!==2||r[1][1][1]!==9n)process.exit(3);"
                          "for(const name of ['bad-assoc','bad-drop']){let rejected=false;try{x[name]()}catch(e){rejected=true}if(!rejected)process.exit(4)}"))]
     (observe #(ir/execute kir % []))
     (is (thrown? clojure.lang.ExceptionInfo (ir/execute kir 'bad-assoc [])))
