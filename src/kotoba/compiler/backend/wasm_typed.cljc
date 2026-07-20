@@ -11,7 +11,7 @@
 (def ^:private boolean-result-ops
   '#{f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered
      f32-eq f32-lt f32-le f32-gt f32-ge f32-unordered
-     string=? bool-not option-some? result-ok? option-some?-of result-ok?-of
+     bool-not option-some? result-ok? option-some?-of result-ok?-of
      typed-set-contains typed-map-contains})
 
 (defn descriptor? [value]
@@ -220,7 +220,8 @@
         (contains? '#{f32-eq f32-lt f32-le f32-gt f32-ge f32-unordered} op) :bool
         (contains? '#{= < > <= >= hetero-vector-equal typed-set-equal
                       typed-map-equal record-equal} op) :i64
-        (contains? '#{string=? bool-not option-some? result-ok?
+        (= op 'string=?) :i64
+        (contains? '#{bool-not option-some? result-ok?
                       result-ok?-of option-some?-of typed-set-contains
                       typed-map-contains} op) :bool
         (= op 'string-concat) :string

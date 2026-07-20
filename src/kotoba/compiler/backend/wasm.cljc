@@ -806,10 +806,9 @@
                             (emit* (first args) env) (emit* (second args) env)
                             [0x10 (get intrinsic-indices 'typed-vector-conj-f64)])
                     (= op 'string=?)
-                    (emit-bool
-                     (concat (i32-const (descriptor-id :string))
-                             (emit* (first args) env) (emit* (second args) env)
-                             [0x10 (get intrinsic-indices 'typed-equal)]))
+                    (concat (i32-const (descriptor-id :string))
+                            (emit* (first args) env) (emit* (second args) env)
+                            [0x10 (get intrinsic-indices 'typed-equal) 0xad])
                     (= op 'bool-not)
                     (emit-bool (concat (emit-test (first args) env) [0x45]))
                     (contains? '#{= < > <= >=} op)
