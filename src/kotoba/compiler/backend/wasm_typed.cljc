@@ -114,13 +114,16 @@
     (and (seq? value)
          (contains? '#{document-null document-bool document-i64 document-f64
                       document-string document-keyword document-vector document-map
-                      document-count document-vector-at document-map-entry-at document-vector-assoc
+                      document-count document-kind document-vector-at document-map-entry-at document-vector-assoc
                       document-vector-conj document-vector-drop document-vector-remove
                       document-contains document-get document-assoc
                       document-dissoc document-merge document-string-value document-keyword-value
                       document-bool-value document-i64-value document-f64-value}
                     (first value)))
-    (reduce (fn [result item] (walk item result)) (conj found :document) value)
+    (reduce (fn [result item] (walk item result))
+            (cond-> (conj found :document)
+              (= 'document-kind (first value)) (conj :keyword))
+            value)
     (and (seq? value) (= 'keyword-from-string (first value)))
     (reduce (fn [result item] (walk item result)) (conj found :keyword) value)
     (map? value) (reduce (fn [result item] (walk item result)) found (vals value))
@@ -178,7 +181,9 @@
 
 (defn- literal-walk [form found]
   (cond
-    (descriptor? form) found
+    ;; Scalar type keywords (for example :bool) are also valid executable
+    ;; keyword literals. Only structured vector descriptors are syntax-only.
+    (and (vector? form) (descriptor? form)) found
     (string? form) (conj found [:string form])
     (keyword? form) (conj found [:keyword (str form)])
     (boolean? form) (conj found [:bool form])
@@ -301,7 +306,7 @@
                       typed-map-contains string-index-contains} op) :bool
         (= op 'document-contains) :bool
         (contains? '#{string-concat string-replace-all keyword-name} op) :string
-        (= op 'keyword-from-string) :keyword
+        (contains? '#{keyword-from-string document-kind} op) :keyword
         (= op 'xml-path-attr) [:option :string]
         (= op 'decimal-f64-parse) [:option :f64]
         (= op 'decimal-f64x3-parse) [:option [:vector [:f64 :f64 :f64]]]
