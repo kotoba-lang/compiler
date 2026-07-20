@@ -83,6 +83,8 @@ jobs:
         run: npm run test-ios-simulator
         env:
           DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+      - name: Verify shared security adoption
+        run: clojure -M -m kotoba.security.adoption
       - run: clojure -M:test
         env:
           KOTOBA_FUZZ_SEED: "5426643073673934426"
