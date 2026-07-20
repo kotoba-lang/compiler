@@ -19,3 +19,8 @@ This prevents documentation or CI labels from implying that a backend executes
 the reference application kits before it actually does. Subsequent work closes
 the recorded gaps backend by backend; it does not weaken the common manifest or
 invent backend-specific application language semantics.
+
+The `wasmtime` row is engine evidence, not permission to define a Wasmtime-only
+ABI. Its typed provider qualification requires a compiler-produced Component
+Model artifact and sealed WIT world as specified by ADR 0036. A private Rust
+embedding adapter or runner cannot close either provider ABI gap.

@@ -33,9 +33,29 @@
  {:manifest :kotoba.provider-conformance/v1
   :structural-qualification :required
   :semantic-kit-vectors :required}
+ :component-model
+ {:status :specified
+  :artifact-owner :kotoba-lang/compiler
+  :target :wasm-component-kotoba-v1
+  :world {:imports :declared-typed-capabilities-only
+          :exports :declared-entry-points-only
+          :undeclared-imports :reject}
+  :wit-mapping {:i64 :s64 :f32 :float32 :f64 :float64 :bool :bool
+                :string :string :keyword :bounded-string-newtype
+                :option :option :result :result :record :record
+                :variant :variant :vector :bounded-list
+                :set :canonical-bounded-list
+                :map :canonical-bounded-entry-list
+                :recursive-schema :digest-bound-named-type}
+  :lowering-rule "Reject schemas whose bounds or identity cannot be preserved by generated WIT and the canonical ABI."
+  :runtime-rule "No runtime-specific runner or private import adapter is normative."
+  :wasi {:application-ambient-authority false
+         :owner :provider-component
+         :imports :capability-kit-declared-only
+         :composition :closed-world}}
  :backend-qualification
  {:wasm-aot :conformance-required
   :native-aot :conformance-required
   :jit :conformance-required
   :provider-gate :kotoba.backend-provider-qualification/v1
-  :rule "An unavailable backend is an implementation gap, not a reason to remove a specified safe language feature."}}
+  :rule "An unavailable backend is an implementation gap, not a reason to remove a specified safe language feature. Runtime-specific adapters do not qualify the Component Model backend."}}
