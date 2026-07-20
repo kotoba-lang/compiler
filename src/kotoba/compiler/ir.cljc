@@ -49,7 +49,9 @@
      record-new record-get record-assoc record-equal
      vector-count vector-get vector-at vector-drop vector-assoc vector-conj
      vector-f64-new vector-f64-count vector-f64-get vector-f64-at
-     vector-f64-drop vector-f64-assoc vector-f64-conj})
+     vector-f64-drop vector-f64-assoc vector-f64-conj
+     i32-wrap u32-wrap i32-wrapping-add i32-wrapping-mul i32-xor
+     i32-shift-left i32-shift-right u32-shift-right xorshift32})
 
 (defn only-string-typed-features? [hir]
   (letfn [(walk [form]
@@ -423,6 +425,58 @@
 (defn- i64-mul [x y]
   #?(:clj (unchecked-multiply (long x) (long y))
      :cljs (i64/wrap-i64 (* (i64/->bigint x) (i64/->bigint y)))))
+
+(defn- i32-wrap [value]
+  #?(:clj (long (unchecked-int (long value)))
+     :cljs (js/BigInt.asIntN 32 (i64/->bigint value))))
+
+(defn- u32-wrap [value]
+  #?(:clj (bit-and (long value) 0xffffffff)
+     :cljs (js/BigInt.asUintN 32 (i64/->bigint value))))
+
+(defn- checked-shift32 [value]
+  (when-not #?(:clj (and (integer? value) (<= 0 value 31))
+               :cljs (and (i64/bigint-value? value)
+                          (<= i64/zero value (js/BigInt 31))))
+    (trap! :i32-shift-count-out-of-range {:count value}))
+  #?(:clj (int value) :cljs (js/Number value)))
+
+(defn- i32-add [x y]
+  #?(:clj (long (unchecked-add-int (unchecked-int (long x)) (unchecked-int (long y))))
+     :cljs (js/BigInt.asIntN 32 (+ (i32-wrap x) (i32-wrap y)))))
+
+(defn- i32-mul [x y]
+  #?(:clj (long (unchecked-multiply-int (unchecked-int (long x)) (unchecked-int (long y))))
+     :cljs (js/BigInt.asIntN 32 (* (i32-wrap x) (i32-wrap y)))))
+
+(defn- i32-xor [x y]
+  #?(:clj (long (bit-xor (unchecked-int (long x)) (unchecked-int (long y))))
+     :cljs (js/BigInt.asIntN 32 (bit-xor (i32-wrap x) (i32-wrap y)))))
+
+(defn- i32-shl [value count]
+  (let [shift (checked-shift32 count)]
+    #?(:clj (long (bit-shift-left (unchecked-int (long value)) shift))
+       :cljs (js/BigInt.asIntN
+              32 (* (i32-wrap value) (js/BigInt (js/Math.pow 2 shift)))))))
+
+(defn- i32-shr [value count]
+  (let [shift (checked-shift32 count)]
+    #?(:clj (long (bit-shift-right (unchecked-int (long value)) shift))
+       :cljs (i64/ashr (i32-wrap value) shift))))
+
+(defn- u32-shr [value count]
+  (let [shift (checked-shift32 count)]
+    #?(:clj (long (unsigned-bit-shift-right (unchecked-int (long value)) shift))
+       :cljs (/ (u32-wrap value) (js/BigInt (js/Math.pow 2 shift))))))
+
+(defn- xorshift32 [value]
+  (let [x (u32-wrap value)
+        x (u32-wrap (bit-xor x #?(:clj (bit-shift-left x 13)
+                                  :cljs (* x (js/BigInt 8192)))))
+        x (u32-wrap (bit-xor x (u32-shr x #?(:clj 17 :cljs (js/BigInt 17)))))
+        x (u32-wrap (bit-xor x #?(:clj (bit-shift-left x 5)
+                                  :cljs (* x (js/BigInt 32)))))]
+    x))
 
 (declare eval-expr)
 
@@ -1292,6 +1346,20 @@
                > (if (apply > xs) i64/one i64/zero)
                <= (if (apply <= xs) i64/one i64/zero)
                >= (if (apply >= xs) i64/one i64/zero))))
+
+        (contains? '#{i32-wrap u32-wrap i32-wrapping-add i32-wrapping-mul i32-xor
+                      i32-shift-left i32-shift-right u32-shift-right xorshift32} op)
+        (let [xs (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
+          (case op
+            i32-wrap (i32-wrap (first xs))
+            u32-wrap (u32-wrap (first xs))
+            i32-wrapping-add (i32-add (first xs) (second xs))
+            i32-wrapping-mul (i32-mul (first xs) (second xs))
+            i32-xor (i32-xor (first xs) (second xs))
+            i32-shift-left (i32-shl (first xs) (second xs))
+            i32-shift-right (i32-shr (first xs) (second xs))
+            u32-shift-right (u32-shr (first xs) (second xs))
+            xorshift32 (xorshift32 (first xs))))
 
         :else
         (let [values (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]

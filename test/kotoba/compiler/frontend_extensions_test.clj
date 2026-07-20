@@ -191,6 +191,44 @@
   (is (some? (rejection-message
               "(defn bad [v :vector-f64] :f64 (vector-f64-get v 0 1))"))))
 
+(deftest i32-wrapping-and-xorshift-profile-is-explicit-and-bounded
+  (let [source "(ns pilot.i32 (:export [signed unsigned add mul xor shl shr ushr next]))
+                (defn signed [x :i64] :i64 (i32-wrap x))
+                (defn unsigned [x :i64] :i64 (u32-wrap x))
+                (defn add [x :i64 y :i64] :i64 (i32-wrapping-add x y))
+                (defn mul [x :i64 y :i64] :i64 (i32-wrapping-mul x y))
+                (defn xor [x :i64 y :i64] :i64 (i32-xor x y))
+                (defn shl [x :i64] :i64 (i32-shift-left x 31))
+                (defn shr [x :i64] :i64 (i32-shift-right x 31))
+                (defn ushr [x :i64] :i64 (u32-shift-right x 1))
+                (defn next [x :i64] :i64 (xorshift32 x))"
+        compiled (compiler/compile-source source :js-kotoba-v1)
+        kir (:kir compiled)
+        encoded (.encodeToString (java.util.Base64/getEncoder)
+                                 (.getBytes ^String (:source compiled) "UTF-8"))
+        result (shell/sh
+                "node" "--input-type=module" "-e"
+                (str "import('data:text/javascript;base64," encoded
+                     "').then(m=>{const x=m.instantiateKotoba({});"
+                     "if(x.signed(4294967295n)!==-1n||x.unsigned(-1n)!==4294967295n)process.exit(2);"
+                     "if(x.add(2147483647n,1n)!==-2147483648n||x.mul(2147483647n,2n)!==-2n)process.exit(3);"
+                     "if(x.shl(1n)!==-2147483648n||x.shr(-2147483648n)!==-1n||x.ushr(-1n)!==2147483647n)process.exit(4);"
+                     "if(x.next(1n)!==270369n||x.next(67634689n)!==2647435461n)process.exit(5)})"))]
+    (is (= -1 (ir/execute kir 'signed [4294967295])))
+    (is (= 4294967295 (ir/execute kir 'unsigned [-1])))
+    (is (= -2147483648 (ir/execute kir 'add [2147483647 1])))
+    (is (= -2 (ir/execute kir 'mul [2147483647 2])))
+    (is (= 270369 (ir/execute kir 'next [1])))
+    (is (zero? (:exit result)) (:err result))
+    (doseq [target-name (unsupported-typed-targets)]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"require the kotoba-script web target"
+                            (compiler/compile-source source target-name)))))
+  (doseq [bad ["(defn bad [x :i64 n :i64] :i64 (i32-shift-left x n))"
+               "(defn bad [x :i64] :i64 (i32-shift-right x -1))"
+               "(defn bad [x :i64] :i64 (u32-shift-right x 32))"]]
+    (is (some? (rejection-message bad)))))
+
 ;; ───────────────────────── keyword + map + get + assoc ─────────────────────────
 
 (deftest keyword-literals-preserve-canonical-identity-without-i64-hashing
