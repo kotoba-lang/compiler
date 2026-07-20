@@ -3,7 +3,7 @@
   "private": true,
   "devDependencies": {
     "@playwright/test": "1.61.1",
-    "nbb": "1.4.208"
+    "nbb": "1.5.211"
   },
   "scripts": {
     "test-nbb-wasm32": "nbb --classpath . scripts/test-nbb-wasm32.cljs",
