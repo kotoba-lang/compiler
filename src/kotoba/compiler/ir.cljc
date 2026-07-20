@@ -6,7 +6,8 @@
   ;; is conditional and the branch doesn't match -- fails ns-form spec
   ;; validation ("Extra input spec: :clojure.core.specs.alpha/ns-form",
   ;; confirmed live).
-  (:require [kotoba.compiler.value :as value]
+  (:require [clojure.string :as str]
+            [kotoba.compiler.value :as value]
             [kotoba.compiler.decimal :as decimal]
             [kotoba.compiler.xml :as xml]
             #?@(:cljs [[kotoba.compiler.cljs-i64 :as i64]])))
@@ -29,7 +30,8 @@
 ;; rejecting cleanly -- so admission has to inspect which features are
 ;; actually used, not just the HIR format tag.
 (def non-string-typed-ops
-  '#{f32-to-bits f32-from-bits f64-to-f32-rounded f32-to-f64-exact
+  '#{string-replace-all
+     f32-to-bits f32-from-bits f64-to-f32-rounded f32-to-f64-exact
      f32-add f32-sub f32-mul f32-div f32-min f32-max f32-neg f32-abs f32-sqrt
      f32-eq f32-lt f32-le f32-gt f32-ge f32-unordered
      i64-to-f32-checked i64-to-f32-rounded f32-to-i64-checked f32-to-i64-truncating
@@ -749,6 +751,13 @@
         (= op 'string-concat)
         (let [[left right] (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
           (value/bounded-string! (str left right) value/string-value-byte-limit))
+
+        (= op 'string-replace-all)
+        (let [[input needle replacement]
+              (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
+          (when (empty? needle) (trap! :empty-string-replacement-needle {}))
+          (value/bounded-string! (str/replace input needle replacement)
+                                 value/string-value-byte-limit))
 
         (= op 'keyword-from-string)
         (let [text (value/bounded-string!

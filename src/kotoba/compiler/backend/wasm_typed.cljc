@@ -300,7 +300,7 @@
                       result-ok?-of option-some?-of typed-set-contains
                       typed-map-contains string-index-contains} op) :bool
         (= op 'document-contains) :bool
-        (= op 'string-concat) :string
+        (contains? '#{string-concat string-replace-all} op) :string
         (= op 'keyword-from-string) :keyword
         (= op 'xml-path-attr) [:option :string]
         (= op 'decimal-f64-parse) [:option :f64]

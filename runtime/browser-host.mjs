@@ -52,6 +52,8 @@ const ALLOWED_IMPORTS = new Set([
   "kotoba:typed/map-assoc-rr/function",
   "kotoba:typed/map-dissoc-i64/function",
   "kotoba:typed/map-dissoc-ref/function",
+  "kotoba:typed/string-concat/function",
+  "kotoba:typed/string-replace-all/function",
   "kotoba:typed/string-index-new/function",
   "kotoba:typed/string-index-contains/function",
   "kotoba:typed/string-index-get/function",
@@ -989,6 +991,25 @@ function createTypedRuntime(abi, typedCapCall, allow) {
     equal(descriptorId, left, right) {
       const descriptor = descriptorAt(descriptorId);
       return compareValue(descriptor, assertValue(descriptor, left), assertValue(descriptor, right)) === 0 ? 1 : 0;
+    },
+    "string-concat"(descriptorId, left, right) {
+      const descriptor = descriptorAt(descriptorId);
+      if (descriptor !== "string") reject("invalid-typed-operation", "string descriptor required");
+      const result = assertValue(descriptor, left) + assertValue(descriptor, right);
+      if (utf8Length(result) > 65536) reject("invalid-typed-value", "typed string is oversized");
+      return result;
+    },
+    "string-replace-all"(descriptorId, value, needle, replacement) {
+      const descriptor = descriptorAt(descriptorId);
+      if (descriptor !== "string") reject("invalid-typed-operation", "string descriptor required");
+      value = assertValue(descriptor, value);
+      needle = assertValue(descriptor, needle);
+      replacement = assertValue(descriptor, replacement);
+      if (needle.length === 0)
+        reject("invalid-typed-operation", "empty string replacement needle rejected");
+      const result = value.split(needle).join(replacement);
+      if (utf8Length(result) > 65536) reject("invalid-typed-value", "typed string is oversized");
+      return result;
     },
     "assoc-i64"(descriptorId, value, index, replacement) {
       return assoc(descriptorId, value, index, i64(replacement));
