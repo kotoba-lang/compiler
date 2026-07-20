@@ -1,0 +1,7 @@
+(ns fixture.constant-alias (:export [main]))
+
+(def base 21)
+(def answer base)
+
+(defn main []
+  (* answer 2))
