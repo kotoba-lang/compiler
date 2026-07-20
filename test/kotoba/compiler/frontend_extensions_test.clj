@@ -762,6 +762,25 @@
          (oracle "(def context-key \"JSON-LD key\" \"@context\")
                   (defn main [] :string context-key)"))))
 
+(deftest f64-constants-are-closed-and-use-canonical-bit-lowering
+  (let [source "(ns pilot.f64-constants (:export [scaled signed-zero nan-value]))
+                (def factor 1.25)
+                (def negative-zero -0.0)
+                (def not-a-number ##NaN)
+                (defn scaled [value :f64] :f64 (f64-mul value factor))
+                (defn signed-zero [] :f64 negative-zero)
+                (defn nan-value [] :f64 not-a-number)"
+        js (compiler/compile-source source :js-kotoba-v1)
+        wasm (compiler/compile-source source :wasm32-kotoba-v1)]
+    (is (= 2.5 (ir/execute (:kir js) 'scaled [2.0])))
+    (is (= Long/MIN_VALUE
+           (value/f64-to-i64-bits (ir/execute (:kir js) 'signed-zero []))))
+    (is (Double/isNaN ^double (ir/execute (:kir js) 'nan-value [])))
+    (is (= (:kir js) (:kir wasm)) "targets consume the same substituted canonical KIR"))
+  (is (= "constant value must be closed bounded integer/string/keyword/boolean/nil/vector/map data"
+         (rejection-message "(def unsafe (host-value))
+                             (defn main [] :f64 unsafe)"))))
+
 (deftest literal-keyword-constructor-is-closed-at-compile-time
   (is (= (keyword "@context")
          (oracle "(def context-key (keyword \"@context\"))

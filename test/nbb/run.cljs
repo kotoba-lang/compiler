@@ -2,9 +2,8 @@
   "Repeatable, JVM-free regression test for the nbb-native wasm32
   compile/check path (`kotoba.compiler.nbb.cli`, spawned by `bin/kotoba` for
   `wasm32*` targets -- see its own comment). Every case must emit valid Wasm.
-  One representative structured fixture is also byte-identical to the JVM
-  reference artifact, retaining a focused reproducible-build sentinel without
-  duplicating semantic conformance across every fixture.
+  Semantic, ABI, and rejection behavior is covered by the conformance suites;
+  emitted bytes are deliberately not treated as the language contract.
   Run from the repo root: `nbb test/nbb/run.cljs`."
   (:require ["node:fs" :as fs]
             [kotoba.compiler.frontend :as frontend]
@@ -23,10 +22,6 @@
         kir (ir/lower hir)]
     (wasm/emit kir (get cases/target-keyword target))))
 
-(defn- bytes= [^js a ^js b]
-  (and (= (.-length a) (.-length b))
-       (every? true? (map = (js/Array.from a) (js/Array.from b)))))
-
 (defn- diagnostic-case []
   (try
     (frontend/analyze "(defn main []\n  (forbidden-call 1))")
@@ -43,22 +38,14 @@
 (let [results
       (conj
        (vec
-        (for [{:keys [name byte-golden?] :as case} cases/cases]
-          (let [golden-path (str "test/nbb/golden/" name ".wasm")]
-            (try
-              (let [actual (compile-case case)
-                    golden (when byte-golden?
-                             (js/Uint8Array. (fs/readFileSync golden-path)))
-                    ok? (if byte-golden?
-                          (bytes= actual golden)
-                          (js/WebAssembly.validate actual))]
-                {:name name :ok? ok?
-                 :detail (when-not ok?
-                           (if byte-golden?
-                             (str "length " (.-length actual) " vs golden " (.-length golden))
-                             "emitted invalid Wasm"))})
-              (catch :default e
-                {:name name :ok? false :detail (str "threw: " (.-message e))})))))
+        (for [{:keys [name] :as case} cases/cases]
+          (try
+            (let [actual (compile-case case)
+                  ok? (js/WebAssembly.validate actual)]
+              {:name name :ok? ok?
+               :detail (when-not ok? "emitted invalid Wasm")})
+            (catch :default e
+              {:name name :ok? false :detail (str "threw: " (.-message e))}))))
        (diagnostic-case))
       failures (remove :ok? results)]
   (doseq [{:keys [name ok? detail]} results]

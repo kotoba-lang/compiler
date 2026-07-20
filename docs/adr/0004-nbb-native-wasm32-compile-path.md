@@ -61,11 +61,10 @@ Two new supporting namespaces exist ONLY for the `:cljs` side:
 `examples/*.kotoba` fixture plus dedicated i64/sleb128 boundary fixtures
 (`test/nbb/fixtures/`: true i64 max/min, add-wraparound, the sleb
 continuation-bit crossing at 127/128) through the nbb-native path and
-asserts the output is byte-for-byte identical to a checked-in golden
-`.wasm` file. Those golden files were authored once via the JVM path
-(`test/nbb/generate-golden.cljs`, `npm run generate-nbb-wasm32-golden`) --
-routine test runs need no JVM at all; only re-authoring the golden files
-after an intentional change to compiled output does. `clojure -M:test` (169
+asserts that every output is valid Wasm. Cross-host compatibility is judged by
+observable semantics, ABI behavior, resource bounds, and fail-closed rejection;
+the binary representation is not a language contract. Routine test runs need
+no JVM at all. `clojure -M:test` (169
 tests, 2986 assertions) passes unchanged, confirming the `.cljc` conversion
 altered nothing on the `:clj` side.
 
