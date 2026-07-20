@@ -1,6 +1,7 @@
 # ADR 0022: Structured application schema and capability ABI v9
 
-Status: accepted; Phase 1 implemented, Phases 2–4 staged
+Status: accepted; Phases 1–2 implemented, Phase 3 reference execution implemented,
+browser/Wasm Phase 3 and Phase 4 staged
 
 ## Context
 
@@ -49,6 +50,13 @@ schema substitution, or an unregistered contract fails closed. Legacy i64
 
 Native backends reject typed capability calls until they implement and qualify
 the same contract; there is no lossy pointer/i64 fallback.
+
+The compiler reference executor admits
+`(typed-cap-call capability request-type result-type request)`. It checks the
+request before calling a separately installed typed provider and checks the
+provider result before returning it. An untyped `cap-call` provider cannot
+satisfy this boundary. Browser/Wasm admission remains staged until ABI v9
+contract metadata and the real host validator pass the exit gates below.
 
 ### Phase 4 — type-directed nested destructuring
 
