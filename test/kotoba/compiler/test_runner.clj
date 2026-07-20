@@ -37,6 +37,7 @@
             [kotoba.compiler.ui-provider-test]
             [kotoba.compiler.http-provider-test]
             [kotoba.compiler.llm-provider-test]
+            [kotoba.compiler.storage-provider-test]
             [kotoba.compiler.wasm-typed-test]
             [kotoba.compiler.value-test]
             [kotoba.compiler.verifier-profile-test]))
@@ -73,6 +74,7 @@
                                           'kotoba.compiler.ui-provider-test
                                           'kotoba.compiler.http-provider-test
                                           'kotoba.compiler.llm-provider-test
+                                          'kotoba.compiler.storage-provider-test
                                           'kotoba.compiler.wasm-typed-test
                                           'kotoba.compiler.native-executor-test
                                           'kotoba.compiler.receipt-test

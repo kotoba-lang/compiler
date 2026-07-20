@@ -19,7 +19,7 @@
          :ui {:version 1 :status :reference-implemented}
          :http {:version 1 :status :reference-implemented}
          :llm {:version 1 :status :reference-implemented}
-         :storage {:status :specified-pending}
+         :storage {:version 1 :status :reference-implemented}
          :clock {:status :specified-pending}
          :log {:status :specified-pending}}
   :lifecycle [:validate-request :invoke-provider :validate-result]
