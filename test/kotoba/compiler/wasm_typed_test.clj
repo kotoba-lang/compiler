@@ -188,6 +188,59 @@
     (is (= #{:reference-types} (:wasm-features compiled)))
     (is (zero? (:exit probe)) (:err probe))))
 
+(deftest schema-referenced-typed-capability-crosses-the-browser-wasm-boundary
+  (let [source
+        "(ns typed.capability
+           (:export [main make-request make-other invoke])
+           (:capabilities #{:http/post})
+           (:schemas {:demo/request [:record :demo/request [[:url :string]]]
+                      :demo/other [:record :demo/other [[:url :string]]] }))
+         (defn main [] 0)
+         (defn make-request [] [:record :demo/request [[:url :string]]]
+           (record [:record :demo/request [[:url :string]]] \"https://example.test\"))
+         (defn make-other [] [:record :demo/other [[:url :string]]]
+           (record [:record :demo/other [[:url :string]]] \"https://example.test\"))
+         (defn invoke [request [:ref :demo/request]] [:ref :demo/request]
+           (typed-cap-call :http/post [:ref :demo/request] [:ref :demo/request] request))"
+        compiled (compiler/compile-source source :wasm32-browser-kotoba-v1
+                                          {:allow #{[:cap/call 4]}})
+        encoded (.encodeToString (java.util.Base64/getEncoder) ^bytes (:bytes compiled))
+        probe (shell/sh
+               "node" "--input-type=module" "-e"
+               (str "import('./runtime/browser-host.mjs').then(async m=>{"
+                    "let calls=0;const h=await m.instantiateKotoba(Buffer.from(process.argv[1],'base64'),{"
+                    "allowCapabilities:[4],typedCapCall:(id,request,contract)=>{"
+                    "calls++;"
+                    "if(id!==4||contract.request[0]!=='ref'||contract.result[0]!=='ref')process.exit(2);"
+                    "return request}});const x=h.instance.exports;"
+                    "const request=x['make-request']();if(x.invoke(request)!==request)process.exit(3);"
+                    "try{x.invoke(x['make-other']());process.exit(5)}catch(e){}if(calls!==1)process.exit(6);"
+                    "if(h.typedAbi.version!==9||h.typedAbi.schemas.get(':demo/request')===undefined)process.exit(4)"
+                    "}).catch(e=>{console.error(e);process.exit(70)})")
+               encoded)]
+    (is (= typed/schema-abi-version (first (typed/metadata-bytes (:kir compiled)))))
+    (is (zero? (:exit probe)) (:err probe))))
+
+(deftest typed-capability-provider-result-is-validated-after-dispatch
+  (let [source
+        "(ns typed.capability-result (:export [main invoke]) (:capabilities #{:http/post}))
+         (defn main [] 0)
+         (defn invoke [request :string] :string
+           (typed-cap-call :http/post :string :string request))"
+        compiled (compiler/compile-source source :wasm32-browser-kotoba-v1
+                                          {:allow #{[:cap/call 4]}})
+        encoded (.encodeToString (java.util.Base64/getEncoder) ^bytes (:bytes compiled))
+        probe (shell/sh
+               "node" "--input-type=module" "-e"
+               (str "import('./runtime/browser-host.mjs').then(async m=>{"
+                    "const h=await m.instantiateKotoba(Buffer.from(process.argv[1],'base64'),{"
+                    "allowCapabilities:[4],typedCapCall:()=>7n});"
+                    "try{h.instance.exports.invoke('request');process.exit(2)}catch(e){"
+                    "if(e.code!=='invalid-typed-value')process.exit(3)}})"
+                    ".catch(e=>{console.error(e);process.exit(70)})")
+               encoded)]
+    (is (zero? (:exit probe)) (:err probe))))
+
 (deftest structured-f64-and-f32-cross-the-sealed-wasm-abi
   (let [source
         "(ns typed.floating-structure

@@ -222,10 +222,14 @@
 (defn- record-type? [type]
   (and (vector? type) (= 3 (count type)) (= :record (first type))))
 
+(defn- schema-ref-type? [type]
+  (and (vector? type) (= 2 (count type)) (= :ref (first type))
+       (keyword? (second type)) (namespace (second type))))
+
 (defn- structured-type? [type]
   (or (parametric-result-type? type) (variant-type? type) (generic-option-type? type)
       (heterogeneous-vector-type? type) (typed-set-type? type)
-      (canonical-typed-map-type? type) (record-type? type)))
+      (canonical-typed-map-type? type) (record-type? type) (schema-ref-type? type)))
 
 (defn- validate-value-type!
   ([type] (validate-value-type! type 0 (volatile! 0)))
@@ -237,6 +241,8 @@
      (reject! "value type exceeds depth limit" type))
    (cond
      (contains? value-types type)
+     type
+     (schema-ref-type? type)
      type
      (parametric-result-type? type)
      (do (validate-value-type! (second type) (inc depth) nodes)
@@ -2795,6 +2801,15 @@
     (when (and entry (not (some #{entry} exports)))
       (reject! "main entrypoint must be exported" exports))
     (check-namespace-capabilities! (:capabilities namespace-info) @used-capabilities)
+    (let [declared (set (keys (:schemas namespace-info)))
+          refs (->> parsed
+                    (tree-seq coll? seq)
+                    (filter schema-ref-type?)
+                    (map second)
+                    set)
+          missing (set/difference refs declared)]
+      (when (seq missing)
+        (reject! "value type references a schema outside the closed namespace table" missing)))
     (let [budget (volatile! 0)]
       (doseq [{:keys [params body]} parsed]
         (validate-expr body (set params) signatures 0 budget)))
