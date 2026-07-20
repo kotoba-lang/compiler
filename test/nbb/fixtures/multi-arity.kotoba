@@ -1,0 +1,6 @@
+(ns multi-arity.fixture
+  (:export [offset]))
+
+(defn offset
+  ([x] (offset x 1))
+  ([x delta] (+ x delta)))

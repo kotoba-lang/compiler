@@ -170,6 +170,7 @@
              '#{let if cap-call ns defn defn- some some? nil? vector-i64 vector-f64 vector-new vector-f64-new
                 hetero-vector typed-set record match-result match-variant match-option}))
 (def max-functions 1024)
+(def max-arity-clauses 8)
 (def max-expression-nodes 50000)
 (def max-lowered-nodes 100000)
 (def max-bindings 4096)
@@ -2254,6 +2255,71 @@
     (validate-value-type! result)
     {:name name :raw-params raw-params :result result :body body}))
 
+(declare typed-param-parts)
+
+(defn- multi-arity-declaration?
+  [declaration]
+  (and (seq declaration)
+       (every? #(and (seq? %) (vector? (first %))) declaration)))
+
+(defn- abi-arity-name [source-name arity]
+  (symbol (str (name source-name) "$arity$" arity)))
+
+(defn- expand-defn-parts
+  "Return one or more monomorphic clauses for a source defn. Multi-arity is
+  syntax-only: every call is resolved before HIR and no backend performs
+  argument-count dispatch (ADR 0017)."
+  [form constants]
+  (let [[op source-name & declaration0] form
+        [docstring declaration] (if (string? (first declaration0))
+                                  [(first declaration0) (rest declaration0)]
+                                  [nil declaration0])]
+    (when (and docstring (> (count docstring) max-function-docstring-chars))
+      (reject! "function docstring exceeds admission limit" docstring))
+    (when (re-find #"\$arity\$" (name source-name))
+      (reject! "function name uses reserved multi-arity ABI marker" source-name))
+    (if-not (multi-arity-declaration? declaration)
+      [(assoc (defn-parts form constants) :source-name source-name :public? (= op 'defn))]
+      (do
+        (when (> (count declaration) max-arity-clauses)
+          (reject! "multi-arity clause count exceeds admission limit" form))
+        (let [clauses
+              (mapv (fn [clause]
+                      (let [raw (defn-parts (list* op source-name clause) constants)
+                            param-parts (typed-param-parts (:raw-params raw) constants)
+                            arity (count param-parts)]
+                        (when (some #{'&} (:raw-params raw))
+                          (reject! "variadic parameters are outside the multi-arity profile" (:raw-params raw)))
+                        (assoc raw :source-name source-name :logical-arity arity
+                               :public? (= op 'defn))))
+                    declaration)
+              arities (mapv :logical-arity clauses)]
+          (when-not (= (count arities) (count (distinct arities)))
+            (reject! "duplicate multi-arity clause" form))
+          (mapv #(assoc % :name (abi-arity-name source-name (:logical-arity %))) clauses))))))
+
+(defn- resolve-overloaded-calls
+  [form overloads overloaded-sources]
+  (cond
+    (seq? form)
+    (let [[op & args] form]
+      (if (= 'quote op)
+        form
+        (let [resolved-op (if (symbol? op)
+                            (get overloads [op (count args)] op)
+                            op)
+              _ (when (and (contains? overloaded-sources op) (= resolved-op op))
+                  (reject! "no matching multi-arity clause" form))
+              result (list* resolved-op
+                            (map #(resolve-overloaded-calls % overloads overloaded-sources) args))]
+          (if (seq (meta form)) (with-meta result (meta form)) result))))
+    (vector? form) (mapv #(resolve-overloaded-calls % overloads overloaded-sources) form)
+    (map? form) (into (empty form)
+                      (map (fn [[k v]] [(resolve-overloaded-calls k overloads overloaded-sources)
+                                       (resolve-overloaded-calls v overloads overloaded-sources)]))
+                      form)
+    :else form))
+
 (defn- typed-param-parts
   "Legacy `[x y]` remains two i64 parameters. Once any type keyword appears,
   the whole vector must be alternating `[name :type ...]`; this keeps the
@@ -2399,8 +2465,6 @@
         other (remove #(or (and (seq? %) (= 'ns (first %)))
                            (and (seq? %) (contains? '#{defn defn-} (first %)))
                            (and (seq? %) (= 'def (first %)))) forms)
-        _ (when (> (count defs) max-functions)
-            (reject! "function count exceeds admission limit" (count defs)))
         _ (when (> (count namespaces) 1)
             (reject! "at most one namespace form is admitted" namespaces))
         namespace-info (when-let [namespace-form (first namespaces)]
@@ -2420,6 +2484,24 @@
                         (map (fn [[name value]]
                                [name (resolve-constant-aliases! value raw-constants #{name})]))
                         raw-constants)
+        source-names (mapv second defs)
+        _ (when-not (= (count source-names) (count (distinct source-names)))
+            (reject! "duplicate function name" defs))
+        def-parts (vec (mapcat #(expand-defn-parts % constants) defs))
+        _ (when (> (count def-parts) max-functions)
+            (reject! "function count exceeds admission limit" (count def-parts)))
+        overloaded-sources (->> def-parts
+                                (group-by :source-name)
+                                (keep (fn [[name clauses]]
+                                        (when (> (count clauses) 1) name)))
+                                set)
+        overloads (into {}
+                        (keep (fn [{:keys [source-name logical-arity name]}]
+                                (when (contains? overloaded-sources source-name)
+                                  [[source-name logical-arity] name])))
+                        def-parts)
+        _ (when (contains? overloaded-sources 'main)
+            (reject! "main must have exactly one zero-arity clause" 'main))
         ;; ADR-2607150000: mapcat, not mapv -- a defn using `loop` may
         ;; expand into itself PLUS one or more synthesized loop-helper
         ;; functions (collected via *pending-loop-helpers*, bound fresh
@@ -2448,8 +2530,8 @@
                ;; source using `loop`.
                (vec
                      (mapcat
-                     (fn [form]
-                       (let [{:keys [name raw-params result body]} (defn-parts form constants)]
+                     (fn [{:keys [name source-name raw-params result body]}]
+                       (let [source-name (or source-name name)]
                          (when-not (valid-name? name) (reject! "invalid function name" name))
                          (when (contains? reserved-function-names name)
                            (reject! "reserved function name" name))
@@ -2473,11 +2555,13 @@
                                               constants constant-bound)
                                  desugared (binding [*pending-loop-helpers* loop-helpers]
                                              (desugar-expr source-body))]
-                             (into [{:name name :params params :param-types param-types
+                             (into [{:name name :source-name source-name
+                                     :params params :param-types param-types
                                      :result result :effects #{}
                                      :body desugared}]
                                    @loop-helpers)))))
-                     defs)))
+                     def-parts)))
+        parsed (mapv #(update % :body resolve-overloaded-calls overloads overloaded-sources) parsed)
         ;; ADR-2607150000: inject the synthesized `get`/`assoc` helpers only
         ;; when a desugared body actually calls them -- keeps modules that
         ;; never use `get`/`assoc` byte-identical to before this change. A
@@ -2493,20 +2577,27 @@
                         (assoc % :param-types (vec (repeat (count (:params %)) :i64))))
                      parsed)
         signatures (into {} (map (juxt :name :params) parsed))
-        source-public (mapv second (filter #(= 'defn (first %)) defs))
+        source-public (->> def-parts (filter :public?) (map :source-name) distinct vec)
+        expand-export (fn [source-name]
+                        (let [clauses (->> def-parts
+                                           (filter #(= source-name (:source-name %)))
+                                           (sort-by #(or (:logical-arity %) 0)))]
+                          (if (> (count clauses) 1)
+                            (mapv :name clauses)
+                            [source-name])))
         exports (cond
-                  (some? (:exports namespace-info)) (:exports namespace-info)
-                  (some #(= 'defn- (first %)) defs) source-public
+                  (some? (:exports namespace-info)) (vec (mapcat expand-export (:exports namespace-info)))
+                  (some #(= 'defn- (first %)) defs) (vec (mapcat expand-export source-public))
                   :else (mapv :name parsed))
         entry (when (contains? signatures 'main) 'main)]
-    (when (seq (set/intersection (set (keys constants)) (set (keys signatures))))
+    (when (seq (set/intersection (set (keys constants)) (set source-names)))
       (reject! "constant and function names must be disjoint" forms))
     (when (seq other) (reject! "only ns, def, defn, and defn- are allowed at top level" (first other)))
     (when (empty? parsed) (reject! "at least one defn is required" forms))
     (when-not (= (count parsed) (count signatures)) (reject! "duplicate function name" defs))
     (when (and (some? (:exports namespace-info))
-               (not-every? (set source-public) exports))
-      (reject! "namespace exports must name declared public functions" exports))
+               (not-every? (set source-public) (:exports namespace-info)))
+      (reject! "namespace exports must name declared public functions" (:exports namespace-info)))
     (when (and (nil? entry) (nil? (:exports namespace-info)))
       (reject! "entryless library requires an explicit non-empty namespace export list" defs))
     (when (and (nil? entry) (empty? exports))

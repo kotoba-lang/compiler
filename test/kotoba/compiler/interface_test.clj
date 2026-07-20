@@ -32,3 +32,14 @@
     (let [value (edn/read-string (str out))]
       (is (= interface/schema (:format value)))
       (is (interface/valid? value)))))
+
+(deftest inspection-exposes-source-name-and-sealed-multi-arity-abi-symbol
+  (let [value (interface/inspect-source
+               "(ns demo.multi (:export [offset]))
+                (defn offset ([x] (offset x 1)) ([x delta] (+ x delta)))")]
+    (is (= [{:name 'offset :abi-name 'offset$arity$1 :arity 1
+             :param-types [:i64] :result :i64 :effects #{}}
+            {:name 'offset :abi-name 'offset$arity$2 :arity 2
+             :param-types [:i64 :i64] :result :i64 :effects #{}}]
+           (:exports value)))
+    (is (interface/valid? value))))

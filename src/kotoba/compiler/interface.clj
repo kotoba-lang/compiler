@@ -12,12 +12,14 @@
         exports (set (:exports hir))
         functions (->> (:functions hir)
                        (filter #(contains? exports (:name %)))
-                       (map (fn [{:keys [name params param-types result effects]}]
-                              {:name name
-                               :arity (count params)
-                               :param-types (vec (or param-types (repeat (count params) :i64)))
-                               :result result
-                               :effects (set effects)}))
+                       (map (fn [{:keys [name source-name params param-types result effects]}]
+                              (cond-> {:name (or source-name name)
+                                       :arity (count params)
+                                       :param-types (vec (or param-types (repeat (count params) :i64)))
+                                       :result result
+                                       :effects (set effects)}
+                                (and source-name (not= source-name name))
+                                (assoc :abi-name name))))
                        (sort-by (comp str :name))
                        vec)
         value {:format schema
