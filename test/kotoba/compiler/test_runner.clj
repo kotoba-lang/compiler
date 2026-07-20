@@ -9,6 +9,7 @@
             [kotoba.compiler.coverage-evidence-test]
             [kotoba.compiler.bounded-edn-test]
             [kotoba.compiler.cache-test]
+            [kotoba.compiler.compact-graph-value-test]
             [kotoba.compiler.frontend-fuzz-test]
             [kotoba.compiler.f64-value-test]
             [kotoba.compiler.f32-value-test]
@@ -44,6 +45,7 @@
                                           'kotoba.compiler.coverage-evidence-test
                                           'kotoba.compiler.bounded-edn-test
                                           'kotoba.compiler.cache-test
+                                          'kotoba.compiler.compact-graph-value-test
                                           'kotoba.compiler.frontend-fuzz-test
                                           'kotoba.compiler.f64-value-test
                                           'kotoba.compiler.f32-value-test

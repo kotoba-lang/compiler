@@ -384,7 +384,7 @@
                     "()=>h.typedValues.vectorI64([1n,2]),"
                     "()=>x['count-items'](Object.freeze([v[0],10n,20n,30n]))]){"
                     "let rejected=false;try{run()}catch(e){rejected=true}if(!rejected)process.exit(4)}"))]
-    (is (= 8 typed/abi-version))
+    (is (= 9 typed/abi-version))
     (is (some #{:vector-i64} (typed/descriptor-table (:kir compiled))))
     (is (zero? (:exit probe)) (:err probe))))
 

@@ -775,6 +775,39 @@
                     (= op 'vector-f64-count)
                     (concat (i32-const (descriptor-id :vector-f64)) (emit* (first args) env)
                             [0x10 (get intrinsic-indices 'typed-count)])
+                    (= op 'string-index-new)
+                    (concat (i32-const (descriptor-id :string-index))
+                            [0x10 (get intrinsic-indices 'typed-string-index-new)])
+                    (= op 'string-index-count)
+                    (concat (i32-const (descriptor-id :string-index)) (emit* (first args) env)
+                            [0x10 (get intrinsic-indices 'typed-count)])
+                    (= op 'string-index-contains)
+                    (emit-bool
+                     (concat (i32-const (descriptor-id :string-index))
+                             (emit* (first args) env) (emit* (second args) env)
+                             [0x10 (get intrinsic-indices 'typed-string-index-contains)]))
+                    (= op 'string-index-get)
+                    (concat (i32-const (descriptor-id :string-index))
+                            (emit* (first args) env) (emit* (second args) env)
+                            [0x10 (get intrinsic-indices 'typed-string-index-get)])
+                    (= op 'string-index-assoc)
+                    (concat (i32-const (descriptor-id :string-index))
+                            (emit* (first args) env) (emit* (second args) env)
+                            (emit* (nth args 2) env)
+                            [0x10 (get intrinsic-indices 'typed-string-index-assoc)])
+                    (= op 'disjoint-set-i64-new)
+                    (concat (i32-const (descriptor-id :disjoint-set-i64))
+                            (emit* (first args) env)
+                            [0x10 (get intrinsic-indices 'typed-disjoint-set-i64-new)])
+                    (= op 'disjoint-set-i64-count)
+                    (concat (i32-const (descriptor-id :disjoint-set-i64))
+                            (emit* (first args) env)
+                            [0x10 (get intrinsic-indices 'typed-count)])
+                    (= op 'disjoint-set-i64-union)
+                    (concat (i32-const (descriptor-id :disjoint-set-i64))
+                            (emit* (first args) env) (emit* (second args) env)
+                            (emit* (nth args 2) env)
+                            [0x10 (get intrinsic-indices 'typed-disjoint-set-i64-union)])
                     (= op 'vector-f64-at)
                     (concat (i32-const (descriptor-id :vector-f64))
                             (emit* (first args) env) (emit* (second args) env)
@@ -1061,6 +1094,13 @@
         has-xml? (uses-operation? functions '#{xml-path-count xml-path-attr})
         has-decimal? (uses-operation? functions '#{decimal-f64-parse})
         has-decimal-x3? (uses-operation? functions '#{decimal-f64x3-parse})
+        has-string-index? (uses-operation? functions
+                                            '#{string-index-new string-index-count
+                                               string-index-contains string-index-get
+                                               string-index-assoc})
+        has-disjoint-set? (uses-operation? functions
+                                            '#{disjoint-set-i64-new disjoint-set-i64-count
+                                               disjoint-set-i64-union})
         typed-imports (when (and typed? (typed/requires-host-runtime? kir))
                         (vec (concat
                          [['typed-literal "kotoba:typed" "literal" [0x60 1 0x7f 1 0x6f]]
@@ -1105,6 +1145,14 @@
                          ['typed-map-assoc-rr "kotoba:typed" "map-assoc-rr" [0x60 4 0x7f 0x6f 0x6f 0x6f 1 0x6f]]
                          ['typed-map-dissoc-i64 "kotoba:typed" "map-dissoc-i64" [0x60 3 0x7f 0x6f 0x7e 1 0x6f]]
                          ['typed-map-dissoc-ref "kotoba:typed" "map-dissoc-ref" [0x60 3 0x7f 0x6f 0x6f 1 0x6f]]]
+                         (when has-string-index?
+                           [['typed-string-index-new "kotoba:typed" "string-index-new" [0x60 1 0x7f 1 0x6f]]
+                            ['typed-string-index-contains "kotoba:typed" "string-index-contains" [0x60 3 0x7f 0x6f 0x6f 1 0x7f]]
+                            ['typed-string-index-get "kotoba:typed" "string-index-get" [0x60 3 0x7f 0x6f 0x6f 1 0x6f]]
+                            ['typed-string-index-assoc "kotoba:typed" "string-index-assoc" [0x60 4 0x7f 0x6f 0x6f 0x7e 1 0x6f]]])
+                         (when has-disjoint-set?
+                           [['typed-disjoint-set-i64-new "kotoba:typed" "disjoint-set-i64-new" [0x60 2 0x7f 0x7e 1 0x6f]]
+                            ['typed-disjoint-set-i64-union "kotoba:typed" "disjoint-set-i64-union" [0x60 4 0x7f 0x6f 0x7e 0x7e 1 0x6f]]])
                          (when has-xml?
                            [['xml-path-count "kotoba:typed" "xml-path-count" [0x60 2 0x6f 0x6f 1 0x7e]]
                             ['xml-path-attr "kotoba:typed" "xml-path-attr" [0x60 4 0x6f 0x6f 0x7e 0x6f 1 0x6f]]])

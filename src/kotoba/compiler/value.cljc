@@ -14,6 +14,8 @@
 (def typed-set-item-limit 32)
 (def typed-map-entry-limit 31)
 (def record-field-limit 32)
+(def compact-graph-item-limit 128)
+(def string-index-key-byte-limit 65536)
 
 (defn f64-value? [value]
   #?(:clj (instance? Double value)
@@ -296,9 +298,66 @@
       (throw (ex-info "vector-f64 item is not f64" {:phase :value}))))
   value)
 
+(declare bounded-typed-value!)
+
+(defn bounded-string-index!
+  "Validate the compact, canonical string -> i64 graph index. The aggregate
+  UTF-8 key budget is shared by the whole value and keys must be strictly
+  ordered, making duplicate admission impossible."
+  [value]
+  (when-not (and (vector? value)
+                 (<= (count value) compact-graph-item-limit)
+                 (every? #(and (vector? %) (= 2 (count %))) value))
+    (throw (ex-info "value is not a compact string index"
+                    {:phase :value :limit compact-graph-item-limit})))
+  (let [entries (mapv (fn [[key item]]
+                        [(bounded-string! key string-value-byte-limit)
+                         (bounded-typed-value! :i64 item)])
+                      value)
+        total-bytes (reduce + (map (comp utf8-byte-count! first) entries))]
+    (when (> total-bytes string-index-key-byte-limit)
+      (throw (ex-info "string index exceeds aggregate UTF-8 key budget"
+                      {:phase :value :bytes total-bytes
+                       :limit string-index-key-byte-limit})))
+    (when-not (every? (fn [[[left _] [right _]]] (neg? (compare left right)))
+                      (partition 2 1 entries))
+      (throw (ex-info "string index keys are duplicated or non-canonical"
+                      {:phase :value})))
+    entries))
+
+(defn bounded-disjoint-set-i64!
+  "Validate a canonical persistent union-find value. Parents always point
+  inside the set; ranks are non-negative and bounded by the item count."
+  [value]
+  (when-not (and (vector? value) (= 2 (count value))
+                 (vector? (first value)) (vector? (second value)))
+    (throw (ex-info "value is not a compact disjoint set" {:phase :value})))
+  (let [[parents ranks] value
+        size (count parents)]
+    (when-not (and (<= size compact-graph-item-limit) (= size (count ranks)))
+      (throw (ex-info "disjoint set exceeds item limit or has mismatched arrays"
+                      {:phase :value :limit compact-graph-item-limit})))
+    (doseq [parent parents]
+      (bounded-typed-value! :i64 parent)
+      (when-not (< -1 parent size)
+        (throw (ex-info "disjoint set parent is out of range" {:phase :value}))))
+    (doseq [rank ranks]
+      (bounded-typed-value! :i64 rank)
+      (when-not (<= 0 rank size)
+        (throw (ex-info "disjoint set rank is out of range" {:phase :value}))))
+    (doseq [start (range size)]
+      (loop [current start remaining (inc size)]
+        (when (zero? remaining)
+          (throw (ex-info "disjoint set parent graph contains a cycle" {:phase :value})))
+        (let [parent #?(:clj (int (nth parents current))
+                        :cljs (js/Number (nth parents current)))]
+          (when-not (= parent current)
+            (recur parent (dec remaining))))))
+    [parents ranks]))
+
 (def ^:private leaf-value-types
   #{:i64 :f32 :f64 :string :keyword :map :bool :option-i64 :result-i64
-    :vector-i64 :vector-f64})
+    :vector-i64 :vector-f64 :string-index :disjoint-set-i64})
 
 (defn validate-value-type!
   ([type] (validate-value-type! type 0 (volatile! 0)))
@@ -403,8 +462,19 @@
     :result-i64 (if (= (first left) (first right))
                   (compare (second left) (second right))
                   (if (first left) 1 -1))
-    :vector-i64 (compare-sequences (repeat (max (count left) (count right)) :i64)
+     :vector-i64 (compare-sequences (repeat (max (count left) (count right)) :i64)
                                    left right)
+    :string-index (compare-sequences
+                   (cycle [:string :i64]) (mapcat identity left) (mapcat identity right))
+    :disjoint-set-i64 (let [parents-comparison
+                            (compare-sequences (repeat (max (count (first left))
+                                                            (count (first right))) :i64)
+                                               (first left) (first right))]
+                        (if (zero? parents-comparison)
+                          (compare-sequences (repeat (max (count (second left))
+                                                          (count (second right))) :i64)
+                                             (second left) (second right))
+                          parents-comparison))
     :map (let [left-items (mapcat identity left)
                right-items (mapcat identity right)
                types (cycle [:keyword :i64])]
@@ -482,6 +552,8 @@
      :result-i64 (bounded-result-i64! value)
      :vector-i64 (bounded-vector-i64! value)
      :vector-f64 (bounded-vector-f64! value)
+     :string-index (bounded-string-index! value)
+     :disjoint-set-i64 (bounded-disjoint-set-i64! value)
      (cond
        (= :result (first type))
        (do

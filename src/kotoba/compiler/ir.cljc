@@ -53,6 +53,8 @@
      vector-count vector-get vector-at vector-drop vector-assoc vector-conj
      vector-f64-new vector-f64-count vector-f64-get vector-f64-at
      vector-f64-drop vector-f64-assoc vector-f64-conj
+     string-index-new string-index-count string-index-contains string-index-get string-index-assoc
+     disjoint-set-i64-new disjoint-set-i64-count disjoint-set-i64-union
      i32-wrap u32-wrap i32-wrapping-add i32-wrapping-mul i32-xor
      i32-shift-left i32-shift-right u32-shift-right xorshift32})
 
@@ -400,6 +402,20 @@
         (trap! :invalid-vector-f64-value
                {:position position :message (ex-message error)})))
 
+    :string-index
+    (try
+      (value/bounded-string-index! runtime-value)
+      (catch #?(:clj Exception :cljs :default) error
+        (trap! :invalid-string-index-value
+               {:position position :message (ex-message error)})))
+
+    :disjoint-set-i64
+    (try
+      (value/bounded-disjoint-set-i64! runtime-value)
+      (catch #?(:clj Exception :cljs :default) error
+        (trap! :invalid-disjoint-set-i64-value
+               {:position position :message (ex-message error)})))
+
     (try
       (value/bounded-typed-value! type runtime-value)
       (catch #?(:clj Exception :cljs :default) error
@@ -578,6 +594,22 @@
     (when-not (< i (count entities))
       (trap! :invalid-kgraph-index {:index index}))
     (nth entities i)))
+
+(defn- compact-host-index [index size code]
+  (when-not (and #?(:clj (integer? index) :cljs (i64/bigint-value? index))
+                 (not (neg? index)) (< index size))
+    (trap! code {:index index :size size}))
+  #?(:clj (int index) :cljs (js/Number index)))
+
+(defn- disjoint-root [parents start]
+  (loop [current start remaining (inc (count parents))]
+    (when (zero? remaining)
+      (trap! :invalid-disjoint-set-i64-value {:reason :parent-cycle}))
+    (let [parent (compact-host-index (nth parents current) (count parents)
+                                     :invalid-disjoint-set-i64-value)]
+      (if (= parent current)
+        current
+        (recur parent (dec remaining))))))
 
 (defn eval-expr [form env functions fuel heap call-stack cap-call]
   (cond
@@ -1313,6 +1345,85 @@
             (trap! :vector-f64-too-large {:limit value/vector-item-limit}))
           (value/bounded-vector-f64! (conj items item)))
 
+        (= op 'string-index-new) []
+
+        (= op 'string-index-count)
+        (let [index (value/bounded-string-index!
+                     (eval-expr (first args) env functions fuel heap call-stack cap-call))]
+          #?(:clj (long (count index)) :cljs (i64/->bigint (count index))))
+
+        (contains? '#{string-index-contains string-index-get} op)
+        (let [[index-form key-form] args
+              index (value/bounded-string-index!
+                     (eval-expr index-form env functions fuel heap call-stack cap-call))
+              key (value/bounded-typed-value!
+                   :string (eval-expr key-form env functions fuel heap call-stack cap-call))
+              found (some (fn [[candidate item]] (when (= candidate key) item)) index)]
+          (if (= op 'string-index-contains)
+            (boolean (some? found))
+            (if (some? found) [[:option :i64] true found] [[:option :i64] false])))
+
+        (= op 'string-index-assoc)
+        (let [[index-form key-form item-form] args
+              index (value/bounded-string-index!
+                     (eval-expr index-form env functions fuel heap call-stack cap-call))
+              key (value/bounded-typed-value!
+                   :string (eval-expr key-form env functions fuel heap call-stack cap-call))
+              item (value/bounded-typed-value!
+                    :i64 (eval-expr item-form env functions fuel heap call-stack cap-call))
+              without-key (filterv #(not= key (first %)) index)]
+          (when (and (= (count without-key) (count index))
+                     (>= (count index) value/compact-graph-item-limit))
+            (trap! :string-index-too-large {:limit value/compact-graph-item-limit}))
+          (value/bounded-string-index! (vec (sort-by first (conj without-key [key item])))))
+
+        (= op 'disjoint-set-i64-new)
+        (let [size-value (eval-expr (first args) env functions fuel heap call-stack cap-call)]
+          (when-not (and #?(:clj (integer? size-value) :cljs (i64/bigint-value? size-value))
+                         (<= 0 size-value value/compact-graph-item-limit))
+            (trap! :disjoint-set-i64-size-out-of-range
+                   {:limit value/compact-graph-item-limit}))
+          (let [size #?(:clj (int size-value) :cljs (js/Number size-value))
+                parents #?(:clj (mapv long (range size))
+                           :cljs (mapv i64/->bigint (range size)))
+                ranks (vec (repeat size #?(:clj 0 :cljs i64/zero)))]
+            (value/bounded-disjoint-set-i64! [parents ranks])))
+
+        (= op 'disjoint-set-i64-count)
+        (let [[parents _] (value/bounded-disjoint-set-i64!
+                           (eval-expr (first args) env functions fuel heap call-stack cap-call))]
+          #?(:clj (long (count parents)) :cljs (i64/->bigint (count parents))))
+
+        (= op 'disjoint-set-i64-union)
+        (let [[set-form left-form right-form] args
+              [parents ranks :as disjoint-set]
+              (value/bounded-disjoint-set-i64!
+               (eval-expr set-form env functions fuel heap call-stack cap-call))
+              left-index (compact-host-index
+                          (eval-expr left-form env functions fuel heap call-stack cap-call)
+                          (count parents) :disjoint-set-i64-index-out-of-range)
+              right-index (compact-host-index
+                           (eval-expr right-form env functions fuel heap call-stack cap-call)
+                           (count parents) :disjoint-set-i64-index-out-of-range)
+              left-root (disjoint-root parents left-index)
+              right-root (disjoint-root parents right-index)
+              option-type [:option :disjoint-set-i64]]
+          (if (= left-root right-root)
+            [option-type false]
+            (let [left-rank (nth ranks left-root)
+                  right-rank (nth ranks right-root)
+                  [child root equal-rank?]
+                  (cond (< left-rank right-rank) [left-root right-root false]
+                        (> left-rank right-rank) [right-root left-root false]
+                        :else [right-root left-root true])
+                  new-parents (assoc parents child #?(:clj (long root) :cljs (i64/->bigint root)))
+                  new-ranks (if equal-rank?
+                              (assoc ranks root #?(:clj (inc (long left-rank))
+                                                   :cljs (+ left-rank i64/one)))
+                              ranks)]
+              [option-type true
+               (value/bounded-disjoint-set-i64! [new-parents new-ranks])])))
+
         (contains? '#{kernel-load-u8 kernel-load-u8-4k kernel-load-u8-16k
                       kernel-store-u8 kernel-store-u8-4k
                       kernel-load-u32 kernel-store-u32} op)
@@ -1431,6 +1542,8 @@
          :result-i64 (value/bounded-result-i64! arg)
          :vector-i64 (value/bounded-vector-i64! arg)
          :vector-f64 (value/bounded-vector-f64! arg)
+         :string-index (value/bounded-string-index! arg)
+         :disjoint-set-i64 (value/bounded-disjoint-set-i64! arg)
          (value/bounded-typed-value! type arg)))
      (let [invoke #(invoke-function function
                                     (mapv (fn [arg type]

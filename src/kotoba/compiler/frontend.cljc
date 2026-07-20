@@ -125,6 +125,10 @@
 (def typed-f64-vector-operations
   '{vector-f64-count 1 vector-f64-get 3 vector-f64-at 2 vector-f64-drop 2
     vector-f64-assoc 3 vector-f64-conj 2})
+(def compact-graph-operations
+  '{string-index-new 0 string-index-count 1 string-index-contains 2
+    string-index-get 2 string-index-assoc 3
+    disjoint-set-i64-new 1 disjoint-set-i64-count 1 disjoint-set-i64-union 3})
 (def sequencing-operations '#{do})
 (def string-operations '{string-byte-length 1 string=? 2 string-concat 2})
 (def xml-operations '{xml-path-count 2 xml-path-attr 4})
@@ -165,6 +169,7 @@
              record-operations
              (set (keys typed-vector-operations))
              (set (keys typed-f64-vector-operations))
+             (set (keys compact-graph-operations))
              (set (keys string-operations))
              (set (keys xml-operations))
              (set (keys decimal-operations))
@@ -196,7 +201,7 @@
 ;; function-count limit.
 (def max-namespace-capabilities 256)
 (def value-types #{:i64 :f32 :f64 :string :keyword :map :bool :option-i64 :result-i64
-                   :vector-i64 :vector-f64})
+                   :vector-i64 :vector-f64 :string-index :disjoint-set-i64})
 
 (declare reject!)
 
@@ -1588,6 +1593,11 @@
               (reject! "typed f64 vector operation arity mismatch" form))
             (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
 
+        (contains? compact-graph-operations op)
+        (do (when-not (= (get compact-graph-operations op) (count args))
+              (reject! "compact graph operation arity mismatch" form))
+            (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
         (contains? kernel-memory-operations op)
         (do (when-not (= (get kernel-memory-operations op) (count args))
               (reject! "kernel memory operation arity mismatch" form))
@@ -1724,6 +1734,29 @@
       (= op 'vector-f64-conj)
       (do (require-expression-type! (nth types 0) :vector-f64 (nth args 0))
           (require-expression-type! (nth types 1) :f64 (nth args 1)) :vector-f64)
+
+      (= op 'string-index-new) :string-index
+      (= op 'string-index-count)
+      (do (require-expression-type! (first types) :string-index (first args)) :i64)
+      (= op 'string-index-contains)
+      (do (require-expression-type! (nth types 0) :string-index (nth args 0))
+          (require-expression-type! (nth types 1) :string (nth args 1)) :bool)
+      (= op 'string-index-get)
+      (do (require-expression-type! (nth types 0) :string-index (nth args 0))
+          (require-expression-type! (nth types 1) :string (nth args 1)) [:option :i64])
+      (= op 'string-index-assoc)
+      (do (require-expression-type! (nth types 0) :string-index (nth args 0))
+          (require-expression-type! (nth types 1) :string (nth args 1))
+          (require-expression-type! (nth types 2) :i64 (nth args 2)) :string-index)
+      (= op 'disjoint-set-i64-new)
+      (do (require-expression-type! (first types) :i64 (first args)) :disjoint-set-i64)
+      (= op 'disjoint-set-i64-count)
+      (do (require-expression-type! (first types) :disjoint-set-i64 (first args)) :i64)
+      (= op 'disjoint-set-i64-union)
+      (do (require-expression-type! (nth types 0) :disjoint-set-i64 (nth args 0))
+          (require-expression-type! (nth types 1) :i64 (nth args 1))
+          (require-expression-type! (nth types 2) :i64 (nth args 2))
+          [:option :disjoint-set-i64])
 
       (contains? (disj comparisons '=) op)
       (do (doseq [[arg type] (map vector args types)]
@@ -2400,7 +2433,7 @@
         (reject! "typed parameters require alternating name/type pairs" raw-params))
       (mapv (fn [[pattern type]]
               (validate-value-type! type)
-              (when (and (or (contains? #{:f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64 :vector-f64} type)
+              (when (and (or (contains? #{:f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64 :vector-f64 :string-index :disjoint-set-i64} type)
                              (structured-type? type))
                          (not (or (symbol? pattern)
                                   (and (= type :map) (map? pattern))
@@ -2676,9 +2709,9 @@
     (check-lowering-budget! parsed)
     (let [typed-values? (boolean
                          (some (fn [{:keys [param-types result body]}]
-                                 (or (some #(or (contains? #{:f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64 :vector-f64} %)
+                                 (or (some #(or (contains? #{:f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64 :vector-f64 :string-index :disjoint-set-i64} %)
                                                 (structured-type? %)) param-types)
-                                     (or (contains? #{:f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64 :vector-f64} result)
+                                     (or (contains? #{:f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64 :vector-f64 :string-index :disjoint-set-i64} result)
                                          (structured-type? result))
                                      (some #(or (string? %) (keyword? %) (boolean? %)
                                                 (and (seq? %)

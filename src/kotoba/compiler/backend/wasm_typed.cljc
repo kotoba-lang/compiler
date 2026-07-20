@@ -1,12 +1,12 @@
 (ns kotoba.compiler.backend.wasm-typed
   #?(:cljs (:require [kotoba.compiler.cljs-i64 :as i64])))
 
-(def abi-version 8)
+(def abi-version 9)
 (def custom-section-name "kotoba.typed")
 
 (def ^:private primitive-tags
   {:i64 0 :string 1 :keyword 2 :bool 3 :vector-i64 11 :f64 12 :f32 13
-   :vector-f64 14})
+   :vector-f64 14 :string-index 15 :disjoint-set-i64 16})
 
 (def ^:private boolean-result-ops
   '#{f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered
@@ -14,8 +14,11 @@
      bool-not option-some? result-ok? option-some?-of result-ok?-of
      typed-set-contains typed-map-contains})
 
+
 (defn descriptor? [value]
-  (or (contains? primitive-tags value)
+  ;; nbb cannot hash JavaScript BigInt as a map key. Guard before contains?
+  ;; because literal i64 values are walked alongside descriptors.
+  (or (and (keyword? value) (contains? primitive-tags value))
       (and (vector? value)
            (contains? #{:option :result :variant :vector :set :map :record}
                       (first value)))))
@@ -94,6 +97,15 @@
     (reduce (fn [result item] (walk item result))
             (conj found :vector-f64)
             value)
+    (and (seq? value)
+         (contains? '#{string-index-new string-index-count string-index-contains
+                      string-index-get string-index-assoc}
+                    (first value)))
+    (reduce (fn [result item] (walk item result)) (conj found :string-index) value)
+    (and (seq? value)
+         (contains? '#{disjoint-set-i64-new disjoint-set-i64-count disjoint-set-i64-union}
+                    (first value)))
+    (reduce (fn [result item] (walk item result)) (conj found :disjoint-set-i64) value)
     (map? value) (reduce (fn [result item] (walk item result)) found (vals value))
     (coll? value) (reduce (fn [result item] (walk item result)) found value)
     (string? value) (conj found :string)
@@ -199,7 +211,8 @@
                       i32-shift-left i32-shift-right u32-shift-right xorshift32
                       string-byte-length map-get vector-count vector-get vector-f64-count
                       vector-at hetero-vector-count typed-set-count
-                      typed-map-count xml-path-count} op) :i64
+                      typed-map-count xml-path-count string-index-count
+                      disjoint-set-i64-count} op) :i64
         (= op 'f64-to-bits) :i64
         (= op 'f64-from-bits) :f64
         (contains? '#{i64-to-f64-checked i64-to-f64-rounded} op) :f64
@@ -223,13 +236,18 @@
         (= op 'string=?) :i64
         (contains? '#{bool-not option-some? result-ok?
                       result-ok?-of option-some?-of typed-set-contains
-                      typed-map-contains} op) :bool
+                      typed-map-contains string-index-contains} op) :bool
         (= op 'string-concat) :string
         (= op 'xml-path-attr) [:option :string]
         (= op 'decimal-f64-parse) [:option :f64]
         (= op 'decimal-f64x3-parse) [:option [:vector [:f64 :f64 :f64]]]
         (= op 'vector-new) :vector-i64
         (= op 'vector-f64-new) :vector-f64
+        (= op 'string-index-new) :string-index
+        (= op 'string-index-get) [:option :i64]
+        (= op 'string-index-assoc) :string-index
+        (= op 'disjoint-set-i64-new) :disjoint-set-i64
+        (= op 'disjoint-set-i64-union) [:option :disjoint-set-i64]
         (contains? '#{vector-f64-get vector-f64-at} op) :f64
         (contains? '#{vector-f64-drop vector-f64-assoc vector-f64-conj} op) :vector-f64
         (contains? '#{vector-drop vector-assoc vector-conj} op) :vector-i64

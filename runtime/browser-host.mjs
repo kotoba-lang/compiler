@@ -1,7 +1,7 @@
 const MAX_MODULE_BYTES = 1024 * 1024;
 const PAIR_CAPACITY = 4096;
 const TYPED_SECTION = "kotoba.typed";
-const TYPED_ABI_VERSION = 8;
+const TYPED_ABI_VERSION = 9;
 const COMPATIBILITY_SECTION = "kotoba.compatibility";
 const COMPATIBILITY_VERSION = 1;
 const MAX_TYPED_DESCRIPTORS = 64;
@@ -52,6 +52,12 @@ const ALLOWED_IMPORTS = new Set([
   "kotoba:typed/map-assoc-rr/function",
   "kotoba:typed/map-dissoc-i64/function",
   "kotoba:typed/map-dissoc-ref/function",
+  "kotoba:typed/string-index-new/function",
+  "kotoba:typed/string-index-contains/function",
+  "kotoba:typed/string-index-get/function",
+  "kotoba:typed/string-index-assoc/function",
+  "kotoba:typed/disjoint-set-i64-new/function",
+  "kotoba:typed/disjoint-set-i64-union/function",
   "kotoba:typed/xml-path-count/function",
   "kotoba:typed/xml-path-attr/function",
   "kotoba:typed/decimal-f64-parse/function",
@@ -156,6 +162,8 @@ function parseTypedMetadata(module) {
     if (tag === 12) return "f64";
     if (tag === 13) return "f32";
     if (tag === 14) return Object.freeze(["vector-f64"]);
+    if (tag === 15) return Object.freeze(["string-index"]);
+    if (tag === 16) return Object.freeze(["disjoint-set-i64"]);
     if (tag === 4) return Object.freeze(["option", descriptor(depth + 1)]);
     if (tag === 5) return Object.freeze(["result", descriptor(depth + 1), descriptor(depth + 1)]);
     if (tag === 7) {
@@ -183,7 +191,7 @@ function parseTypedMetadata(module) {
     reject("invalid-typed-metadata", "unknown typed ABI descriptor tag");
   };
   const version = byte();
-  if (version !== 5 && version !== 6 && version !== 7 && version !== TYPED_ABI_VERSION)
+  if (version !== 5 && version !== 6 && version !== 7 && version !== 8 && version !== TYPED_ABI_VERSION)
     reject("unsupported-typed-abi", "unsupported Wasm typed ABI version");
   const count = uleb();
   if (count > MAX_TYPED_DESCRIPTORS)
@@ -541,6 +549,43 @@ function createTypedRuntime(abi) {
         if (!sameTrustedDescriptor(value[0], descriptor) || value.length > 16385)
           reject("invalid-typed-value", "vector-f64 shape or item budget is invalid");
         for (let index = 1; index < value.length; index += 1) f64(value[index]);
+      } else if (kind === "string-index") {
+        if (!sameTrustedDescriptor(value[0], descriptor) || value.length !== 2 ||
+            !Array.isArray(value[1]) || !Object.isFrozen(value[1]) || value[1].length > 128)
+          reject("invalid-typed-value", "string-index shape or item budget is invalid");
+        let keyBytes = 0;
+        let previous = null;
+        value[1].forEach(entry => {
+          if (!Array.isArray(entry) || !Object.isFrozen(entry) || entry.length !== 2 ||
+              typeof entry[0] !== "string")
+            reject("invalid-typed-value", "string-index entry is invalid");
+          keyBytes += utf8Length(entry[0]); i64(entry[1]);
+          if (previous !== null && previous >= entry[0])
+            reject("invalid-typed-value", "string-index keys are duplicated or non-canonical");
+          previous = entry[0];
+        });
+        if (keyBytes > 65536)
+          reject("invalid-typed-value", "string-index aggregate key budget exceeded");
+      } else if (kind === "disjoint-set-i64") {
+        if (!sameTrustedDescriptor(value[0], descriptor) || value.length !== 3 ||
+            !Array.isArray(value[1]) || !Object.isFrozen(value[1]) ||
+            !Array.isArray(value[2]) || !Object.isFrozen(value[2]) ||
+            value[1].length !== value[2].length || value[1].length > 128)
+          reject("invalid-typed-value", "disjoint-set-i64 shape or item budget is invalid");
+        const size = value[1].length;
+        value[1].forEach(parent => { parent = i64(parent); if (parent < 0n || parent >= BigInt(size))
+          reject("invalid-typed-value", "disjoint-set-i64 parent is out of range"); });
+        value[2].forEach(rank => { rank = i64(rank); if (rank < 0n || rank > BigInt(size))
+          reject("invalid-typed-value", "disjoint-set-i64 rank is out of range"); });
+        for (let start = 0; start < size; start += 1) {
+          let current = start;
+          let remaining = size + 1;
+          while (Number(value[1][current]) !== current) {
+            if (--remaining === 0)
+              reject("invalid-typed-value", "disjoint-set-i64 parent cycle rejected");
+            current = Number(value[1][current]);
+          }
+        }
       } else if (kind === "option") {
         if (!sameTrustedDescriptor(value[0], descriptor) || typeof value[1] !== "boolean" ||
             value.length !== (value[1] ? 3 : 2))
@@ -723,6 +768,8 @@ function createTypedRuntime(abi) {
         return BigInt(checked.length - 1);
       if (descriptor[0] === "set") return BigInt(checked[1].length);
       if (descriptor[0] === "map") return BigInt(checked[1].length);
+      if (descriptor[0] === "string-index") return BigInt(checked[1].length);
+      if (descriptor[0] === "disjoint-set-i64") return BigInt(checked[1].length);
       reject("invalid-typed-operation", "count is not defined for this descriptor");
     },
     bool(value) { return value !== 0; },
@@ -850,6 +897,64 @@ function createTypedRuntime(abi) {
       return mapDissoc(descriptorId, value, i64(key));
     },
     "map-dissoc-ref"(descriptorId, value, key) { return mapDissoc(descriptorId, value, key); },
+    "string-index-new"(descriptorId) {
+      const descriptor = descriptorAt(descriptorId);
+      if (descriptor[0] !== "string-index") reject("invalid-typed-operation", "string-index descriptor required");
+      return admitValue(descriptor, Object.freeze([descriptor, Object.freeze([])]));
+    },
+    "string-index-contains"(descriptorId, value, key) {
+      const [,, index] = stringIndexEntry(descriptorId, value, key); return index < 0 ? 0 : 1;
+    },
+    "string-index-get"(descriptorId, value, key) {
+      const [, checked, index] = stringIndexEntry(descriptorId, value, key);
+      const optionDescriptor = abi.descriptors.find(candidate =>
+        Array.isArray(candidate) && candidate[0] === "option" && candidate[1] === "i64");
+      if (optionDescriptor === undefined) reject("invalid-typed-operation", "i64 option descriptor is absent");
+      return admitValue(optionDescriptor, Object.freeze(index < 0
+        ? [optionDescriptor, false] : [optionDescriptor, true, checked[1][index][1]]));
+    },
+    "string-index-assoc"(descriptorId, value, key, item) {
+      const [descriptor, checked, index] = stringIndexEntry(descriptorId, value, key);
+      item = i64(item);
+      if (index < 0 && checked[1].length >= 128)
+        reject("invalid-typed-value", "string-index item budget exceeded");
+      const entries = [...checked[1]];
+      const entry = Object.freeze([key, item]);
+      if (index < 0) entries.push(entry); else entries[index] = entry;
+      entries.sort((left, right) => left[0] < right[0] ? -1 : left[0] > right[0] ? 1 : 0);
+      return admitValue(descriptor, Object.freeze([descriptor, Object.freeze(entries)]));
+    },
+    "disjoint-set-i64-new"(descriptorId, rawSize) {
+      const descriptor = descriptorAt(descriptorId), size = i64(rawSize);
+      if (descriptor[0] !== "disjoint-set-i64" || size < 0n || size > 128n)
+        reject("invalid-typed-operation", "disjoint-set-i64 size is out of range");
+      const parents = Object.freeze(Array.from({length: Number(size)}, (_, index) => BigInt(index)));
+      const ranks = Object.freeze(Array.from({length: Number(size)}, () => 0n));
+      return admitValue(descriptor, Object.freeze([descriptor, parents, ranks]));
+    },
+    "disjoint-set-i64-union"(descriptorId, value, rawLeft, rawRight) {
+      const descriptor = descriptorAt(descriptorId), checked = assertValue(descriptor, value);
+      if (descriptor[0] !== "disjoint-set-i64") reject("invalid-typed-operation", "disjoint-set-i64 descriptor required");
+      const size = checked[1].length, left = i64(rawLeft), right = i64(rawRight);
+      if (left < 0n || right < 0n || left >= BigInt(size) || right >= BigInt(size))
+        reject("invalid-typed-operation", "disjoint-set-i64 index is out of range");
+      const root = raw => { let current = Number(raw); for (let fuel = size + 1; fuel > 0; fuel -= 1) {
+        const parent = Number(checked[1][current]); if (parent === current) return current; current = parent;
+      } reject("invalid-typed-value", "disjoint-set-i64 parent cycle rejected"); };
+      const leftRoot = root(left), rightRoot = root(right);
+      const optionDescriptor = abi.descriptors.find(candidate => Array.isArray(candidate) &&
+        candidate[0] === "option" && sameDescriptor(candidate[1], descriptor));
+      if (optionDescriptor === undefined) reject("invalid-typed-operation", "disjoint-set option descriptor is absent");
+      if (leftRoot === rightRoot)
+        return admitValue(optionDescriptor, Object.freeze([optionDescriptor, false]));
+      let child = rightRoot, parent = leftRoot;
+      if (checked[2][leftRoot] < checked[2][rightRoot]) { child = leftRoot; parent = rightRoot; }
+      const parents = [...checked[1]], ranks = [...checked[2]];
+      parents[child] = BigInt(parent);
+      if (checked[2][leftRoot] === checked[2][rightRoot]) ranks[parent] += 1n;
+      const result = admitValue(descriptor, Object.freeze([descriptor, Object.freeze(parents), Object.freeze(ranks)]));
+      return admitValue(optionDescriptor, Object.freeze([optionDescriptor, true, result]));
+    },
     "xml-path-count"(xml, path) {
       const wanted = xmlPath(path);
       return BigInt(parseBoundedXml(xml).filter(node => node.path === wanted).length);
@@ -962,6 +1067,14 @@ function createTypedRuntime(abi) {
       reject("invalid-typed-operation", "map operation requires a map descriptor");
     return [descriptor, assertValue(descriptor, value)];
   };
+  const stringIndexEntry = (descriptorId, value, key) => {
+    const descriptor = descriptorAt(descriptorId);
+    if (!Array.isArray(descriptor) || descriptor[0] !== "string-index" || typeof key !== "string")
+      reject("invalid-typed-operation", "string-index operation requires its descriptor and string key");
+    if (utf8Length(key) > 65536) reject("invalid-typed-value", "string-index key is oversized");
+    const checked = assertValue(descriptor, value);
+    return [descriptor, checked, checked[1].findIndex(entry => entry[0] === key)];
+  };
   const mapIndex = (descriptorId, value, key) => {
     const [descriptor, checked] = checkedMap(descriptorId, value);
     assertValue(descriptor[1], key);
@@ -1035,9 +1148,37 @@ function createTypedRuntime(abi) {
     return admitValue(vectorF64Descriptor,
       Object.freeze([vectorF64Descriptor, ...items.map(f64)]));
   };
+  const stringIndexDescriptor = abi.descriptors.find(descriptor =>
+    Array.isArray(descriptor) && descriptor[0] === "string-index");
+  const hostStringIndex = entries => {
+    if (stringIndexDescriptor === undefined)
+      reject("invalid-typed-value", "module does not admit string-index values");
+    if (!Array.isArray(entries) || entries.length > 128)
+      reject("invalid-typed-value", "host string-index input is invalid or oversized");
+    const canonical = entries.map(entry => {
+      if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== "string")
+        reject("invalid-typed-value", "host string-index entry is invalid");
+      return Object.freeze([entry[0], i64(entry[1])]);
+    }).sort((left, right) => left[0] < right[0] ? -1 : left[0] > right[0] ? 1 : 0);
+    return admitValue(stringIndexDescriptor,
+      Object.freeze([stringIndexDescriptor, Object.freeze(canonical)]));
+  };
+  const disjointSetDescriptor = abi.descriptors.find(descriptor =>
+    Array.isArray(descriptor) && descriptor[0] === "disjoint-set-i64");
+  const hostDisjointSet = size => {
+    size = i64(size);
+    if (disjointSetDescriptor === undefined || size < 0n || size > 128n)
+      reject("invalid-typed-value", "module does not admit requested disjoint-set-i64 value");
+    const parents = Object.freeze(Array.from({length: Number(size)}, (_, index) => BigInt(index)));
+    const ranks = Object.freeze(Array.from({length: Number(size)}, () => 0n));
+    return admitValue(disjointSetDescriptor,
+      Object.freeze([disjointSetDescriptor, parents, ranks]));
+  };
   const values = Object.freeze({
     vectorI64: hostVector,
     vectorF64: hostVectorF64,
+    stringIndex: hostStringIndex,
+    disjointSetI64: hostDisjointSet,
     bytes(items) {
       if (!(Array.isArray(items) || ArrayBuffer.isView(items)) || items.length > 16384)
         reject("invalid-typed-value", "host byte input is invalid or oversized");
