@@ -128,6 +128,7 @@
 (def sequencing-operations '#{do})
 (def string-operations '{string-byte-length 1 string=? 2 string-concat 2})
 (def xml-operations '{xml-path-count 2 xml-path-attr 4})
+(def decimal-operations '{decimal-f64-parse 1})
 (def f64-operations
   '{f64-to-bits 1 f64-from-bits 1
     f64-add 2 f64-sub 2 f64-mul 2 f64-div 2 f64-min 2 f64-max 2
@@ -166,6 +167,7 @@
              (set (keys typed-f64-vector-operations))
              (set (keys string-operations))
              (set (keys xml-operations))
+             (set (keys decimal-operations))
              (set (keys f64-operations))
              (set (keys f32-operations))
              (set (keys i32-operations))
@@ -1259,6 +1261,11 @@
               (reject! "XML operation arity mismatch" form))
             (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
 
+        (contains? decimal-operations op)
+        (do (when-not (= (get decimal-operations op) (count args))
+              (reject! "decimal operation arity mismatch" form))
+            (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
         (contains? f64-operations op)
         (do (when-not (= (get f64-operations op) (count args))
               (reject! "f64 operation arity mismatch" form))
@@ -1738,6 +1745,10 @@
           (require-expression-type! (nth types 2) :i64 (nth args 2))
           (require-expression-type! (nth types 3) :string (nth args 3))
           [:option :string])
+
+      (= op 'decimal-f64-parse)
+      (do (require-expression-type! (first types) :string (first args))
+          [:option :f64])
 
       (= op 'f64-to-bits)
       (do (require-expression-type! (first types) :f64 (first args)) :i64)

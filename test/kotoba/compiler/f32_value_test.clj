@@ -144,7 +144,7 @@
     (is (thrown? clojure.lang.ExceptionInfo (ir/execute kir 'to-f32 [16777217])))
     (is (= :kotoba.typed/mixed-f32-f64-v3 (:value-abi wasm-artifact)))
     (is (= #{:ieee-754-f32 :ieee-754-f64 :reference-types} (:wasm-features wasm-artifact)))
-    (is (= 6 typed/abi-version))
+    (is (= 7 typed/abi-version))
     (is (some #{:f32} (typed/descriptor-table (:kir wasm-artifact))))
     (is (zero? (:exit js-result)) (:err js-result))
     (is (zero? (:exit wasm-result)) (:err wasm-result))))

@@ -1,7 +1,7 @@
 (ns kotoba.compiler.backend.wasm-typed
   #?(:cljs (:require [kotoba.compiler.cljs-i64 :as i64])))
 
-(def abi-version 6)
+(def abi-version 7)
 (def custom-section-name "kotoba.typed")
 
 (def ^:private primitive-tags
@@ -225,6 +225,7 @@
                       typed-map-contains} op) :bool
         (= op 'string-concat) :string
         (= op 'xml-path-attr) [:option :string]
+        (= op 'decimal-f64-parse) [:option :f64]
         (= op 'vector-new) :vector-i64
         (= op 'vector-f64-new) :vector-f64
         (contains? '#{vector-f64-get vector-f64-at} op) :f64

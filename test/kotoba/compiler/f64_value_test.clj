@@ -4,7 +4,8 @@
             [kotoba.compiler.backend.wasm-typed :as typed]
             [kotoba.compiler.core :as compiler]
             [kotoba.compiler.frontend :as frontend]
-            [kotoba.compiler.ir :as ir]))
+            [kotoba.compiler.ir :as ir]
+            [kotoba.compiler.value :as value]))
 
 (def source
   (str "(ns pilot.f64 (:export [bits from-bits negative-zero one nan-bits infinity])) "
@@ -68,6 +69,38 @@
     (is (= :kotoba.value/typed-v1 (:value-profile artifact)))
     (is (= :kotoba.typed/mixed-f64-v2
            (get-in artifact [:compatibility :value-abi])))))
+
+(deftest bounded-decimal-f64-has-reference-script-and-browser-wasm-parity
+  (let [decimal-source
+        "(ns decimal.f64 (:export [main parse]))
+         (defn main [] :i64 0)
+         (defn parse [input :string] [:option :f64] (decimal-f64-parse input))"
+        js-artifact (compiler/compile-source decimal-source :js-kotoba-v1)
+        wasm-artifact (compiler/compile-source decimal-source :wasm32-browser-kotoba-v1)
+        kir (:kir wasm-artifact)
+        js-encoded (.encodeToString (java.util.Base64/getEncoder)
+                                    (.getBytes ^String (:source js-artifact) "UTF-8"))
+        wasm-encoded (.encodeToString (java.util.Base64/getEncoder) (:bytes wasm-artifact))
+        assertions
+        (str "const valid=[['0',0],['-0',-0],['+1.5',1.5],['.5',.5],['1.',1],"
+             "['1e-324',0],['5e-324',Number.MIN_VALUE],['1.7976931348623157e308',Number.MAX_VALUE]];"
+             "for(const [s,want] of valid){const v=x.parse(s);if(!v[1]||!Object.is(v[2],want))process.exit(2)}"
+             "for(const s of ['', ' ', 'NaN', 'Infinity', '0x10', '1_000', '1e0000', '1e309', '1'.repeat(65)])"
+             "{if(x.parse(s)[1])process.exit(3)}")
+        js-result (node-run
+                   (str "import('data:text/javascript;base64," js-encoded
+                        "').then(m=>{const x=m.instantiateKotoba({});" assertions "})"))
+        wasm-result (node-run
+                     (str "import('./runtime/browser-host.mjs').then(async m=>{"
+                          "const h=await m.instantiateKotoba(Buffer.from('" wasm-encoded "','base64'));"
+                          "const x=h.instance.exports;" assertions "})"))]
+    (is (= [[:option :f64] true 1.5] (ir/execute kir 'parse ["+1.5"])))
+    (is (= [[:option :f64] false] (ir/execute kir 'parse ["1e309"])))
+    (is (= Long/MIN_VALUE
+           (value/f64-to-i64-bits
+            (nth (ir/execute kir 'parse ["-0"]) 2))))
+    (is (zero? (:exit js-result)) (:err js-result))
+    (is (zero? (:exit wasm-result)) (:err wasm-result))))
 
 (deftest f64-native-targets-fail-closed
   (testing "f64 is not silently lowered through the i64 native ABI"

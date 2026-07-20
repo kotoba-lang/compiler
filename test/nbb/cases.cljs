@@ -54,4 +54,7 @@
    {:name "multi-arity" :source "test/nbb/fixtures/multi-arity.kotoba" :target "wasm32-browser" :policy nil}
    ;; ADR 0018: XML query typing and typed Wasm import lowering must remain
    ;; byte-identical on JVM and JVM-free compiler hosts.
-   {:name "xml-query" :source "test/nbb/fixtures/xml-query.kotoba" :target "wasm32-browser" :policy nil}])
+   {:name "xml-query" :source "test/nbb/fixtures/xml-query.kotoba" :target "wasm32-browser" :policy nil}
+   ;; ADR 0019: bounded decimal parsing and its conditional typed import are
+   ;; byte-identical on JVM and JVM-free compiler hosts.
+   {:name "decimal-f64" :source "test/nbb/fixtures/decimal-f64.kotoba" :target "wasm32-browser" :policy nil}])

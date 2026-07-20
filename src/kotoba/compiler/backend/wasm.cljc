@@ -984,6 +984,9 @@
                     (concat (emit* (nth args 0) env) (emit* (nth args 1) env)
                             (emit* (nth args 2) env) (emit* (nth args 3) env)
                             [0x10 (get intrinsic-indices 'xml-path-attr)])
+                    (= op 'decimal-f64-parse)
+                    (concat (emit* (first args) env)
+                            [0x10 (get intrinsic-indices 'decimal-f64-parse)])
                     :else
                     (if-let [function-index (get function-indices op)]
                       (concat (mapcat #(emit* % env) args) [0x10 function-index])
@@ -1054,6 +1057,7 @@
                      (doseq [function functions] (walk (:body function)))
                      @found))
         has-xml? (uses-operation? functions '#{xml-path-count xml-path-attr})
+        has-decimal? (uses-operation? functions '#{decimal-f64-parse})
         typed-imports (when (and typed? (typed/requires-host-runtime? kir))
                         (vec (concat
                          [['typed-literal "kotoba:typed" "literal" [0x60 1 0x7f 1 0x6f]]
@@ -1100,7 +1104,9 @@
                          ['typed-map-dissoc-ref "kotoba:typed" "map-dissoc-ref" [0x60 3 0x7f 0x6f 0x6f 1 0x6f]]]
                          (when has-xml?
                            [['xml-path-count "kotoba:typed" "xml-path-count" [0x60 2 0x6f 0x6f 1 0x7e]]
-                            ['xml-path-attr "kotoba:typed" "xml-path-attr" [0x60 4 0x6f 0x6f 0x7e 0x6f 1 0x6f]]]))))
+                            ['xml-path-attr "kotoba:typed" "xml-path-attr" [0x60 4 0x6f 0x6f 0x7e 0x6f 1 0x6f]]])
+                         (when has-decimal?
+                           [['decimal-f64-parse "kotoba:typed" "decimal-f64-parse" [0x60 1 0x6f 1 0x6f]]]))))
         imports (vec (concat typed-imports
                       (when has-cap? [['cap-call "kotoba:cap" "call"
                                        [0x60 2 0x7e 0x7e 1 0x7e]]])
