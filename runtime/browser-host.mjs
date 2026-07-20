@@ -422,8 +422,8 @@ function createTypedRuntime(abi, typedCapCall, allow) {
   };
   const documentDescriptor = abi.descriptors.find(descriptor =>
     Array.isArray(descriptor) && descriptor[0] === "document");
-  const copyDocument = source => {
-    const state = { nodes: 0, bytes: 0, seen: new WeakSet() };
+  const copyDocument = (source, allowShared = false) => {
+    const state = { nodes: 0, bytes: 0, seen: new WeakSet(), active: new WeakSet() };
     const text = (value, keyword = false) => {
       if (typeof value !== "string" || (keyword && !value.startsWith(":")))
         reject("invalid-typed-value", keyword ? "document keyword is invalid" : "document string is invalid");
@@ -438,42 +438,49 @@ function createTypedRuntime(abi, typedCapCall, allow) {
       state.nodes += 1;
       if (depth > 8 || state.nodes > 256)
         reject("invalid-typed-value", "document depth or node budget exceeded");
-      if (!Array.isArray(node) || Object.getPrototypeOf(node) !== Array.prototype || state.seen.has(node))
+      if (!Array.isArray(node) || Object.getPrototypeOf(node) !== Array.prototype ||
+          (!allowShared && state.seen.has(node)))
         reject("invalid-typed-value", "document must be an acyclic unshared array tree");
+      if (state.active.has(node))
+        reject("invalid-typed-value", "document must be acyclic");
       state.seen.add(node);
+      state.active.add(node);
+      const finish = value => { state.active.delete(node); return value; };
       const tag = node[0];
-      if (tag === "null" && node.length === 1) return Object.freeze(["null"]);
+      if (tag === "null" && node.length === 1) return finish(Object.freeze(["null"]));
       if (node.length !== 2 || typeof tag !== "string")
         reject("invalid-typed-value", "document node shape is invalid");
       const payload = node[1];
       if (tag === "bool") {
         if (typeof payload !== "boolean") reject("invalid-typed-value", "document bool is invalid");
-        return Object.freeze([tag, payload]);
+        return finish(Object.freeze([tag, payload]));
       }
-      if (tag === "i64") return Object.freeze([tag, i64(payload)]);
+      if (tag === "i64") return finish(Object.freeze([tag, i64(payload)]));
       if (tag === "f64") {
         if (typeof payload !== "number" || !Number.isFinite(payload))
           reject("invalid-typed-value", "document f64 must be finite");
-        return Object.freeze([tag, payload]);
+        return finish(Object.freeze([tag, payload]));
       }
-      if (tag === "string") return Object.freeze([tag, text(payload)]);
-      if (tag === "keyword") return Object.freeze([tag, text(payload, true)]);
+      if (tag === "string") return finish(Object.freeze([tag, text(payload)]));
+      if (tag === "keyword") return finish(Object.freeze([tag, text(payload, true)]));
       if (tag === "vector") {
         if (!Array.isArray(payload) || Object.getPrototypeOf(payload) !== Array.prototype || payload.length > 32)
           reject("invalid-typed-value", "document vector is invalid or oversized");
-        if (state.seen.has(payload)) reject("invalid-typed-value", "document arrays cannot be shared");
+        if (!allowShared && state.seen.has(payload))
+          reject("invalid-typed-value", "document arrays cannot be shared");
         state.seen.add(payload);
-        return Object.freeze([tag, Object.freeze(payload.map(item => walk(item, depth + 1)))]);
+        return finish(Object.freeze([tag, Object.freeze(payload.map(item => walk(item, depth + 1)))]));
       }
       if (tag === "map") {
         if (!Array.isArray(payload) || Object.getPrototypeOf(payload) !== Array.prototype || payload.length > 32)
           reject("invalid-typed-value", "document map is invalid or oversized");
-        if (state.seen.has(payload)) reject("invalid-typed-value", "document arrays cannot be shared");
+        if (!allowShared && state.seen.has(payload))
+          reject("invalid-typed-value", "document arrays cannot be shared");
         state.seen.add(payload);
         let previous = null;
         const entries = payload.map(entry => {
           if (!Array.isArray(entry) || Object.getPrototypeOf(entry) !== Array.prototype ||
-              entry.length !== 2 || state.seen.has(entry))
+              entry.length !== 2 || (!allowShared && state.seen.has(entry)))
             reject("invalid-typed-value", "document map entry is invalid or shared");
           state.seen.add(entry);
           const key = text(entry[0], true);
@@ -482,16 +489,16 @@ function createTypedRuntime(abi, typedCapCall, allow) {
           previous = key;
           return Object.freeze([key, walk(entry[1], depth + 1)]);
         });
-        return Object.freeze([tag, Object.freeze(entries)]);
+        return finish(Object.freeze([tag, Object.freeze(entries)]));
       }
       reject("invalid-typed-value", "unknown document tag");
     };
     return walk(source, 0);
   };
-  const admitDocument = source => {
+  const admitDocument = (source, allowShared = false) => {
     if (documentDescriptor === undefined)
       reject("invalid-typed-operation", "document descriptor is absent");
-    const result = copyDocument(source);
+    const result = copyDocument(source, allowShared);
     const trust = node => {
       trustedValues.add(node);
       if (node[0] === "vector") node[1].forEach(trust);
@@ -500,6 +507,7 @@ function createTypedRuntime(abi, typedCapCall, allow) {
     trust(result);
     return result;
   };
+  const constructDocument = source => admitDocument(source, true);
   const assertDocument = value => {
     if (!Array.isArray(value) || !Object.isFrozen(value) || !trustedValues.has(value))
       reject("invalid-typed-value", "forged document value rejected");
@@ -949,7 +957,7 @@ function createTypedRuntime(abi, typedCapCall, allow) {
           entries.sort((left, right) => left[0] < right[0] ? -1 : left[0] > right[0] ? 1 : 0);
           result = ["map", entries];
         } else reject("invalid-typed-builder", "document builder tag is invalid");
-        return admitDocument(result);
+        return constructDocument(result);
       } else reject("invalid-typed-builder", "primitive descriptor cannot be constructed");
       return admitValue(descriptor, Object.freeze(result));
     },
@@ -1224,32 +1232,32 @@ function createTypedRuntime(abi, typedCapCall, allow) {
     "document-null"(descriptorId) {
       if (descriptorAt(descriptorId) !== documentDescriptor)
         reject("invalid-typed-operation", "document descriptor required");
-      return admitDocument(["null"]);
+      return constructDocument(["null"]);
     },
     "document-bool"(descriptorId, item) {
       if (descriptorAt(descriptorId) !== documentDescriptor || typeof item !== "boolean")
         reject("invalid-typed-operation", "document bool requires its descriptor and boolean");
-      return admitDocument(["bool", item]);
+      return constructDocument(["bool", item]);
     },
     "document-i64"(descriptorId, item) {
       if (descriptorAt(descriptorId) !== documentDescriptor)
         reject("invalid-typed-operation", "document descriptor required");
-      return admitDocument(["i64", i64(item)]);
+      return constructDocument(["i64", i64(item)]);
     },
     "document-f64"(descriptorId, item) {
       if (descriptorAt(descriptorId) !== documentDescriptor || !Number.isFinite(item))
         reject("invalid-typed-operation", "document f64 must be finite");
-      return admitDocument(["f64", item]);
+      return constructDocument(["f64", item]);
     },
     "document-string"(descriptorId, item) {
       if (descriptorAt(descriptorId) !== documentDescriptor)
         reject("invalid-typed-operation", "document descriptor required");
-      return admitDocument(["string", item]);
+      return constructDocument(["string", item]);
     },
     "document-keyword"(descriptorId, item) {
       if (descriptorAt(descriptorId) !== documentDescriptor)
         reject("invalid-typed-operation", "document descriptor required");
-      return admitDocument(["keyword", item]);
+      return constructDocument(["keyword", item]);
     },
     "document-kind"(descriptorId, value) {
       if (descriptorAt(descriptorId) !== documentDescriptor)
@@ -1278,7 +1286,7 @@ function createTypedRuntime(abi, typedCapCall, allow) {
       if (!ok) return documentOption(documentDescriptor, false, undefined);
       const [key, item] = value[1][Number(index)];
       return documentOption(documentDescriptor, true,
-        admitDocument(["vector", [["keyword", key], item]]));
+        constructDocument(["vector", [["keyword", key], item]]));
     },
     "document-vector-assoc"(descriptorId, value, rawIndex, item) {
       if (descriptorAt(descriptorId) !== documentDescriptor)
@@ -1288,7 +1296,7 @@ function createTypedRuntime(abi, typedCapCall, allow) {
       if (index < 0n || index >= BigInt(value[1].length))
         reject("invalid-typed-operation", "document vector index out of range");
       const output = [...value[1]]; output[Number(index)] = item;
-      return admitDocument(["vector", output]);
+      return constructDocument(["vector", output]);
     },
     "document-vector-conj"(descriptorId, value, item) {
       if (descriptorAt(descriptorId) !== documentDescriptor)
@@ -1296,7 +1304,7 @@ function createTypedRuntime(abi, typedCapCall, allow) {
       value = assertDocument(value); item = assertDocument(item);
       if (value[0] !== "vector") reject("invalid-typed-operation", "document vector required");
       if (value[1].length >= 32) reject("invalid-typed-value", "document vector item budget exceeded");
-      return admitDocument(["vector", [...value[1], item]]);
+      return constructDocument(["vector", [...value[1], item]]);
     },
     "document-vector-drop"(descriptorId, value, rawCount) {
       if (descriptorAt(descriptorId) !== documentDescriptor)
@@ -1305,7 +1313,7 @@ function createTypedRuntime(abi, typedCapCall, allow) {
       if (value[0] !== "vector") reject("invalid-typed-operation", "document vector required");
       if (count < 0n || count > BigInt(value[1].length))
         reject("invalid-typed-operation", "document vector drop out of range");
-      return admitDocument(["vector", value[1].slice(Number(count))]);
+      return constructDocument(["vector", value[1].slice(Number(count))]);
     },
     "document-vector-remove"(descriptorId, value, rawIndex) {
       if (descriptorAt(descriptorId) !== documentDescriptor)
@@ -1314,7 +1322,7 @@ function createTypedRuntime(abi, typedCapCall, allow) {
       if (value[0] !== "vector") reject("invalid-typed-operation", "document vector required");
       if (index < 0n || index >= BigInt(value[1].length))
         reject("invalid-typed-operation", "document vector index out of range");
-      return admitDocument(["vector", value[1].filter((_, itemIndex) => itemIndex !== Number(index))]);
+      return constructDocument(["vector", value[1].filter((_, itemIndex) => itemIndex !== Number(index))]);
     },
     "document-get"(descriptorId, value, key) {
       if (descriptorAt(descriptorId) !== documentDescriptor)
@@ -1332,14 +1340,14 @@ function createTypedRuntime(abi, typedCapCall, allow) {
       const output = entries.map(entry => [entry[0], entry[1]]);
       if (index < 0) output.push([checkedKey, item]); else output[index] = [checkedKey, item];
       output.sort((left, right) => left[0] < right[0] ? -1 : left[0] > right[0] ? 1 : 0);
-      return admitDocument(["map", output]);
+      return constructDocument(["map", output]);
     },
     "document-dissoc"(descriptorId, value, key) {
       if (descriptorAt(descriptorId) !== documentDescriptor)
         reject("invalid-typed-operation", "document descriptor required");
       const [entries,, index] = documentPosition(value, key);
       if (index < 0) return assertDocument(value);
-      return admitDocument(["map", entries.filter((_, itemIndex) => itemIndex !== index)
+      return constructDocument(["map", entries.filter((_, itemIndex) => itemIndex !== index)
         .map(entry => [entry[0], entry[1]])]);
     },
     "document-merge"(descriptorId, left, right) {
@@ -1348,7 +1356,7 @@ function createTypedRuntime(abi, typedCapCall, allow) {
       const merged = new Map(documentEntries(left).map(entry => [entry[0], entry[1]]));
       for (const entry of documentEntries(right)) merged.set(entry[0], entry[1]);
       if (merged.size > 32) reject("invalid-typed-value", "document map item budget exceeded");
-      return admitDocument(["map", [...merged].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)]);
+      return constructDocument(["map", [...merged].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)]);
     },
     "document-string-value"(descriptorId, value) {
       if (descriptorAt(descriptorId) !== documentDescriptor)
