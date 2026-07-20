@@ -1,0 +1,53 @@
+# Component Model and WASI baseline
+
+This document records the official specifications reviewed for
+`wasm-component-kotoba-v1`. The machine-readable contract is
+`resources/kotoba/lang/component-model-v1.edn`.
+
+## Baseline selected on 2026-07-20
+
+- WebAssembly Component Model at revision
+  `e6bb1e456e946abd01173755468134d7c75c9f07`. Component binaries use the
+  component-layer preamble and contain core modules, instances, component
+  types, canonical functions, imports, and exports.
+- WIT from the same revision. Versioned package names, interfaces, and worlds
+  define the portable contract. Standard scalar spellings are `s64`, `f32`,
+  `f64`, `bool`, and `string`.
+- Canonical ABI from the same revision. The compiler must generate the core
+  memory, reallocation, lifting/lowering, and required post-return adapters;
+  Kotoba's existing `externref` host representation is not the component ABI.
+- WASI 0.2.11 at tag revision
+  `ed73919426173babd88ae145e31deca3d484bbd0` is the synchronous v1 provider
+  baseline.
+- WASI 0.3.0 at tag revision
+  `3ee2a590c766594ae44a54730fc74fc27da5c609` is stable and introduces native
+  async functions, streams, and futures. It is deliberately deferred to a
+  separately versioned Kotoba async profile; it is not silently exposed to
+  synchronous v1 applications.
+
+## Kotoba interpretation
+
+WIT describes transport shape, not all Kotoba semantic constraints. Strings,
+lists, canonical sets/maps, descriptor depth, and aggregate byte/node budgets
+are checked by compiler-generated validators before provider invocation and
+after provider return. The optional gated fixed-length-list syntax is not a v1
+dependency.
+
+General recursive Kotoba schemas are rejected by Component v1. A digest-bound
+Kotoba schema cannot be lowered merely by assigning a WIT name when its
+recursive identity and bounds are not preserved.
+
+An application world imports exactly the interfaces corresponding to its
+declared capabilities. WASI interfaces appear only in provider components and
+only as listed in the relevant capability rule. In particular, storage does
+not imply filesystem access and LLM does not imply socket access.
+
+## Official sources
+
+- https://github.com/WebAssembly/component-model
+- https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md
+- https://github.com/WebAssembly/component-model/blob/main/design/mvp/CanonicalABI.md
+- https://github.com/WebAssembly/component-model/blob/main/design/mvp/Binary.md
+- https://github.com/WebAssembly/WASI/releases/tag/v0.2.11
+- https://wasi.dev/releases/wasi-p3
+- https://wasi.dev/roadmap

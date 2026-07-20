@@ -16,13 +16,38 @@
 
 (deftest component-model-policy-is-compiler-owned-and-closed
   (let [policy (:component-model
-                (read-resource "kotoba/lang/application-language.edn"))]
+                (read-resource "kotoba/lang/application-language.edn"))
+        contract (read-resource "kotoba/lang/component-model-v1.edn")]
     (is (= :specified (:status policy)))
     (is (= :kotoba-lang/compiler (:artifact-owner policy)))
     (is (= :declared-typed-capabilities-only (get-in policy [:world :imports])))
     (is (= :reject (get-in policy [:world :undeclared-imports])))
     (is (false? (get-in policy [:wasi :application-ambient-authority])))
-    (is (= :provider-component (get-in policy [:wasi :owner])))))
+    (is (= :provider-component (get-in policy [:wasi :owner])))
+    (is (= "0.2.11" (get-in contract [:spec-baseline :wasi :default])))
+    (is (= :deferred (get-in contract [:spec-baseline :wasi :async-profile :status])))
+    (is (= :reject-v1 (get-in contract [:types :recursive-schema :disposition])))
+    (is (= :not-required (get-in contract [:limits :wit-bounded-list-feature])))))
+
+(deftest component-capability-inventory-and-provider-authority-are-closed
+  (let [contract (read-resource "kotoba/lang/component-model-v1.edn")
+        expected (->> (:kits manifest) (mapcat :capabilities) set)
+        actual (->> (:capabilities contract) (map #(select-keys % [:name :id])) set)
+        entries (:capabilities contract)]
+    (is (= expected actual))
+    (is (= (count entries) (count (set (map (juxt :interface :function) entries)))))
+    (is (every? #(and (string? (:interface %))
+                      (string? (:function %))
+                      (vector? (:provider-wasi %))) entries))
+    (is (= ["wasi:http/outgoing-handler@0.2.11"]
+           (:provider-wasi (first (filter #(= :http/post (:name %)) entries)))))
+    (is (= #{"wasi:clocks/wall-clock@0.2.11"
+             "wasi:clocks/monotonic-clock@0.2.11"}
+           (set (:provider-wasi
+                 (first (filter #(= :clock/now (:name %)) entries)))))
+    (is (every? empty?
+                (map :provider-wasi
+                     (remove #(contains? #{:http/post :clock/now} (:name %)) entries))))))
 
 (deftest every-backend-is-bound-to-the-same-manifest-gate
   (doseq [backend [:wasmtime :native :cljs]]
