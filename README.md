@@ -287,6 +287,11 @@ to canonical `[:set :keyword]` data. Empty, mixed-type, floating, oversized,
 or computed set constants remain rejected; use an explicit typed constructor
 where the item type cannot be safely inferred.
 
+Closed top-level constants may reference other declared constants, including
+inside vectors and maps. Resolution is compile-time-only, must terminate in
+bounded literal data, and rejects unknown names and cycles. A symbol never
+falls through to host lookup or execution.
+
 Canonical typed maps use `[:map key-type value-type]` and at most 31 entries
 inside the shared 64-node value budget. Values are
 `[descriptor, sorted-entry-vector]`; every entry is an exact two-item

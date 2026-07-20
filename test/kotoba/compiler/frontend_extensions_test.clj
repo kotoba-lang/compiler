@@ -755,6 +755,26 @@
     (is (= 43 (ir/execute (:kir (compiler/compile-source source :js-kotoba-v1))
                           'main [])))))
 
+(deftest nested-top-level-constant-aliases-resolve-closed-and-acyclically
+  (let [source "(def base 21)
+                (def derived base)
+                (defn main [] (+ derived 1))"]
+    (is (= 22 (oracle source)))
+    (is (= (:kir (compiler/compile-source source :js-kotoba-v1))
+           (:kir (compiler/compile-source source :wasm32-kotoba-v1)))))
+  (is (= 21 (oracle "(def base 21)
+                     (def config {:multiplier base})
+                     (defn main [] (get config :multiplier))")))
+  (is (= 2 (oracle "(def base 21)
+                    (def items [base 2])
+                    (defn main [] (vector-at items 1))")))
+  (is (= "constant alias must name a declared constant"
+         (rejection-message "(def value missing) (defn main [] value)")))
+  (is (= "constant alias must name a declared constant"
+         (rejection-message "(def pi Math/PI) (defn main [] pi)")))
+  (is (= "constant aliases must be acyclic"
+         (rejection-message "(def left right) (def right left) (defn main [] left)"))))
+
 (deftest string-constant-is-a-value-not-an-implicit-docstring
   (is (= "@context"
          (oracle "(def context-key \"@context\") (defn main [] :string context-key)")))

@@ -2680,6 +2680,10 @@
     (keyword? value) true
     (boolean? value) true
     (nil? value) true
+    ;; Symbols are inert references at this stage. Resolution below admits
+    ;; only names declared by another top-level constant and rejects unknown
+    ;; names and cycles before any function is desugared.
+    (symbol? value) true
     (vector? value) (or (type-alias-form? value)
                         (and (<= (count value) max-list-items)
                              (every? constant-literal? value)))
@@ -2724,6 +2728,14 @@
        (when (contains? resolving name)
          (reject! "constant aliases must be acyclic" value))
        (resolve-constant-aliases! (get constants name) constants (conj resolving name)))
+     (symbol? value)
+     (do
+       (when-not (contains? constants value)
+         (reject! "constant alias must name a declared constant" value))
+       (when (contains? resolving value)
+         (reject! "constant aliases must be acyclic" value))
+       (resolve-constant-aliases! (get constants value) constants
+                                  (conj resolving value)))
      (vector? value) (mapv #(resolve-constant-aliases! % constants resolving) value)
      (map? value) (into (empty value)
                         (map (fn [[key item]]

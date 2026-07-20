@@ -41,6 +41,7 @@
    {:name "sleb-boundary-128" :source "test/nbb/fixtures/sleb-boundary-128.kotoba" :target "wasm32-browser" :policy nil}
    {:name "local-uleb128-130" :source "test/nbb/fixtures/local-uleb128-130.kotoba" :target "wasm32-browser" :policy nil}
    {:name "keyword-set-constant" :source "test/nbb/fixtures/keyword-set-constant.kotoba" :target "wasm32-browser" :policy nil}
+   {:name "constant-alias" :source "test/nbb/fixtures/constant-alias.kotoba" :target "wasm32-browser" :policy nil}
    ;; Exact float token normalization and Wasm lowering are checked through
    ;; observable semantics, including signed zero and canonical NaN behavior.
    {:name "f64-bits" :source "test/nbb/fixtures/f64-bits.kotoba" :target "wasm32-browser" :policy nil}
