@@ -39,4 +39,5 @@
  :state/transact 8
  :ui/commit 9
  :ui/next-event 10
- :llm/generate 11}
+ :llm/generate 11
+ :storage/transact 12}
