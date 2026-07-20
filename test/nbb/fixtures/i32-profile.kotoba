@@ -1,0 +1,10 @@
+(ns nbb.i32-profile
+  (:export [main hash-step]))
+
+(defn main [] :i64
+  (xorshift32 1))
+
+(defn hash-step [x :i64 y :i64] :i64
+  (i32-xor
+    (i32-wrapping-mul x 1619)
+    (i32-shift-right (i32-wrapping-mul y 31337) 13)))

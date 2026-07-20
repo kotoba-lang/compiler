@@ -71,6 +71,9 @@
   (load-capability-registry))
 
 (def arithmetic '#{+ - * quot bit-xor bit-and})
+(def i32-operations
+  '{i32-wrap 1 u32-wrap 1 i32-wrapping-add 2 i32-wrapping-mul 2 i32-xor 2
+    i32-shift-left 2 i32-shift-right 2 u32-shift-right 2 xorshift32 1})
 (def comparisons '#{= < > <= >=})
 (def heap-operations '{pair 2 pair-first 1 pair-second 1})
 ;; kgraph-* (ADR-2607198300): all-integer EAVT datom store, the native
@@ -163,6 +166,7 @@
              (set (keys string-operations))
              (set (keys f64-operations))
              (set (keys f32-operations))
+             (set (keys i32-operations))
              '#{let if cap-call ns defn defn- some some? nil? vector-i64 vector-f64 vector-new vector-f64-new
                 hetero-vector typed-set record match-result match-variant match-option}))
 (def max-functions 1024)
@@ -1115,6 +1119,19 @@
           (list* 'cap-call (resolve-capability-keyword! (first args) form)
                  (map desugar-expr (rest args)))
           (apply list op (map desugar-expr args)))
+        xorshift32
+        (do
+          (when-not (= 1 (count args))
+            (reject! "xorshift32 requires one state value" form))
+          (let [x0 (gensym "xorshift32_0__")
+                x1 (gensym "xorshift32_1__")
+                x2 (gensym "xorshift32_2__")
+                x3 (gensym "xorshift32_3__")]
+            (list 'let [x0 (list 'u32-wrap (desugar-expr (first args)))
+                         x1 (list 'u32-wrap (list 'i32-xor x0 (list 'i32-shift-left x0 13)))
+                         x2 (list 'u32-wrap (list 'i32-xor x1 (list 'u32-shift-right x1 17)))
+                         x3 (list 'u32-wrap (list 'i32-xor x2 (list 'i32-shift-left x2 5)))]
+                  x3)))
         (apply list op (map desugar-expr args))))))
 
 (defn- desugar-expr [form]
@@ -1205,6 +1222,14 @@
         (contains? arithmetic op)
             (do (when (or (empty? args) (and (contains? '#{quot bit-xor bit-and} op) (not= 2 (count args))))
               (reject! "invalid arithmetic arity" form))
+            (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
+        (contains? i32-operations op)
+        (do (when-not (= (get i32-operations op) (count args))
+              (reject! "i32 operation arity mismatch" form))
+            (when (contains? '#{i32-shift-left i32-shift-right u32-shift-right} op)
+              (when-not (and (kotoba-integer? (second args)) (<= 0 (second args) 31))
+                (reject! "i32 shift count must be an integer literal in [0,31]" form)))
             (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
 
         (contains? comparisons op)
@@ -1553,6 +1578,11 @@
   (let [types (mapv #(infer-expression-type % locals signatures) args)]
     (cond
       (contains? arithmetic op)
+      (do (doseq [[arg type] (map vector args types)]
+            (require-expression-type! type :i64 arg))
+          :i64)
+
+      (contains? i32-operations op)
       (do (doseq [[arg type] (map vector args types)]
             (require-expression-type! type :i64 arg))
           :i64)
@@ -2511,7 +2541,8 @@
                                                          (= 'vector-new (first %))
                                                          (= 'vector-f64-new (first %))
                                                          (contains? typed-vector-operations (first %))
-                                                         (contains? typed-f64-vector-operations (first %)))))
+                                                         (contains? typed-f64-vector-operations (first %))
+                                                         (contains? i32-operations (first %)))))
                                            (tree-seq coll? seq body))))
                                parsed))
           function-effects (infer-effects parsed)

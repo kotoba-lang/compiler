@@ -47,4 +47,5 @@
    ;; between the JVM and JVM-free nbb compiler hosts.
    {:name "f64-bits" :source "test/nbb/fixtures/f64-bits.kotoba" :target "wasm32-browser" :policy nil}
    {:name "f32-bits" :source "test/nbb/fixtures/f32-bits.kotoba" :target "wasm32-browser" :policy nil}
-   {:name "vector-f64" :source "test/nbb/fixtures/vector-f64.kotoba" :target "wasm32-browser" :policy nil}])
+   {:name "vector-f64" :source "test/nbb/fixtures/vector-f64.kotoba" :target "wasm32-browser" :policy nil}
+   {:name "i32-profile" :source "test/nbb/fixtures/i32-profile.kotoba" :target "wasm32-browser" :policy nil}])

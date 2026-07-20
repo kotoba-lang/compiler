@@ -172,6 +172,24 @@
             (concat (emit-expr (first args) env ctx)
                     (mapcat #(concat (emit-expr % env ctx) [opcode]) (rest args)))))
 
+        (= op 'i32-wrap)
+        (concat (emit-expr (first args) env ctx) [0xa7 0xac])
+
+        (= op 'u32-wrap)
+        (concat (emit-expr (first args) env ctx) [0xa7 0xad])
+
+        (contains? '#{i32-wrapping-add i32-wrapping-mul i32-xor} op)
+        (concat (emit-expr (first args) env ctx) [0xa7]
+                (emit-expr (second args) env ctx) [0xa7]
+                [({'i32-wrapping-add 0x6a 'i32-wrapping-mul 0x6c 'i32-xor 0x73} op)
+                 0xac])
+
+        (contains? '#{i32-shift-left i32-shift-right u32-shift-right} op)
+        (concat (emit-expr (first args) env ctx) [0xa7]
+                (emit-expr (second args) env ctx) [0xa7]
+                [({'i32-shift-left 0x74 'i32-shift-right 0x75 'u32-shift-right 0x76} op)
+                 (if (= op 'u32-shift-right) 0xad 0xac)])
+
         (contains? '#{= < > <= >=} op)
         (concat (emit-many args env ctx)
                 [({'= 0x51 '< 0x53 '> 0x55 '<= 0x57 '>= 0x59} op)
@@ -700,6 +718,20 @@
                         (concat [0x42 0] (emit* (first args) env) [0x7d])
                         (concat (emit* (first args) env)
                                 (mapcat #(concat (emit* % env) [opcode]) (rest args)))))
+                    (= op 'i32-wrap)
+                    (concat (emit* (first args) env) [0xa7 0xac])
+                    (= op 'u32-wrap)
+                    (concat (emit* (first args) env) [0xa7 0xad])
+                    (contains? '#{i32-wrapping-add i32-wrapping-mul i32-xor} op)
+                    (concat (emit* (first args) env) [0xa7]
+                            (emit* (second args) env) [0xa7]
+                            [({'i32-wrapping-add 0x6a 'i32-wrapping-mul 0x6c 'i32-xor 0x73} op)
+                             0xac])
+                    (contains? '#{i32-shift-left i32-shift-right u32-shift-right} op)
+                    (concat (emit* (first args) env) [0xa7]
+                            (emit* (second args) env) [0xa7]
+                            [({'i32-shift-left 0x74 'i32-shift-right 0x75 'u32-shift-right 0x76} op)
+                             (if (= op 'u32-shift-right) 0xad 0xac)])
                     (= op 'string-byte-length)
                     (concat (i32-const (descriptor-id :string)) (emit* (first args) env)
                             [0x10 (get intrinsic-indices 'typed-count)])

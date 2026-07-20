@@ -58,6 +58,30 @@
                     "if(x['and-bits'](-1n,0x5555555555555555n)!==0x5555555555555555n)process.exit(3);"))]
     (is (zero? (:exit probe)) (:err probe))))
 
+(deftest i32-wrapping-shifts-and-xorshift-have-wasm-runtime-parity
+  (let [source
+        "(ns i32.profile (:export [main signed unsigned add mul xor shl shr ushr next]))
+         (defn main [] :i64 42)
+         (defn signed [x :i64] :i64 (i32-wrap x))
+         (defn unsigned [x :i64] :i64 (u32-wrap x))
+         (defn add [x :i64 y :i64] :i64 (i32-wrapping-add x y))
+         (defn mul [x :i64 y :i64] :i64 (i32-wrapping-mul x y))
+         (defn xor [x :i64 y :i64] :i64 (i32-xor x y))
+         (defn shl [x :i64] :i64 (i32-shift-left x 31))
+         (defn shr [x :i64] :i64 (i32-shift-right x 31))
+         (defn ushr [x :i64] :i64 (u32-shift-right x 1))
+         (defn next [x :i64] :i64 (xorshift32 x))"
+        compiled (compiler/compile-source source :wasm32-kotoba-v1)
+        probe (node-probe
+               compiled
+               (str "const x=h.instance.exports;"
+                    "if(x.main()!==42n||x.signed(4294967295n)!==-1n||x.unsigned(-1n)!==4294967295n)process.exit(2);"
+                    "if(x.add(2147483647n,1n)!==-2147483648n||x.mul(2147483647n,2n)!==-2n)process.exit(3);"
+                    "if(x.xor(-1n,2147483647n)!==-2147483648n||x.shl(1n)!==-2147483648n)process.exit(4);"
+                    "if(x.shr(-2147483648n)!==-1n||x.ushr(-1n)!==2147483647n)process.exit(5);"
+                    "if(x.next(1n)!==270369n||x.next(270369n)!==67634689n||x.next(67634689n)!==2647435461n)process.exit(6);"))]
+    (is (zero? (:exit probe)) (:err probe))))
+
 (deftest local-indices-above-127-use-canonical-uleb128
   (let [typed-bindings (str/join " " (mapcat (fn [index]
                                                  [(str "x" index) (str (double index))])
