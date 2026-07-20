@@ -87,7 +87,7 @@
                   (reduce (fn [item _] ["vector" [item]]) ["null"] (range 9)))))))
 
 (def vector-source
-  "(ns document.vector (:export [main first-item kind doc-kind bool-kind key-name entry changed tail removed missing missing-entry bad-assoc bad-drop]))
+  "(ns document.vector (:export [main first-item kind doc-kind bool-kind key-name entry changed tail removed missing missing-entry same-doc same-sample different-sample signed-zero-equal bad-assoc bad-drop]))
    (defn main [] :i64 (first-item))
    (defn items [] :document (document-vector (document-i64 1) (document-i64 2)))
    (defn first-item [] :i64
@@ -118,6 +118,22 @@
    (defn missing-entry [] :bool
      (option-some?-of [:option :document]
        (document-map-entry-at (document-map :a (document-i64 1)) -1)))
+   (defn sample [] :document
+     (document-map :items
+       (document-vector
+         (document-i64 1)
+         (document-map :active (document-bool true) :name (document-string \"kotoba\")))))
+   (defn same-doc [left :document right :document] :bool
+     (document-equal? left right))
+   (defn same-sample [] :bool (document-equal? (sample) (sample)))
+   (defn different-sample [] :bool
+     (document-equal? (sample)
+       (document-map :items
+         (document-vector
+           (document-i64 1)
+           (document-map :active (document-bool false) :name (document-string \"kotoba\"))))))
+   (defn signed-zero-equal [] :bool
+     (document-equal? (document-f64 -0.0) (document-f64 0.0)))
    (defn bad-assoc [] :document (document-vector-assoc (items) -1 (document-null)))
    (defn bad-drop [] :document (document-vector-drop (items) 3))")
 
@@ -138,24 +154,39 @@
                   (is (= ["vector" [["i64" 1] ["i64" 9]]]
                          (execute 'removed)))
                   (is (false? (execute 'missing)))
-                  (is (false? (execute 'missing-entry))))
+                  (is (false? (execute 'missing-entry)))
+                  (is (true? (execute 'same-sample)))
+                  (is (false? (execute 'different-sample)))
+                  (is (true? (execute 'signed-zero-equal))))
         js-probe (script-probe
                   script
                   (str "if(x['first-item']()!==1n||x.kind()!==':fixed'||x['bool-kind']()!==true||x['key-name']()!=='type'||x.missing()!==false||x['missing-entry']()!==false)process.exit(2);"
+                       "const a=['map',[[':items',['vector',[['i64',1n],['map',[[':active',['bool',true]],[':name',['string','kotoba']]]]]]]]];"
+                       "const b=['map',[[':items',['vector',[['i64',1n],['map',[[':active',['bool',true]],[':name',['string','kotoba']]]]]]]]];"
+                       "if(!x['same-sample']()||x['different-sample']()||!x['signed-zero-equal']()||!x['same-doc'](a,b))process.exit(8);"
+                       "b[1][0][1][1][1][1][0][1][1]=false;if(x['same-doc'](a,b))process.exit(9);"
                        "for(const [v,k] of [[['null'],':null'],[['bool',true],':bool'],[['i64',1n],':i64'],[['f64',1],':f64'],[['string','x'],':string'],[['keyword',':x'],':keyword'],[['vector',[]],':vector'],[['map',[]],':map']])if(x['doc-kind'](v)!==k)process.exit(6);"
                        "const e=x.entry();if(e[0]!=='vector'||e[1][0][1]!==':a'||e[1][1][1]!=='first')process.exit(5);"
                        "const t=x.tail(),r=x.removed();if(t[1].length!==2||t[1][0][1]!==7n||t[1][1][1]!==9n||r[1].length!==2||r[1][1][1]!==9n)process.exit(3);"
-                       "for(const bad of [{},['map',[[':b',['null']],[':a',['null']]]]]){let rejected=false;try{x['doc-kind'](bad)}catch(e){rejected=true}if(!rejected)process.exit(7)}"
+                       "for(const bad of [{},['map',[[':b',['null']],[':a',['null']]]]]){let rejected=false;try{x['doc-kind'](bad)}catch(e){rejected=true}if(!rejected)process.exit(7);rejected=false;try{x['same-doc'](bad,['null'])}catch(e){rejected=true}if(!rejected)process.exit(10)}"
                        "for(const name of ['bad-assoc','bad-drop']){let rejected=false;try{x[name]()}catch(e){rejected=true}if(!rejected)process.exit(4)}"))
         wasm-probe (node-probe
                     wasm
                     (str "const x=h.instance.exports;if(x['first-item']()!==1n||x.kind()!==':fixed'||x['bool-kind']()!==true||x['key-name']()!=='type'||x.missing()!==false||x['missing-entry']()!==false)process.exit(2);"
+                         "const a=h.typedValues.document(['map',[[':items',['vector',[['i64',1n],['map',[[':active',['bool',true]],[':name',['string','kotoba']]]]]]]]]);"
+                         "const b=h.typedValues.document(['map',[[':items',['vector',[['i64',1n],['map',[[':active',['bool',true]],[':name',['string','kotoba']]]]]]]]]);"
+                         "const c=h.typedValues.document(['map',[[':items',['vector',[['i64',1n],['map',[[':active',['bool',false]],[':name',['string','kotoba']]]]]]]]]);"
+                         "if(!x['same-sample']()||x['different-sample']()||!x['signed-zero-equal']()||!x['same-doc'](a,b)||x['same-doc'](a,c))process.exit(8);"
                          "for(const [v,k] of [[['null'],':null'],[['bool',true],':bool'],[['i64',1n],':i64'],[['f64',1],':f64'],[['string','x'],':string'],[['keyword',':x'],':keyword'],[['vector',[]],':vector'],[['map',[]],':map']])if(x['doc-kind'](h.typedValues.document(v))!==k)process.exit(6);"
                          "const e=x.entry();if(e[0]!=='vector'||e[1][0][1]!==':a'||e[1][1][1]!=='first')process.exit(5);"
                          "const t=x.tail(),r=x.removed();if(t[1].length!==2||t[1][0][1]!==7n||t[1][1][1]!==9n||r[1].length!==2||r[1][1][1]!==9n)process.exit(3);"
-                         "for(const bad of [{},['map',[[':b',['null']],[':a',['null']]]]]){let rejected=false;try{x['doc-kind'](bad)}catch(e){rejected=true}if(!rejected)process.exit(7)}"
+                         "for(const bad of [{},['map',[[':b',['null']],[':a',['null']]]]]){let rejected=false;try{x['doc-kind'](bad)}catch(e){rejected=true}if(!rejected)process.exit(7);rejected=false;try{x['same-doc'](bad,h.typedValues.document(['null']))}catch(e){rejected=true}if(!rejected)process.exit(10)}"
                          "for(const name of ['bad-assoc','bad-drop']){let rejected=false;try{x[name]()}catch(e){rejected=true}if(!rejected)process.exit(4)}"))]
     (observe #(ir/execute kir % []))
+    (is (true? (ir/execute kir 'same-doc
+                           [["map" [[:a ["vector" [["i64" 1] ["null"]]]]]]
+                            ["map" [[:a ["vector" [["i64" 1] ["null"]]]]]]])))
+    (is (false? (ir/execute kir 'same-doc [["keyword" :a] ["keyword" :b]])))
     (is (thrown? clojure.lang.ExceptionInfo (ir/execute kir 'bad-assoc [])))
     (is (thrown? clojure.lang.ExceptionInfo (ir/execute kir 'bad-drop [])))
     (is (zero? (:exit js-probe)) (:err js-probe))

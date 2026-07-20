@@ -15,7 +15,7 @@
   '#{f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered
      f32-eq f32-lt f32-le f32-gt f32-ge f32-unordered
      bool-not option-some? result-ok? option-some?-of result-ok?-of
-     typed-set-contains typed-map-contains document-contains})
+     typed-set-contains typed-map-contains document-contains document-equal?})
 
 
 (defn descriptor? [value]
@@ -116,7 +116,7 @@
                       document-string document-keyword document-vector document-map
                       document-count document-kind document-vector-at document-map-entry-at document-vector-assoc
                       document-vector-conj document-vector-drop document-vector-remove
-                      document-contains document-get document-assoc
+                      document-equal? document-contains document-get document-assoc
                       document-dissoc document-merge document-string-value document-keyword-value
                       document-bool-value document-i64-value document-f64-value}
                     (first value)))
@@ -304,7 +304,7 @@
         (contains? '#{bool-not option-some? result-ok?
                       result-ok?-of option-some?-of typed-set-contains
                       typed-map-contains string-index-contains} op) :bool
-        (= op 'document-contains) :bool
+        (contains? '#{document-contains document-equal?} op) :bool
         (contains? '#{string-concat string-replace-all keyword-name} op) :string
         (contains? '#{keyword-from-string document-kind} op) :keyword
         (= op 'xml-path-attr) [:option :string]

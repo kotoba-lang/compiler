@@ -608,6 +608,28 @@ function createTypedRuntime(abi, typedCapCall, allow) {
     }
     return left.length < right.length ? -1 : left.length > right.length ? 1 : 0;
   };
+  const compareDocument = (left, right) => {
+    const tags = Object.freeze(["null", "bool", "i64", "f64", "string", "keyword", "vector", "map"]);
+    const leftTag = tags.indexOf(left[0]), rightTag = tags.indexOf(right[0]);
+    if (leftTag !== rightTag) return leftTag < rightTag ? -1 : 1;
+    if (left[0] === "null") return 0;
+    if (left[0] === "bool") return left[1] === right[1] ? 0 : left[1] ? 1 : -1;
+    if (left[0] !== "vector" && left[0] !== "map")
+      return left[1] < right[1] ? -1 : left[1] > right[1] ? 1 : 0;
+    const length = Math.min(left[1].length, right[1].length);
+    for (let index = 0; index < length; index += 1) {
+      if (left[0] === "map") {
+        const leftKey = left[1][index][0], rightKey = right[1][index][0];
+        if (leftKey !== rightKey) return leftKey < rightKey ? -1 : 1;
+        const compared = compareDocument(left[1][index][1], right[1][index][1]);
+        if (compared !== 0) return compared;
+      } else {
+        const compared = compareDocument(left[1][index], right[1][index]);
+        if (compared !== 0) return compared;
+      }
+    }
+    return left[1].length < right[1].length ? -1 : left[1].length > right[1].length ? 1 : 0;
+  };
   const compareValue = (descriptor, left, right) => {
     if (descriptor === "f64" || descriptor === "f32") {
       if (Number.isNaN(left) || Number.isNaN(right))
@@ -618,6 +640,7 @@ function createTypedRuntime(abi, typedCapCall, allow) {
       return left < right ? -1 : left > right ? 1 : 0;
     if (descriptor === "bool") return left === right ? 0 : left ? 1 : -1;
     const kind = descriptor[0];
+    if (kind === "document") return compareDocument(left, right);
     if (kind === "option") {
       if (left[1] !== right[1]) return left[1] ? 1 : -1;
       return left[1] ? compareValue(descriptor[1], left[2], right[2]) : 0;
