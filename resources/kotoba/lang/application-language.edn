@@ -37,4 +37,5 @@
  {:wasm-aot :conformance-required
   :native-aot :conformance-required
   :jit :conformance-required
+  :provider-gate :kotoba.backend-provider-qualification/v1
   :rule "An unavailable backend is an implementation gap, not a reason to remove a specified safe language feature."}}
