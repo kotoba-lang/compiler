@@ -135,7 +135,7 @@
 (def document-fixed-operations
   '{document-null 0 document-bool 1 document-i64 1 document-f64 1
     document-string 1 document-keyword 1 document-count 1
-    document-vector-at 2 document-vector-assoc 3 document-vector-conj 2
+    document-vector-at 2 document-map-entry-at 2 document-vector-assoc 3 document-vector-conj 2
     document-vector-drop 2 document-vector-remove 2
     document-contains 2 document-get 2 document-assoc 3 document-dissoc 2
     document-merge 2 document-string-value 1 document-keyword-value 1 document-bool-value 1
@@ -143,7 +143,7 @@
 (def document-variadic-operations '#{document-vector document-map})
 (def sequencing-operations '#{do})
 (def string-operations '{string-byte-length 1 string=? 2 string-concat 2
-                         string-replace-all 3 keyword-from-string 1})
+                         string-replace-all 3 keyword-from-string 1 keyword-name 1})
 (def xml-operations '{xml-path-count 2 xml-path-attr 4})
 (def decimal-operations '{decimal-f64-parse 1 decimal-f64x3-parse 1})
 (def f64-operations
@@ -1939,6 +1939,9 @@
       (= op 'document-vector-at)
       (do (require-expression-type! (nth types 0) :document (nth args 0))
           (require-expression-type! (nth types 1) :i64 (nth args 1)) [:option :document])
+      (= op 'document-map-entry-at)
+      (do (require-expression-type! (nth types 0) :document (nth args 0))
+          (require-expression-type! (nth types 1) :i64 (nth args 1)) [:option :document])
       (= op 'document-vector-assoc)
       (do (require-expression-type! (nth types 0) :document (nth args 0))
           (require-expression-type! (nth types 1) :i64 (nth args 1))
@@ -2023,6 +2026,9 @@
 
       (= op 'keyword-from-string)
       (do (require-expression-type! (first types) :string (first args)) :keyword)
+
+      (= op 'keyword-name)
+      (do (require-expression-type! (first types) :keyword (first args)) :string)
 
       (= op 'xml-path-count)
       (do (doseq [[arg type] (map vector args types)]

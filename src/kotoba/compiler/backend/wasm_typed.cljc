@@ -114,7 +114,7 @@
     (and (seq? value)
          (contains? '#{document-null document-bool document-i64 document-f64
                       document-string document-keyword document-vector document-map
-                      document-count document-vector-at document-vector-assoc
+                      document-count document-vector-at document-map-entry-at document-vector-assoc
                       document-vector-conj document-vector-drop document-vector-remove
                       document-contains document-get document-assoc
                       document-dissoc document-merge document-string-value document-keyword-value
@@ -300,7 +300,7 @@
                       result-ok?-of option-some?-of typed-set-contains
                       typed-map-contains string-index-contains} op) :bool
         (= op 'document-contains) :bool
-        (contains? '#{string-concat string-replace-all} op) :string
+        (contains? '#{string-concat string-replace-all keyword-name} op) :string
         (= op 'keyword-from-string) :keyword
         (= op 'xml-path-attr) [:option :string]
         (= op 'decimal-f64-parse) [:option :f64]
@@ -315,9 +315,9 @@
         (contains? '#{document-null document-bool document-i64 document-f64
                       document-string document-keyword document-vector document-map
                       document-vector-assoc document-vector-conj document-vector-drop
-                      document-vector-remove
+                      document-vector-remove document-map-entry-at
                       document-assoc document-dissoc document-merge} op) :document
-        (contains? '#{document-get document-vector-at} op) [:option :document]
+        (contains? '#{document-get document-vector-at document-map-entry-at} op) [:option :document]
         (= op 'document-string-value) [:option :string]
         (= op 'document-keyword-value) [:option :keyword]
         (= op 'document-bool-value) [:option :bool]
