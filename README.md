@@ -281,6 +281,12 @@ descriptor ...)`, count, membership, idempotent insertion, removal, and
 structural equality preserve this representation without observing host
 insertion order or object identity.
 
+A top-level `def` may use a non-empty set literal only when every item is a
+keyword and the set has at most 32 items. The frontend lowers it immediately
+to canonical `[:set :keyword]` data. Empty, mixed-type, floating, oversized,
+or computed set constants remain rejected; use an explicit typed constructor
+where the item type cannot be safely inferred.
+
 Canonical typed maps use `[:map key-type value-type]` and at most 31 entries
 inside the shared 64-node value budget. Values are
 `[descriptor, sorted-entry-vector]`; every entry is an exact two-item

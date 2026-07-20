@@ -1,0 +1,6 @@
+(ns fixture.keyword-set-constant (:export [main]))
+
+(def kinds #{:blue :red :green})
+
+(defn main []
+  (typed-set-count [:set :keyword] kinds))
