@@ -1,11 +1,12 @@
 (ns kotoba.compiler.backend.wasm-typed
   #?(:cljs (:require [kotoba.compiler.cljs-i64 :as i64])))
 
-(def abi-version 4)
+(def abi-version 5)
 (def custom-section-name "kotoba.typed")
 
 (def ^:private primitive-tags
-  {:i64 0 :string 1 :keyword 2 :bool 3 :vector-i64 11 :f64 12 :f32 13})
+  {:i64 0 :string 1 :keyword 2 :bool 3 :vector-i64 11 :f64 12 :f32 13
+   :vector-f64 14})
 
 (def ^:private boolean-result-ops
   '#{f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered
@@ -85,6 +86,13 @@
     (and (seq? value) (contains? boolean-result-ops (first value)))
     (reduce (fn [result item] (walk item result))
             (conj found :bool)
+            value)
+    (and (seq? value)
+         (contains? '#{vector-f64-new vector-f64-count vector-f64-get vector-f64-at
+                      vector-f64-drop vector-f64-assoc vector-f64-conj}
+                    (first value)))
+    (reduce (fn [result item] (walk item result))
+            (conj found :vector-f64)
             value)
     (map? value) (reduce (fn [result item] (walk item result)) found (vals value))
     (coll? value) (reduce (fn [result item] (walk item result)) found value)
@@ -187,7 +195,7 @@
         (= op 'if) (infer-type (second args) env signatures)
         (= op 'do) (infer-type (last args) env signatures)
         (contains? '#{+ - * quot bit-xor bit-and cap-call pair pair-first pair-second
-                      string-byte-length map-get vector-count vector-get
+                      string-byte-length map-get vector-count vector-get vector-f64-count
                       vector-at hetero-vector-count typed-set-count
                       typed-map-count} op) :i64
         (= op 'f64-to-bits) :i64
@@ -215,6 +223,9 @@
                       typed-map-contains} op) :bool
         (= op 'string-concat) :string
         (= op 'vector-new) :vector-i64
+        (= op 'vector-f64-new) :vector-f64
+        (contains? '#{vector-f64-get vector-f64-at} op) :f64
+        (contains? '#{vector-f64-drop vector-f64-assoc vector-f64-conj} op) :vector-f64
         (contains? '#{vector-drop vector-assoc vector-conj} op) :vector-i64
         (= op 'variant-new) (first args)
         (contains? '#{option-some-of option-none-of result-ok-of result-err-of

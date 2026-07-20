@@ -1,7 +1,7 @@
 const MAX_MODULE_BYTES = 1024 * 1024;
 const PAIR_CAPACITY = 4096;
 const TYPED_SECTION = "kotoba.typed";
-const TYPED_ABI_VERSION = 4;
+const TYPED_ABI_VERSION = 5;
 const COMPATIBILITY_SECTION = "kotoba.compatibility";
 const COMPATIBILITY_VERSION = 1;
 const MAX_TYPED_DESCRIPTORS = 64;
@@ -34,6 +34,9 @@ const ALLOWED_IMPORTS = new Set([
   "kotoba:typed/vector-at-i64/function",
   "kotoba:typed/vector-assoc-i64/function",
   "kotoba:typed/vector-conj-i64/function",
+  "kotoba:typed/vector-at-f64/function",
+  "kotoba:typed/vector-assoc-f64/function",
+  "kotoba:typed/vector-conj-f64/function",
   "kotoba:typed/set-op-i64/function",
   "kotoba:typed/set-op-ref/function",
   "kotoba:typed/set-contains-i64/function",
@@ -148,6 +151,7 @@ function parseTypedMetadata(module) {
     if (tag === 11) return Object.freeze(["vector-i64"]);
     if (tag === 12) return "f64";
     if (tag === 13) return "f32";
+    if (tag === 14) return Object.freeze(["vector-f64"]);
     if (tag === 4) return Object.freeze(["option", descriptor(depth + 1)]);
     if (tag === 5) return Object.freeze(["result", descriptor(depth + 1), descriptor(depth + 1)]);
     if (tag === 7) {
@@ -373,6 +377,9 @@ function createTypedRuntime(abi) {
     if (kind === "vector-i64")
       return compareSequence(Array.from({ length: Math.max(left.length, right.length) - 1 }, () => "i64"),
                              left.slice(1), right.slice(1));
+    if (kind === "vector-f64")
+      return compareSequence(Array.from({ length: Math.max(left.length, right.length) - 1 }, () => "f64"),
+                             left.slice(1), right.slice(1));
     if (kind === "vector") return compareSequence(descriptor[1], left.slice(1), right.slice(1));
     if (kind === "set") {
       const length = Math.max(left[1].length, right[1].length);
@@ -434,6 +441,10 @@ function createTypedRuntime(abi) {
         if (!sameTrustedDescriptor(value[0], descriptor) || value.length > 16385)
           reject("invalid-typed-value", "vector-i64 shape or item budget is invalid");
         for (let index = 1; index < value.length; index += 1) i64(value[index]);
+      } else if (kind === "vector-f64") {
+        if (!sameTrustedDescriptor(value[0], descriptor) || value.length > 16385)
+          reject("invalid-typed-value", "vector-f64 shape or item budget is invalid");
+        for (let index = 1; index < value.length; index += 1) f64(value[index]);
       } else if (kind === "option") {
         if (!sameTrustedDescriptor(value[0], descriptor) || typeof value[1] !== "boolean" ||
             value.length !== (value[1] ? 3 : 2))
@@ -537,7 +548,7 @@ function createTypedRuntime(abi) {
         const member = descriptor[2][builder.tag];
         if (member === undefined) reject("invalid-typed-builder", "variant tag is out of range");
         result = [descriptor, member[0], ...builder.slots];
-      } else if (kind === "vector-i64" || kind === "vector" || kind === "record")
+      } else if (kind === "vector-i64" || kind === "vector-f64" || kind === "vector" || kind === "record")
         result = [descriptor, ...builder.slots];
       else if (kind === "set") {
         const sorted = [...builder.slots].sort((left, right) => compareValue(descriptor[1], left, right));
@@ -612,7 +623,7 @@ function createTypedRuntime(abi) {
       const descriptor = descriptorAt(descriptorId);
       const checked = assertValue(descriptor, value);
       if (descriptor === "string") return BigInt(utf8Length(checked));
-      if (descriptor[0] === "vector-i64" || descriptor[0] === "vector" || descriptor[0] === "record")
+      if (descriptor[0] === "vector-i64" || descriptor[0] === "vector-f64" || descriptor[0] === "vector" || descriptor[0] === "record")
         return BigInt(checked.length - 1);
       if (descriptor[0] === "set") return BigInt(checked[1].length);
       if (descriptor[0] === "map") return BigInt(checked[1].length);
@@ -637,8 +648,8 @@ function createTypedRuntime(abi) {
     },
     "vector-drop"(descriptorId, value, rawCount) {
       const descriptor = descriptorAt(descriptorId);
-      if (descriptor[0] !== "vector-i64")
-        reject("invalid-typed-operation", "vector-drop requires vector-i64");
+      if (descriptor[0] !== "vector-i64" && descriptor[0] !== "vector-f64")
+        reject("invalid-typed-operation", "vector-drop requires a homogeneous vector");
       const checked = assertValue(descriptor, value);
       const count = i64(rawCount);
       if (count < 0n || count > BigInt(checked.length - 1))
@@ -675,6 +686,36 @@ function createTypedRuntime(abi) {
       const checked = assertValue(descriptor, value);
       if (checked.length >= 16385) reject("invalid-typed-value", "vector-i64 item budget exceeded");
       return admitValue(descriptor, Object.freeze([...checked, i64(item)]));
+    },
+    "vector-at-f64"(descriptorId, value, rawIndex) {
+      const descriptor = descriptorAt(descriptorId);
+      if (descriptor[0] !== "vector-f64")
+        reject("invalid-typed-operation", "vector-at-f64 requires vector-f64");
+      const checked = assertValue(descriptor, value);
+      const index = i64(rawIndex);
+      if (index < 0n || index >= BigInt(checked.length - 1))
+        reject("invalid-typed-operation", "vector-f64 index is out of range");
+      return f64(checked[Number(index) + 1]);
+    },
+    "vector-assoc-f64"(descriptorId, value, rawIndex, replacement) {
+      const descriptor = descriptorAt(descriptorId);
+      if (descriptor[0] !== "vector-f64")
+        reject("invalid-typed-operation", "vector-assoc-f64 requires vector-f64");
+      const checked = assertValue(descriptor, value);
+      const index = i64(rawIndex);
+      if (index < 0n || index >= BigInt(checked.length - 1))
+        reject("invalid-typed-operation", "vector-f64 assoc index is out of range");
+      const result = [...checked];
+      result[Number(index) + 1] = f64(replacement);
+      return admitValue(descriptor, Object.freeze(result));
+    },
+    "vector-conj-f64"(descriptorId, value, item) {
+      const descriptor = descriptorAt(descriptorId);
+      if (descriptor[0] !== "vector-f64")
+        reject("invalid-typed-operation", "vector-conj-f64 requires vector-f64");
+      const checked = assertValue(descriptor, value);
+      if (checked.length >= 16385) reject("invalid-typed-value", "vector-f64 item budget exceeded");
+      return admitValue(descriptor, Object.freeze([...checked, f64(item)]));
     },
     "set-op-i64"(descriptorId, value, operation, item) {
       return setOperation(descriptorId, value, operation, i64(item));
@@ -828,8 +869,19 @@ function createTypedRuntime(abi) {
     return admitValue(vectorDescriptor,
       Object.freeze([vectorDescriptor, ...items.map(i64)]));
   };
+  const vectorF64Descriptor = abi.descriptors.find(descriptor =>
+    Array.isArray(descriptor) && descriptor[0] === "vector-f64");
+  const hostVectorF64 = items => {
+    if (vectorF64Descriptor === undefined)
+      reject("invalid-typed-value", "module does not admit vector-f64 values");
+    if (!Array.isArray(items) || items.length > 16384)
+      reject("invalid-typed-value", "host vector-f64 input is invalid or oversized");
+    return admitValue(vectorF64Descriptor,
+      Object.freeze([vectorF64Descriptor, ...items.map(f64)]));
+  };
   const values = Object.freeze({
     vectorI64: hostVector,
+    vectorF64: hostVectorF64,
     bytes(items) {
       if (!(Array.isArray(items) || ArrayBuffer.isView(items)) || items.length > 16384)
         reject("invalid-typed-value", "host byte input is invalid or oversized");

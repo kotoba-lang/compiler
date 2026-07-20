@@ -738,6 +738,41 @@
                     (concat (i32-const (descriptor-id :vector-i64))
                             (emit* (first args) env) (emit* (second args) env)
                             [0x10 (get intrinsic-indices 'typed-vector-conj-i64)])
+                    (= op 'vector-f64-new)
+                    (emit-builder :vector-f64 -1 args (repeat (count args) :f64) env)
+                    (= op 'vector-f64-count)
+                    (concat (i32-const (descriptor-id :vector-f64)) (emit* (first args) env)
+                            [0x10 (get intrinsic-indices 'typed-count)])
+                    (= op 'vector-f64-at)
+                    (concat (i32-const (descriptor-id :vector-f64))
+                            (emit* (first args) env) (emit* (second args) env)
+                            [0x10 (get intrinsic-indices 'typed-vector-at-f64)])
+                    (= op 'vector-f64-get)
+                    (let [[value index fallback] args
+                          value-local (allocate! 0x6f)
+                          index-local (allocate! 0x7e)]
+                      (concat (emit* value env) [::local-set value-local]
+                              (emit* index env) [::local-set index-local]
+                              [::local-get index-local 0x42 0 0x59 ::local-get index-local]
+                              (i32-const (descriptor-id :vector-f64)) [::local-get value-local]
+                              [0x10 (get intrinsic-indices 'typed-count) 0x54 0x71 0x04 0x7c]
+                              (i32-const (descriptor-id :vector-f64))
+                              [::local-get value-local ::local-get index-local
+                               0x10 (get intrinsic-indices 'typed-vector-at-f64) 0x05]
+                              (emit* fallback env) [0x0b]))
+                    (= op 'vector-f64-drop)
+                    (concat (i32-const (descriptor-id :vector-f64))
+                            (emit* (first args) env) (emit* (second args) env)
+                            [0x10 (get intrinsic-indices 'typed-vector-drop)])
+                    (= op 'vector-f64-assoc)
+                    (concat (i32-const (descriptor-id :vector-f64))
+                            (emit* (first args) env) (emit* (second args) env)
+                            (emit* (nth args 2) env)
+                            [0x10 (get intrinsic-indices 'typed-vector-assoc-f64)])
+                    (= op 'vector-f64-conj)
+                    (concat (i32-const (descriptor-id :vector-f64))
+                            (emit* (first args) env) (emit* (second args) env)
+                            [0x10 (get intrinsic-indices 'typed-vector-conj-f64)])
                     (= op 'string=?)
                     (emit-bool
                      (concat (i32-const (descriptor-id :string))
@@ -997,6 +1032,9 @@
                          ['typed-vector-at-i64 "kotoba:typed" "vector-at-i64" [0x60 3 0x7f 0x6f 0x7e 1 0x7e]]
                          ['typed-vector-assoc-i64 "kotoba:typed" "vector-assoc-i64" [0x60 4 0x7f 0x6f 0x7e 0x7e 1 0x6f]]
                          ['typed-vector-conj-i64 "kotoba:typed" "vector-conj-i64" [0x60 3 0x7f 0x6f 0x7e 1 0x6f]]
+                         ['typed-vector-at-f64 "kotoba:typed" "vector-at-f64" [0x60 3 0x7f 0x6f 0x7e 1 0x7c]]
+                         ['typed-vector-assoc-f64 "kotoba:typed" "vector-assoc-f64" [0x60 4 0x7f 0x6f 0x7e 0x7c 1 0x6f]]
+                         ['typed-vector-conj-f64 "kotoba:typed" "vector-conj-f64" [0x60 3 0x7f 0x6f 0x7c 1 0x6f]]
                          ['typed-set-op-i64 "kotoba:typed" "set-op-i64" [0x60 4 0x7f 0x6f 0x7f 0x7e 1 0x6f]]
                          ['typed-set-op-ref "kotoba:typed" "set-op-ref" [0x60 4 0x7f 0x6f 0x7f 0x6f 1 0x6f]]
                          ['typed-set-contains-i64 "kotoba:typed" "set-contains-i64" [0x60 3 0x7f 0x6f 0x7e 1 0x7f]]

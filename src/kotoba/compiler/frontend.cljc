@@ -119,6 +119,9 @@
 (def record-operations '#{record-new record-get record-assoc record-equal})
 (def typed-vector-operations
   '{vector-count 1 vector-get 3 vector-at 2 vector-drop 2 vector-assoc 3 vector-conj 2})
+(def typed-f64-vector-operations
+  '{vector-f64-count 1 vector-f64-get 3 vector-f64-at 2 vector-f64-drop 2
+    vector-f64-assoc 3 vector-f64-conj 2})
 (def sequencing-operations '#{do})
 (def string-operations '{string-byte-length 1 string=? 2 string-concat 2})
 (def f64-operations
@@ -156,10 +159,11 @@
              canonical-typed-map-operations
              record-operations
              (set (keys typed-vector-operations))
+             (set (keys typed-f64-vector-operations))
              (set (keys string-operations))
              (set (keys f64-operations))
              (set (keys f32-operations))
-             '#{let if cap-call ns defn defn- some some? nil? vector-i64 vector-new
+             '#{let if cap-call ns defn defn- some some? nil? vector-i64 vector-f64 vector-new vector-f64-new
                 hetero-vector typed-set record match-result match-variant match-option}))
 (def max-functions 1024)
 (def max-expression-nodes 50000)
@@ -182,7 +186,8 @@
 ;; most 256 distinct capabilities can ever exist), not the unrelated
 ;; function-count limit.
 (def max-namespace-capabilities 256)
-(def value-types #{:i64 :f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64})
+(def value-types #{:i64 :f32 :f64 :string :keyword :map :bool :option-i64 :result-i64
+                   :vector-i64 :vector-f64})
 
 (declare reject!)
 
@@ -870,6 +875,9 @@
         vector-i64 (do (when (> (count args) value/vector-literal-item-limit)
                          (reject! "vector-i64 exceeds item limit" form))
                        (apply list 'vector-new (map desugar-expr args)))
+        vector-f64 (do (when (> (count args) value/vector-literal-item-limit)
+                         (reject! "vector-f64 exceeds item limit" form))
+                       (apply list 'vector-f64-new (map desugar-expr args)))
         match-result
         (do
           (when-not (= 4 (count args))
@@ -1497,9 +1505,19 @@
               (reject! "vector-new exceeds item limit" form))
             (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
 
+        (= op 'vector-f64-new)
+        (do (when (> (count args) value/vector-literal-item-limit)
+              (reject! "vector-f64-new exceeds item limit" form))
+            (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
         (contains? typed-vector-operations op)
         (do (when-not (= (get typed-vector-operations op) (count args))
               (reject! "typed vector operation arity mismatch" form))
+            (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
+        (contains? typed-f64-vector-operations op)
+        (do (when-not (= (get typed-f64-vector-operations op) (count args))
+              (reject! "typed f64 vector operation arity mismatch" form))
             (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
 
         (contains? kernel-memory-operations op)
@@ -1603,6 +1621,36 @@
       (= op 'vector-conj)
       (do (require-expression-type! (nth types 0) :vector-i64 (nth args 0))
           (require-expression-type! (nth types 1) :i64 (nth args 1)) :vector-i64)
+
+      (= op 'vector-f64-new)
+      (do (doseq [[arg type] (map vector args types)]
+            (require-expression-type! type :f64 arg))
+          :vector-f64)
+
+      (= op 'vector-f64-count)
+      (do (require-expression-type! (first types) :vector-f64 (first args)) :i64)
+
+      (= op 'vector-f64-get)
+      (do (require-expression-type! (nth types 0) :vector-f64 (nth args 0))
+          (require-expression-type! (nth types 1) :i64 (nth args 1))
+          (require-expression-type! (nth types 2) :f64 (nth args 2)) :f64)
+
+      (= op 'vector-f64-at)
+      (do (require-expression-type! (nth types 0) :vector-f64 (nth args 0))
+          (require-expression-type! (nth types 1) :i64 (nth args 1)) :f64)
+
+      (= op 'vector-f64-drop)
+      (do (require-expression-type! (nth types 0) :vector-f64 (nth args 0))
+          (require-expression-type! (nth types 1) :i64 (nth args 1)) :vector-f64)
+
+      (= op 'vector-f64-assoc)
+      (do (require-expression-type! (nth types 0) :vector-f64 (nth args 0))
+          (require-expression-type! (nth types 1) :i64 (nth args 1))
+          (require-expression-type! (nth types 2) :f64 (nth args 2)) :vector-f64)
+
+      (= op 'vector-f64-conj)
+      (do (require-expression-type! (nth types 0) :vector-f64 (nth args 0))
+          (require-expression-type! (nth types 1) :f64 (nth args 1)) :vector-f64)
 
       (contains? (disj comparisons '=) op)
       (do (doseq [[arg type] (map vector args types)]
@@ -2194,7 +2242,7 @@
         (reject! "typed parameters require alternating name/type pairs" raw-params))
       (mapv (fn [[pattern type]]
               (validate-value-type! type)
-              (when (and (or (contains? #{:f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64} type)
+              (when (and (or (contains? #{:f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64 :vector-f64} type)
                              (structured-type? type))
                          (not (or (symbol? pattern)
                                   (and (= type :map) (map? pattern))
@@ -2445,9 +2493,9 @@
     (check-lowering-budget! parsed)
     (let [typed-values? (boolean
                          (some (fn [{:keys [param-types result body]}]
-                                 (or (some #(or (contains? #{:f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64} %)
+                                 (or (some #(or (contains? #{:f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64 :vector-f64} %)
                                                 (structured-type? %)) param-types)
-                                     (or (contains? #{:f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64} result)
+                                     (or (contains? #{:f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64 :vector-f64} result)
                                          (structured-type? result))
                                      (some #(or (string? %) (keyword? %) (boolean? %)
                                                 (and (seq? %)
@@ -2461,7 +2509,9 @@
                                                          (contains? canonical-typed-map-operations (first %))
                                                          (contains? record-operations (first %))
                                                          (= 'vector-new (first %))
-                                                         (contains? typed-vector-operations (first %)))))
+                                                         (= 'vector-f64-new (first %))
+                                                         (contains? typed-vector-operations (first %))
+                                                         (contains? typed-f64-vector-operations (first %)))))
                                            (tree-seq coll? seq body))))
                                parsed))
           function-effects (infer-effects parsed)
