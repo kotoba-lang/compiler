@@ -6,6 +6,7 @@
   ;; for the fuller explanation). `#?@` (splicing) rather than `#?` here
   ;; because each branch below is more than one require-spec.
   (:require [clojure.set :as set]
+            [kotoba.compiler.schema :as schema]
             [kotoba.compiler.value :as value]
             #?@(:clj [[clojure.tools.reader :as reader]
                       [clojure.tools.reader.reader-types :as rt]]
@@ -414,8 +415,8 @@
                              [(first tail) (rest tail)] [nil tail])]
       (when (and docstring (> (count docstring) max-namespace-docstring-chars))
         (reject! "namespace docstring exceeds admission limit" docstring))
-      (when (> (count tail) 2)
-        (reject! "namespace admits at most an :export clause and a :capabilities clause" form))
+      (when (> (count tail) 3)
+        (reject! "namespace admits at most :export, :capabilities, and :schemas clauses" form))
       ;; ADR-2607182410: `:export`'s original (pre-existing, test-asserted)
       ;; rejection message is preserved VERBATIM for every clause shape it
       ;; already covered pre-`:capabilities` -- a non-`seq?` clause, an
@@ -432,13 +433,17 @@
                     (reject! "only a bounded :export vector is admitted in namespace clauses" clause))
           :capabilities (when-not (and (= 2 (count clause)) (set? (second clause)))
                           (reject! "only a bounded :capabilities set is admitted in namespace clauses" clause))
+          :schemas (when-not (and (= 2 (count clause)) (map? (second clause)))
+                     (reject! "only a closed :schemas map is admitted in namespace clauses" clause))
           (reject! "only a bounded :export vector is admitted in namespace clauses" clause)))
       (when (not= (count tail) (count (distinct (map first tail))))
-        (reject! "namespace admits each of :export/:capabilities at most once" form))
+        (reject! "namespace admits each clause at most once" form))
       (let [export-clause (first (filter #(= :export (first %)) tail))
             capabilities-clause (first (filter #(= :capabilities (first %)) tail))
+            schemas-clause (first (filter #(= :schemas (first %)) tail))
             exports (when export-clause (vec (second export-clause)))
-            capabilities (when capabilities-clause (set (second capabilities-clause)))]
+            capabilities (when capabilities-clause (set (second capabilities-clause)))
+            schemas (when schemas-clause (schema/validate-table! (second schemas-clause)))]
         (when (and exports
                    (or (> (count exports) max-functions)
                        (not= (count exports) (count (distinct exports)))
@@ -448,7 +453,9 @@
                    (or (> (count capabilities) max-namespace-capabilities)
                        (not-every? #(and (keyword? %) (namespace %)) capabilities)))
           (reject! "namespace :capabilities must be a bounded set of namespaced keywords" capabilities))
-        {:namespace namespace-symbol :exports exports :capabilities capabilities}))))
+        {:namespace namespace-symbol :exports exports :capabilities capabilities
+         :schemas schemas
+         :schema-identities (when schemas (schema/identities schemas))}))))
 
 (declare desugar-expr form-free-symbols replace-recur)
 
@@ -2767,6 +2774,7 @@
     (check-value-types! parsed)
     (check-lowering-budget! parsed)
     (let [typed-values? (boolean
+                         (or (seq (:schemas namespace-info))
                          (some (fn [{:keys [param-types result body]}]
                                  (or (some #(or (contains? #{:f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64 :vector-f64} %)
                                                 (structured-type? %)) param-types)
@@ -2789,7 +2797,7 @@
                                                          (contains? typed-f64-vector-operations (first %))
                                                          (contains? i32-operations (first %)))))
                                            (tree-seq coll? seq body))))
-                               parsed))
+                               parsed)))
           function-effects (infer-effects parsed)
           functions (mapv (fn [function]
                             (cond-> (assoc function :effects
@@ -2799,6 +2807,8 @@
           main-result (some->> parsed (some #(when (= 'main (:name %)) (:result %))))]
       {:format (if typed-values? :kotoba.hir/v3 :kotoba.hir/v2)
        :namespace (:namespace namespace-info)
+       :schemas (:schemas namespace-info)
+       :schema-identities (:schema-identities namespace-info)
        :entry entry :exports (vec exports)
        :result (when entry main-result)
        ;; Admission conservatively covers private functions too: changing an

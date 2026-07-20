@@ -2,6 +2,7 @@
   #?(:cljs (:require [kotoba.compiler.cljs-i64 :as i64])))
 
 (def abi-version 8)
+(def schema-abi-version 9)
 (def custom-section-name "kotoba.typed")
 
 (def ^:private primitive-tags
@@ -17,7 +18,7 @@
 (defn descriptor? [value]
   (or (contains? primitive-tags value)
       (and (vector? value)
-           (contains? #{:option :result :variant :vector :set :map :record}
+           (contains? #{:option :result :variant :vector :set :map :record :ref}
                       (first value)))))
 
 (defn- uleb [n]
@@ -64,6 +65,7 @@
                               (encode-descriptor (nth descriptor 2))))
       :record (into [9] (concat (text-bytes (keyword-text (second descriptor)))
                                 (encode-named-members (nth descriptor 2))))
+      :ref (into [15] (text-bytes (keyword-text (second descriptor))))
       (throw (ex-info "unsupported Wasm typed descriptor"
                       {:phase :wasm-typed-metadata :descriptor descriptor})))))
 
@@ -81,6 +83,7 @@
           :set (walk (second value) found)
           :map (->> found (walk (second value)) (walk (nth value 2)))
           :record (reduce (fn [result [_ type]] (walk type result)) found (nth value 2))
+          :ref found
           found)))
 
     (and (seq? value) (contains? boolean-result-ops (first value)))
@@ -157,12 +160,22 @@
 
 (defn metadata-bytes [kir]
   (let [descriptors (descriptor-table kir)
-        literals (literal-table kir)]
-    (vec (concat [abi-version]
+        literals (literal-table kir)
+        schemas (:schemas kir)
+        identities (:schema-identities kir)]
+    (vec (concat [(if (seq schemas) schema-abi-version abi-version)]
                  (uleb (count descriptors))
                  (mapcat encode-descriptor descriptors)
                  (uleb (count literals))
-                 (mapcat encode-literal literals)))))
+                 (mapcat encode-literal literals)
+                 (when (seq schemas)
+                   (concat
+                    (uleb (count schemas))
+                    (mapcat (fn [[schema-name descriptor]]
+                              (concat (text-bytes (keyword-text schema-name))
+                                      (text-bytes (get identities schema-name))
+                                      (encode-descriptor descriptor)))
+                            (sort-by (comp str key) schemas))))))))
 
 (defn reference-type? [type]
   (not (contains? #{:i64 :f32 :f64} type)))

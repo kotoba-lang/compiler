@@ -1467,6 +1467,8 @@
         base {:format (if typed-values? :kotoba.kir/v4 :kotoba.kir/v3)
               :entry (:entry hir)
               :exports (:exports hir)
+              :schemas (:schemas hir)
+              :schema-identities (:schema-identities hir)
               :signature (when (:entry hir) {:params [] :result (:result hir)})
               :effects (:effects hir)
               :functions (mapv #(select-keys % (cond-> [:name :params :result :effects :body]
