@@ -131,8 +131,15 @@
   '{string-index-new 0 string-index-count 1 string-index-contains 2
     string-index-get 2 string-index-assoc 3
     disjoint-set-i64-new 1 disjoint-set-i64-count 1 disjoint-set-i64-union 3})
+(def document-fixed-operations
+  '{document-null 0 document-bool 1 document-i64 1 document-f64 1
+    document-string 1 document-keyword 1 document-count 1
+    document-contains 2 document-get 2 document-assoc 3 document-dissoc 2
+    document-merge 2 document-string-value 1 document-bool-value 1
+    document-i64-value 1 document-f64-value 1})
+(def document-variadic-operations '#{document-vector document-map})
 (def sequencing-operations '#{do})
-(def string-operations '{string-byte-length 1 string=? 2 string-concat 2})
+(def string-operations '{string-byte-length 1 string=? 2 string-concat 2 keyword-from-string 1})
 (def xml-operations '{xml-path-count 2 xml-path-attr 4})
 (def decimal-operations '{decimal-f64-parse 1 decimal-f64x3-parse 1})
 (def f64-operations
@@ -172,6 +179,7 @@
              (set (keys typed-vector-operations))
              (set (keys typed-f64-vector-operations))
              (set (keys compact-graph-operations))
+             (set (keys document-fixed-operations)) document-variadic-operations
              (set (keys string-operations))
              (set (keys xml-operations))
              (set (keys decimal-operations))
@@ -203,7 +211,7 @@
 ;; function-count limit.
 (def max-namespace-capabilities 256)
 (def value-types #{:i64 :f32 :f64 :string :keyword :map :bool :option-i64 :result-i64
-                   :vector-i64 :vector-f64 :string-index :disjoint-set-i64})
+                   :vector-i64 :vector-f64 :string-index :disjoint-set-i64 :document})
 
 (declare reject!)
 
@@ -1721,6 +1729,23 @@
               (reject! "compact graph operation arity mismatch" form))
             (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
 
+        (contains? document-fixed-operations op)
+        (do (when-not (= (get document-fixed-operations op) (count args))
+              (reject! "document operation arity mismatch" form))
+            (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
+        (= op 'document-vector)
+        (do (when (> (count args) value/document-container-item-limit)
+              (reject! "document-vector exceeds item limit" form))
+            (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
+        (= op 'document-map)
+        (do (when (odd? (count args))
+              (reject! "document-map requires keyword/value pairs" form))
+            (when (> (quot (count args) 2) value/document-container-item-limit)
+              (reject! "document-map exceeds entry limit" form))
+            (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
         (contains? kernel-memory-operations op)
         (do (when-not (= (get kernel-memory-operations op) (count args))
               (reject! "kernel memory operation arity mismatch" form))
@@ -1881,6 +1906,52 @@
           (require-expression-type! (nth types 2) :i64 (nth args 2))
           [:option :disjoint-set-i64])
 
+      (= op 'document-null) :document
+      (= op 'document-bool)
+      (do (require-expression-type! (first types) :bool (first args)) :document)
+      (= op 'document-i64)
+      (do (require-expression-type! (first types) :i64 (first args)) :document)
+      (= op 'document-f64)
+      (do (require-expression-type! (first types) :f64 (first args)) :document)
+      (= op 'document-string)
+      (do (require-expression-type! (first types) :string (first args)) :document)
+      (= op 'document-keyword)
+      (do (require-expression-type! (first types) :keyword (first args)) :document)
+      (= op 'document-vector)
+      (do (doseq [[arg type] (map vector args types)]
+            (require-expression-type! type :document arg)) :document)
+      (= op 'document-map)
+      (do (doseq [[[key-form item-form] [key-type item-type]]
+                  (map vector (partition 2 args) (partition 2 types))]
+            (require-expression-type! key-type :keyword key-form)
+            (require-expression-type! item-type :document item-form)) :document)
+      (= op 'document-count)
+      (do (require-expression-type! (first types) :document (first args)) :i64)
+      (= op 'document-contains)
+      (do (require-expression-type! (nth types 0) :document (nth args 0))
+          (require-expression-type! (nth types 1) :keyword (nth args 1)) :bool)
+      (= op 'document-get)
+      (do (require-expression-type! (nth types 0) :document (nth args 0))
+          (require-expression-type! (nth types 1) :keyword (nth args 1)) [:option :document])
+      (= op 'document-assoc)
+      (do (require-expression-type! (nth types 0) :document (nth args 0))
+          (require-expression-type! (nth types 1) :keyword (nth args 1))
+          (require-expression-type! (nth types 2) :document (nth args 2)) :document)
+      (= op 'document-dissoc)
+      (do (require-expression-type! (nth types 0) :document (nth args 0))
+          (require-expression-type! (nth types 1) :keyword (nth args 1)) :document)
+      (= op 'document-merge)
+      (do (doseq [[arg type] (map vector args types)]
+            (require-expression-type! type :document arg)) :document)
+      (= op 'document-string-value)
+      (do (require-expression-type! (first types) :document (first args)) [:option :string])
+      (= op 'document-bool-value)
+      (do (require-expression-type! (first types) :document (first args)) [:option :bool])
+      (= op 'document-i64-value)
+      (do (require-expression-type! (first types) :document (first args)) [:option :i64])
+      (= op 'document-f64-value)
+      (do (require-expression-type! (first types) :document (first args)) [:option :f64])
+
       (contains? (disj comparisons '=) op)
       (do (doseq [[arg type] (map vector args types)]
             (require-expression-type! type :i64 arg))
@@ -1917,6 +1988,9 @@
       (do (doseq [[arg type] (map vector args types)]
             (require-expression-type! type :string arg))
           :string)
+
+      (= op 'keyword-from-string)
+      (do (require-expression-type! (first types) :string (first args)) :keyword)
 
       (= op 'xml-path-count)
       (do (doseq [[arg type] (map vector args types)]
@@ -2566,7 +2640,7 @@
         (reject! "typed parameters require alternating name/type pairs" raw-params))
       (mapv (fn [[pattern type]]
               (validate-value-type! type)
-              (when (and (or (contains? #{:f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64 :vector-f64 :string-index :disjoint-set-i64} type)
+              (when (and (or (contains? #{:f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64 :vector-f64 :string-index :disjoint-set-i64 :document} type)
                              (structured-type? type))
                          (not (or (symbol? pattern)
                                   (and (= type :map) (map? pattern))
@@ -2852,9 +2926,9 @@
     (let [typed-values? (boolean
                          (or (seq (:schemas namespace-info))
                          (some (fn [{:keys [param-types result body]}]
-                                 (or (some #(or (contains? #{:f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64 :vector-f64 :string-index :disjoint-set-i64} %)
+                                 (or (some #(or (contains? #{:f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64 :vector-f64 :string-index :disjoint-set-i64 :document} %)
                                                 (structured-type? %)) param-types)
-                                     (or (contains? #{:f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64 :vector-f64 :string-index :disjoint-set-i64} result)
+                                     (or (contains? #{:f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64 :vector-f64 :string-index :disjoint-set-i64 :document} result)
                                          (structured-type? result))
                                      (some #(or (string? %) (keyword? %) (boolean? %)
                                                 (and (seq? %)
@@ -2871,6 +2945,8 @@
                                                          (= 'vector-f64-new (first %))
                                                          (contains? typed-vector-operations (first %))
                                                          (contains? typed-f64-vector-operations (first %))
+                                                         (contains? document-fixed-operations (first %))
+                                                         (contains? document-variadic-operations (first %))
                                                          (contains? i32-operations (first %)))))
                                            (tree-seq coll? seq body))))
                                parsed)))

@@ -4,17 +4,18 @@
 (def abi-version 8)
 (def schema-abi-version 9)
 (def compact-graph-abi-version 10)
+(def document-abi-version 11)
 (def custom-section-name "kotoba.typed")
 
 (def ^:private primitive-tags
   {:i64 0 :string 1 :keyword 2 :bool 3 :vector-i64 11 :f64 12 :f32 13
-   :vector-f64 14 :string-index 16 :disjoint-set-i64 17})
+   :vector-f64 14 :string-index 16 :disjoint-set-i64 17 :document 18})
 
 (def ^:private boolean-result-ops
   '#{f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered
      f32-eq f32-lt f32-le f32-gt f32-ge f32-unordered
      bool-not option-some? result-ok? option-some?-of result-ok?-of
-     typed-set-contains typed-map-contains})
+     typed-set-contains typed-map-contains document-contains})
 
 
 (defn descriptor? [value]
@@ -110,6 +111,16 @@
          (contains? '#{disjoint-set-i64-new disjoint-set-i64-count disjoint-set-i64-union}
                     (first value)))
     (reduce (fn [result item] (walk item result)) (conj found :disjoint-set-i64) value)
+    (and (seq? value)
+         (contains? '#{document-null document-bool document-i64 document-f64
+                      document-string document-keyword document-vector document-map
+                      document-count document-contains document-get document-assoc
+                      document-dissoc document-merge document-string-value
+                      document-bool-value document-i64-value document-f64-value}
+                    (first value)))
+    (reduce (fn [result item] (walk item result)) (conj found :document) value)
+    (and (seq? value) (= 'keyword-from-string (first value)))
+    (reduce (fn [result item] (walk item result)) (conj found :keyword) value)
     (map? value) (reduce (fn [result item] (walk item result)) found (vals value))
     (coll? value) (reduce (fn [result item] (walk item result)) found value)
     (string? value) (conj found :string)
@@ -196,11 +207,13 @@
         schemas (:schemas kir)
         identities (:schema-identities kir)
         contracts (capability-contracts kir)
+        document? (some #{:document} descriptors)
         compact-graph? (some #{:string-index :disjoint-set-i64} descriptors)
         schema? (or (seq schemas) (seq contracts))
-        extended-schema? (or schema? compact-graph?)
+        extended-schema? (or schema? compact-graph? document?)
         indices (descriptor-indices kir)]
-    (vec (concat [(cond compact-graph? compact-graph-abi-version
+    (vec (concat [(cond document? document-abi-version
+                        compact-graph? compact-graph-abi-version
                         schema? schema-abi-version
                         :else abi-version)]
                  (uleb (count descriptors))
@@ -259,7 +272,7 @@
                       string-byte-length map-get vector-count vector-get vector-f64-count
                       vector-at hetero-vector-count typed-set-count
                       typed-map-count xml-path-count string-index-count
-                      disjoint-set-i64-count} op) :i64
+                      disjoint-set-i64-count document-count} op) :i64
         (= op 'f64-to-bits) :i64
         (= op 'f64-from-bits) :f64
         (contains? '#{i64-to-f64-checked i64-to-f64-rounded} op) :f64
@@ -284,7 +297,9 @@
         (contains? '#{bool-not option-some? result-ok?
                       result-ok?-of option-some?-of typed-set-contains
                       typed-map-contains string-index-contains} op) :bool
+        (= op 'document-contains) :bool
         (= op 'string-concat) :string
+        (= op 'keyword-from-string) :keyword
         (= op 'xml-path-attr) [:option :string]
         (= op 'decimal-f64-parse) [:option :f64]
         (= op 'decimal-f64x3-parse) [:option [:vector [:f64 :f64 :f64]]]
@@ -295,6 +310,14 @@
         (= op 'string-index-assoc) :string-index
         (= op 'disjoint-set-i64-new) :disjoint-set-i64
         (= op 'disjoint-set-i64-union) [:option :disjoint-set-i64]
+        (contains? '#{document-null document-bool document-i64 document-f64
+                      document-string document-keyword document-vector document-map
+                      document-assoc document-dissoc document-merge} op) :document
+        (= op 'document-get) [:option :document]
+        (= op 'document-string-value) [:option :string]
+        (= op 'document-bool-value) [:option :bool]
+        (= op 'document-i64-value) [:option :i64]
+        (= op 'document-f64-value) [:option :f64]
         (contains? '#{vector-f64-get vector-f64-at} op) :f64
         (contains? '#{vector-f64-drop vector-f64-assoc vector-f64-conj} op) :vector-f64
         (contains? '#{vector-drop vector-assoc vector-conj} op) :vector-i64

@@ -739,6 +739,9 @@
                     (= op 'string-byte-length)
                     (concat (i32-const (descriptor-id :string)) (emit* (first args) env)
                             [0x10 (get intrinsic-indices 'typed-count)])
+                    (= op 'keyword-from-string)
+                    (concat (i32-const (descriptor-id :keyword)) (emit* (first args) env)
+                            [0x10 (get intrinsic-indices 'typed-keyword-from-string)])
                     (= op 'vector-new)
                     (emit-builder :vector-i64 -1 args (repeat (count args) :i64) env)
                     (= op 'vector-count)
@@ -812,6 +815,47 @@
                             (emit* (first args) env) (emit* (second args) env)
                             (emit* (nth args 2) env)
                             [0x10 (get intrinsic-indices 'typed-disjoint-set-i64-union)])
+                    (= op 'document-null)
+                    (concat (i32-const (descriptor-id :document))
+                            [0x10 (get intrinsic-indices 'typed-document-null)])
+                    (contains? '#{document-bool document-i64 document-f64
+                                  document-string document-keyword} op)
+                    (concat (i32-const (descriptor-id :document))
+                            (emit* (first args) env)
+                            [0x10 (get intrinsic-indices
+                                       ({'document-bool 'typed-document-bool
+                                         'document-i64 'typed-document-i64
+                                         'document-f64 'typed-document-f64
+                                         'document-string 'typed-document-string
+                                         'document-keyword 'typed-document-keyword} op))])
+                    (= op 'document-vector)
+                    (emit-builder :document -1 args (repeat (count args) :document) env)
+                    (= op 'document-map)
+                    (emit-builder :document -2 args
+                                  (map-indexed (fn [index _]
+                                                 (if (even? index) :keyword :document)) args) env)
+                    (= op 'document-count)
+                    (concat (i32-const (descriptor-id :document)) (emit* (first args) env)
+                            [0x10 (get intrinsic-indices 'typed-count)])
+                    (= op 'document-contains)
+                    (emit-bool
+                     (concat (i32-const (descriptor-id :document))
+                             (emit* (first args) env) (emit* (second args) env)
+                             [0x10 (get intrinsic-indices 'typed-document-contains)]))
+                    (contains? '#{document-get document-assoc document-dissoc
+                                  document-merge document-string-value document-bool-value
+                                  document-i64-value document-f64-value} op)
+                    (concat (i32-const (descriptor-id :document))
+                            (mapcat #(emit* % env) args)
+                            [0x10 (get intrinsic-indices
+                                       ({'document-get 'typed-document-get
+                                         'document-assoc 'typed-document-assoc
+                                         'document-dissoc 'typed-document-dissoc
+                                         'document-merge 'typed-document-merge
+                                         'document-string-value 'typed-document-string-value
+                                         'document-bool-value 'typed-document-bool-value
+                                         'document-i64-value 'typed-document-i64-value
+                                         'document-f64-value 'typed-document-f64-value} op))])
                     (= op 'vector-f64-at)
                     (concat (i32-const (descriptor-id :vector-f64))
                             (emit* (first args) env) (emit* (second args) env)
@@ -1106,6 +1150,13 @@
         has-disjoint-set? (uses-operation? functions
                                             '#{disjoint-set-i64-new disjoint-set-i64-count
                                                disjoint-set-i64-union})
+        has-document? (uses-operation? functions
+                                       '#{document-null document-bool document-i64 document-f64
+                                          document-string document-keyword document-vector document-map
+                                          document-count document-contains document-get document-assoc
+                                          document-dissoc document-merge document-string-value
+                                          document-bool-value document-i64-value document-f64-value})
+        has-keyword-from-string? (uses-operation? functions '#{keyword-from-string})
         typed-imports (when (and typed? (typed/requires-host-runtime? kir))
                         (vec (concat
                          [['typed-literal "kotoba:typed" "literal" [0x60 1 0x7f 1 0x6f]]
@@ -1158,6 +1209,25 @@
                          (when has-disjoint-set?
                            [['typed-disjoint-set-i64-new "kotoba:typed" "disjoint-set-i64-new" [0x60 2 0x7f 0x7e 1 0x6f]]
                             ['typed-disjoint-set-i64-union "kotoba:typed" "disjoint-set-i64-union" [0x60 4 0x7f 0x6f 0x7e 0x7e 1 0x6f]]])
+                         (when has-document?
+                           [['typed-document-null "kotoba:typed" "document-null" [0x60 1 0x7f 1 0x6f]]
+                            ['typed-document-bool "kotoba:typed" "document-bool" [0x60 2 0x7f 0x6f 1 0x6f]]
+                            ['typed-document-i64 "kotoba:typed" "document-i64" [0x60 2 0x7f 0x7e 1 0x6f]]
+                            ['typed-document-f64 "kotoba:typed" "document-f64" [0x60 2 0x7f 0x7c 1 0x6f]]
+                            ['typed-document-string "kotoba:typed" "document-string" [0x60 2 0x7f 0x6f 1 0x6f]]
+                            ['typed-document-keyword "kotoba:typed" "document-keyword" [0x60 2 0x7f 0x6f 1 0x6f]]
+                            ['typed-document-contains "kotoba:typed" "document-contains" [0x60 3 0x7f 0x6f 0x6f 1 0x7f]]
+                            ['typed-document-get "kotoba:typed" "document-get" [0x60 3 0x7f 0x6f 0x6f 1 0x6f]]
+                            ['typed-document-assoc "kotoba:typed" "document-assoc" [0x60 4 0x7f 0x6f 0x6f 0x6f 1 0x6f]]
+                            ['typed-document-dissoc "kotoba:typed" "document-dissoc" [0x60 3 0x7f 0x6f 0x6f 1 0x6f]]
+                            ['typed-document-merge "kotoba:typed" "document-merge" [0x60 3 0x7f 0x6f 0x6f 1 0x6f]]
+                            ['typed-document-string-value "kotoba:typed" "document-string-value" [0x60 2 0x7f 0x6f 1 0x6f]]
+                            ['typed-document-bool-value "kotoba:typed" "document-bool-value" [0x60 2 0x7f 0x6f 1 0x6f]]
+                            ['typed-document-i64-value "kotoba:typed" "document-i64-value" [0x60 2 0x7f 0x6f 1 0x6f]]
+                            ['typed-document-f64-value "kotoba:typed" "document-f64-value" [0x60 2 0x7f 0x6f 1 0x6f]]])
+                         (when has-keyword-from-string?
+                           [['typed-keyword-from-string "kotoba:typed" "keyword-from-string"
+                             [0x60 2 0x7f 0x6f 1 0x6f]]])
                          (when has-xml?
                            [['xml-path-count "kotoba:typed" "xml-path-count" [0x60 2 0x6f 0x6f 1 0x7e]]
                             ['xml-path-attr "kotoba:typed" "xml-path-attr" [0x60 4 0x6f 0x6f 0x7e 0x6f 1 0x6f]]])
