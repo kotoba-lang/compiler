@@ -748,6 +748,9 @@
                             (emit* (first args) env) (emit* (second args) env)
                             (emit* (nth args 2) env)
                             [0x10 (get intrinsic-indices 'typed-string-replace-all)])
+                    (= op 'keyword-name)
+                    (concat (i32-const (descriptor-id :keyword)) (emit* (first args) env)
+                            [0x10 (get intrinsic-indices 'typed-keyword-name)])
                     (= op 'keyword-from-string)
                     (concat (i32-const (descriptor-id :keyword)) (emit* (first args) env)
                             [0x10 (get intrinsic-indices 'typed-keyword-from-string)])
@@ -846,13 +849,14 @@
                     (= op 'document-count)
                     (concat (i32-const (descriptor-id :document)) (emit* (first args) env)
                             [0x10 (get intrinsic-indices 'typed-count)])
-                    (contains? '#{document-vector-at document-vector-assoc
+                    (contains? '#{document-vector-at document-map-entry-at document-vector-assoc
                                   document-vector-conj document-vector-drop
                                   document-vector-remove} op)
                     (concat (i32-const (descriptor-id :document))
                             (mapcat #(emit* % env) args)
                             [0x10 (get intrinsic-indices
                                        ({'document-vector-at 'typed-document-vector-at
+                                         'document-map-entry-at 'typed-document-map-entry-at
                                          'document-vector-assoc 'typed-document-vector-assoc
                                          'document-vector-conj 'typed-document-vector-conj
                                          'document-vector-drop 'typed-document-vector-drop
@@ -1170,13 +1174,14 @@
                                                string-index-assoc})
         has-string-concat? (uses-operation? functions '#{string-concat})
         has-string-replace? (uses-operation? functions '#{string-replace-all})
+        has-keyword-name? (uses-operation? functions '#{keyword-name})
         has-disjoint-set? (uses-operation? functions
                                             '#{disjoint-set-i64-new disjoint-set-i64-count
                                                disjoint-set-i64-union})
         has-document? (uses-operation? functions
                                        '#{document-null document-bool document-i64 document-f64
                                           document-string document-keyword document-vector document-map
-                                          document-count document-vector-at document-vector-assoc
+                                          document-count document-vector-at document-map-entry-at document-vector-assoc
                                           document-vector-conj document-vector-drop document-vector-remove
                                           document-contains document-get document-assoc
                                           document-dissoc document-merge document-string-value
@@ -1207,6 +1212,9 @@
                          (when has-string-replace?
                            [['typed-string-replace-all "kotoba:typed" "string-replace-all"
                              [0x60 4 0x7f 0x6f 0x6f 0x6f 1 0x6f]]])
+                         (when has-keyword-name?
+                           [['typed-keyword-name "kotoba:typed" "keyword-name"
+                             [0x60 2 0x7f 0x6f 1 0x6f]]])
                          [
                          ['typed-assoc-i64 "kotoba:typed" "assoc-i64" [0x60 4 0x7f 0x6f 0x7f 0x7e 1 0x6f]]
                          ['typed-assoc-f64 "kotoba:typed" "assoc-f64" [0x60 4 0x7f 0x6f 0x7f 0x7c 1 0x6f]]
@@ -1250,6 +1258,7 @@
                             ['typed-document-string "kotoba:typed" "document-string" [0x60 2 0x7f 0x6f 1 0x6f]]
                             ['typed-document-keyword "kotoba:typed" "document-keyword" [0x60 2 0x7f 0x6f 1 0x6f]]
                             ['typed-document-vector-at "kotoba:typed" "document-vector-at" [0x60 3 0x7f 0x6f 0x7e 1 0x6f]]
+                            ['typed-document-map-entry-at "kotoba:typed" "document-map-entry-at" [0x60 3 0x7f 0x6f 0x7e 1 0x6f]]
                             ['typed-document-vector-assoc "kotoba:typed" "document-vector-assoc" [0x60 4 0x7f 0x6f 0x7e 0x6f 1 0x6f]]
                             ['typed-document-vector-conj "kotoba:typed" "document-vector-conj" [0x60 3 0x7f 0x6f 0x6f 1 0x6f]]
                             ['typed-document-vector-drop "kotoba:typed" "document-vector-drop" [0x60 3 0x7f 0x6f 0x7e 1 0x6f]]

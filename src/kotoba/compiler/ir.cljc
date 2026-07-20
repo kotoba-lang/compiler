@@ -60,13 +60,13 @@
      disjoint-set-i64-new disjoint-set-i64-count disjoint-set-i64-union
      document-null document-bool document-i64 document-f64 document-string document-keyword
      document-vector document-map document-count document-contains document-get
-     document-vector-at document-vector-assoc document-vector-conj document-vector-drop
+     document-vector-at document-map-entry-at document-vector-assoc document-vector-conj document-vector-drop
      document-vector-remove
      document-assoc document-dissoc document-merge document-string-value document-keyword-value
      document-bool-value document-i64-value document-f64-value
      i32-wrap u32-wrap i32-wrapping-add i32-wrapping-mul i32-xor
      i32-shift-left i32-shift-right u32-shift-right xorshift32
-     keyword-from-string})
+     keyword-from-string keyword-name})
 
 (defn only-string-typed-features? [hir]
   (letfn [(walk [form]
@@ -767,6 +767,11 @@
                     (re-find #"[\s\[\]{}()\"',;`~^\\]" text))
             (trap! :invalid-keyword-source {}))
           (value/bounded-keyword! (keyword text) value/keyword-value-byte-limit))
+
+        (= op 'keyword-name)
+        (value/bounded-string!
+         (name (eval-expr (first args) env functions fuel heap call-stack cap-call))
+         value/string-value-byte-limit)
 
         (= op 'xml-path-count)
         (xml/path-count
@@ -1566,6 +1571,19 @@
                 (trap! :document-vector-index-out-of-range {:index index :count (count items)}))
               (value/bounded-document!
                ["vector" (vec (concat (subvec items 0 index) (subvec items (inc index))))]))))
+
+        (= op 'document-map-entry-at)
+        (let [[tag entries]
+              (value/bounded-document!
+               (eval-expr (first args) env functions fuel heap call-stack cap-call))
+              index (value/bounded-typed-value!
+                     :i64 (eval-expr (second args) env functions fuel heap call-stack cap-call))]
+          (when-not (= "map" tag) (trap! :document-map-required {:tag tag}))
+          (if (and (not (neg? index)) (< index (count entries)))
+            (let [[key item] (nth entries index)]
+              [[:option :document] true
+               (value/bounded-document! ["vector" [["keyword" key] item]])])
+            [[:option :document] false]))
 
         (contains? '#{document-contains document-get document-assoc document-dissoc} op)
         (let [[document-form key-form item-form] args

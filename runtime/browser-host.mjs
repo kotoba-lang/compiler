@@ -54,6 +54,7 @@ const ALLOWED_IMPORTS = new Set([
   "kotoba:typed/map-dissoc-ref/function",
   "kotoba:typed/string-concat/function",
   "kotoba:typed/string-replace-all/function",
+  "kotoba:typed/keyword-name/function",
   "kotoba:typed/string-index-new/function",
   "kotoba:typed/string-index-contains/function",
   "kotoba:typed/string-index-get/function",
@@ -68,6 +69,7 @@ const ALLOWED_IMPORTS = new Set([
   "kotoba:typed/document-keyword/function",
   "kotoba:typed/document-contains/function",
   "kotoba:typed/document-vector-at/function",
+  "kotoba:typed/document-map-entry-at/function",
   "kotoba:typed/document-vector-assoc/function",
   "kotoba:typed/document-vector-conj/function",
   "kotoba:typed/document-vector-drop/function",
@@ -843,6 +845,12 @@ function createTypedRuntime(abi, typedCapCall, allow) {
       if (utf8Length(result) > 512) reject("invalid-typed-value", "keyword is oversized");
       return result;
     },
+    "keyword-name"(descriptorId, value) {
+      const descriptor = descriptorAt(descriptorId);
+      if (descriptor !== "keyword") reject("invalid-typed-operation", "keyword descriptor required");
+      value = assertValue(descriptor, value).slice(1);
+      return value.slice(value.lastIndexOf("/") + 1);
+    },
     new(descriptorId, tag) {
       descriptorAt(descriptorId);
       const builder = Object.freeze({ descriptorId, tag, slots: Object.freeze([]) });
@@ -1231,6 +1239,17 @@ function createTypedRuntime(abi, typedCapCall, allow) {
       if (value[0] !== "vector") reject("invalid-typed-operation", "document vector required");
       const ok = index >= 0n && index < BigInt(value[1].length);
       return documentOption(documentDescriptor, ok, ok ? value[1][Number(index)] : undefined);
+    },
+    "document-map-entry-at"(descriptorId, value, rawIndex) {
+      if (descriptorAt(descriptorId) !== documentDescriptor)
+        reject("invalid-typed-operation", "document descriptor required");
+      value = assertDocument(value); const index = i64(rawIndex);
+      if (value[0] !== "map") reject("invalid-typed-operation", "document map required");
+      const ok = index >= 0n && index < BigInt(value[1].length);
+      if (!ok) return documentOption(documentDescriptor, false, undefined);
+      const [key, item] = value[1][Number(index)];
+      return documentOption(documentDescriptor, true,
+        admitDocument(["vector", [["keyword", key], item]]));
     },
     "document-vector-assoc"(descriptorId, value, rawIndex, item) {
       if (descriptorAt(descriptorId) !== documentDescriptor)
