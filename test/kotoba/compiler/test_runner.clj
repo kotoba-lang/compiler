@@ -19,6 +19,7 @@
             [kotoba.compiler.frontend-destructuring-loop-test]
             [kotoba.compiler.frontend-named-capability-test]
             [kotoba.compiler.backend-cljs-test]
+            [kotoba.compiler.backend-qualification-test]
             [kotoba.compiler.ios-aot-test]
             [kotoba.compiler.interface-test]
             [kotoba.compiler.native-executor-test]
@@ -66,6 +67,7 @@
                                           'kotoba.compiler.frontend-destructuring-loop-test
                                           'kotoba.compiler.frontend-named-capability-test
                                           'kotoba.compiler.backend-cljs-test
+                                          'kotoba.compiler.backend-qualification-test
                                           'kotoba.compiler.ios-aot-test
                                           'kotoba.compiler.interface-test
                                           'kotoba.compiler.admission-test

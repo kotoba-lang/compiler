@@ -1,0 +1,17 @@
+{:kotoba.backend-provider-qualification/format :v1
+ :provider-manifest {:format :kotoba.provider-conformance/v1
+                     :sha256 "5d7599b5701b6fb9660de7488afbfa0b85314f90208a3f11b2ea28ca502e476e"
+                     :capability-count 9}
+ :backends
+ {:wasmtime {:manifest-gate :required
+             :execution-status :pending
+             :gaps [:typed-provider-import-abi :request-result-host-codec]
+             :evidence {}}
+  :native {:manifest-gate :required
+           :execution-status :pending
+           :gaps [:typed-provider-syscall-abi :request-result-host-codec]
+           :evidence {}}
+  :cljs {:manifest-gate :required
+         :execution-status :pending
+         :gaps [:typed-provider-dispatch-abi :request-result-host-codec]
+         :evidence {}}}}
