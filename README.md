@@ -137,11 +137,11 @@ around representing `.kotoba`'s full signed-64-bit integer semantics as JS
 `clojure.tools.reader` (its nominal ClojureScript sibling,
 `cljs.tools.reader`, depends on several `cljs.core` internals nbb's SCI
 interpreter doesn't resolve -- see that ns's docstring). `test/nbb/run.cljs`
-(`npm run test-nbb-wasm32`) cross-checks this path's output against
-checked-in golden `.wasm` files -- byte-for-byte, not just "looks right" --
-covering every `examples/*.kotoba` fixture plus dedicated i64/sleb128
-boundary cases (true i64 max/min, add-wraparound, the sleb continuation-bit
-crossing at 127/128).
+(`npm run test-nbb-wasm32`) verifies that this path emits valid Wasm for every
+`examples/*.kotoba` fixture plus dedicated i64/sleb128 boundary cases (true
+i64 max/min, add-wraparound, the sleb continuation-bit crossing at 127/128).
+Observable semantics, ABI behavior, resource bounds, and fail-closed rejection
+are the compatibility contract; byte layout is not.
 
 **Every other target (`x86_64*`, `aarch64*`, `aarch64-android`,
 `aarch64-ios`) and every other `kotoba` subcommand** (`package-ios`, `sbom`,
