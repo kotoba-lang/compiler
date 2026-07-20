@@ -24,6 +24,47 @@
   (remove #(contains? #{:js-kotoba-v1 :wasm32-kotoba-v1} (target/backend %))
           compiler/supported-targets))
 
+(deftest sealed-multi-arity-resolves-every-call-before-hir
+  (let [source "(defn offset ([x] (offset x 1)) ([x delta] (+ x delta)))
+                (defn main [] (offset 40))"
+        hir (frontend/analyze source)
+        functions (into {} (map (juxt :name identity) (:functions hir)))]
+    (is (= 41 (oracle source)))
+    (is (= ['offset$arity$1 'offset$arity$2 'main] (:exports hir)))
+    (is (= '(offset$arity$2 x 1) (get-in functions ['offset$arity$1 :body])))
+    (is (= '(offset$arity$1 40) (get-in functions ['main :body])))
+    (is (= 42 (ir/execute (ir/lower hir) 'offset$arity$2 [40 2])))))
+
+(deftest sealed-multi-arity-is-exported-as-explicit-abi-symbols
+  (let [source "(ns demo.multi (:export [offset]))
+                (defn offset ([x] (offset x 1)) ([x delta] (+ x delta)))"
+        compiled (compiler/compile-source source :js-kotoba-v1)
+        encoded (.encodeToString (java.util.Base64/getEncoder)
+                                 (.getBytes ^String (:source compiled) "UTF-8"))
+        probe (shell/sh
+               "node" "--input-type=module" "-e"
+               (str "import('data:text/javascript;base64," encoded
+                    "').then(m=>{const x=m.instantiateKotoba({});"
+                    "console.log(String(x['offset$arity$1'](40n))+','+"
+                    "String(x['offset$arity$2'](40n,2n)))})"))]
+    (is (= ['offset$arity$1 'offset$arity$2] (get-in compiled [:hir :exports])))
+    (is (zero? (:exit probe)) (:err probe))
+    (is (= "41,42" (str/trim (:out probe))))))
+
+(deftest sealed-multi-arity-rejects-ambiguous-or-dynamic-shapes
+  (doseq [[expected source]
+          [[#"duplicate multi-arity clause"
+            "(defn f ([x] x) ([y] y)) (defn main [] (f 1))"]
+           [#"no matching multi-arity clause"
+            "(defn f ([x] x) ([x y] (+ x y))) (defn main [] (f))"]
+           [#"variadic parameters"
+            "(defn f ([x] x) ([x & xs] x)) (defn main [] (f 1))"]
+           [#"clause count exceeds admission limit"
+            (str "(defn f " (str/join " " (map (fn [n] (str "([" (str/join " " (map #(str "x" %) (range n))) "] 0)")) (range 9))) ") (defn main [] 0)")]
+           [#"reserved multi-arity ABI marker"
+            "(defn f$arity$1 [x] x) (defn main [] 0)"]]]
+    (is (re-find expected (rejection-message source)) source)))
+
 (deftest floating-point-policy-is-versioned-and-artifact-sealed
   (let [source "(defn main [] 1)"
         results (mapv #(compiler/compile-source source %) compiler/supported-targets)

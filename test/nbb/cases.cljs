@@ -48,4 +48,7 @@
    {:name "f64-bits" :source "test/nbb/fixtures/f64-bits.kotoba" :target "wasm32-browser" :policy nil}
    {:name "f32-bits" :source "test/nbb/fixtures/f32-bits.kotoba" :target "wasm32-browser" :policy nil}
    {:name "vector-f64" :source "test/nbb/fixtures/vector-f64.kotoba" :target "wasm32-browser" :policy nil}
-   {:name "i32-profile" :source "test/nbb/fixtures/i32-profile.kotoba" :target "wasm32-browser" :policy nil}])
+   {:name "i32-profile" :source "test/nbb/fixtures/i32-profile.kotoba" :target "wasm32-browser" :policy nil}
+   ;; ADR 0017: source-name/arity resolution and canonical ABI mangling must
+   ;; be byte-identical on JVM and JVM-free compiler hosts.
+   {:name "multi-arity" :source "test/nbb/fixtures/multi-arity.kotoba" :target "wasm32-browser" :policy nil}])

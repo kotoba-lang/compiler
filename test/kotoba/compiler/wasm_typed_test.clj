@@ -58,6 +58,25 @@
                     "if(x['and-bits'](-1n,0x5555555555555555n)!==0x5555555555555555n)process.exit(3);"))]
     (is (zero? (:exit probe)) (:err probe))))
 
+(deftest static-multi-arity-has-real-wasm-runtime-parity
+  (let [source
+        "(ns multi.arity (:export [main offset]))
+         (defn main [] (offset 40))
+         (defn offset
+           ([x] (offset x 1))
+           ([x delta] (+ x delta)))"
+        compiled (compiler/compile-source source :wasm32-browser-kotoba-v1)
+        probe (node-probe
+               compiled
+               (str "const x=h.instance.exports;"
+                    "if(x['offset$arity$1'](40n)!==41n)process.exit(2);"
+                    "if(x['offset$arity$2'](40n,2n)!==42n)process.exit(3);"))]
+    (is (= ['main 'offset$arity$1 'offset$arity$2] (get-in compiled [:hir :exports])))
+    (is (= 41 (ir/execute (:kir compiled) 'main [])))
+    (is (= 41 (ir/execute (:kir compiled) 'offset$arity$1 [40])))
+    (is (= 42 (ir/execute (:kir compiled) 'offset$arity$2 [40 2])))
+    (is (zero? (:exit probe)) (:err probe))))
+
 (deftest i32-wrapping-shifts-and-xorshift-have-wasm-runtime-parity
   (let [source
         "(ns i32.profile (:export [main signed unsigned add mul xor shl shr ushr next]))
