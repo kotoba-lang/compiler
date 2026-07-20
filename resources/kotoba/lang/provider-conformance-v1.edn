@@ -1,0 +1,30 @@
+{:kotoba.provider-conformance/format :v1
+ :invariants [:registered-name-and-id
+              :exact-provider-map
+              :bounded-request-type
+              :bounded-result-type
+              :deny-by-default-runtime
+              :validate-request-before-provider
+              :validate-result-after-provider]
+ :kits
+ [{:name :state :version 1
+   :resource "kotoba/lang/capability-kits/state-v1.edn"
+   :capabilities [{:name :state/transact :id 8}]}
+  {:name :ui :version 1
+   :resource "kotoba/lang/capability-kits/ui-v1.edn"
+   :capabilities [{:name :ui/commit :id 9} {:name :ui/next-event :id 10}]}
+  {:name :http :version 1
+   :resource "kotoba/lang/capability-kits/http-v1.edn"
+   :capabilities [{:name :http/post :id 4}]}
+  {:name :llm :version 1
+   :resource "kotoba/lang/capability-kits/llm-v1.edn"
+   :capabilities [{:name :llm/generate :id 11}]}
+  {:name :storage :version 1
+   :resource "kotoba/lang/capability-kits/storage-v1.edn"
+   :capabilities [{:name :storage/transact :id 12}]}
+  {:name :clock :version 1
+   :resource "kotoba/lang/capability-kits/clock-v1.edn"
+   :capabilities [{:name :clock/now :id 7}]}
+  {:name :log :version 1
+   :resource "kotoba/lang/capability-kits/log-v1.edn"
+   :capabilities [{:name :log/read :id 5} {:name :log/append :id 6}]}]}
