@@ -21,7 +21,7 @@
          :llm {:version 1 :status :reference-implemented}
          :storage {:version 1 :status :reference-implemented}
          :clock {:version 1 :status :reference-implemented}
-         :log {:status :specified-pending}}
+         :log {:version 1 :status :reference-implemented}}
   :lifecycle [:validate-request :invoke-provider :validate-result]
   :resource-model [:fuel :depth :nodes :bytes :provider-timeout]}
  :reference-runtime
