@@ -638,6 +638,32 @@
     (is (= 128 (get-in compiled [:manifest :kotoba.artifact/limits :map-entries])))
     (is (zero? (:exit result)) (:err result))))
 
+(deftest bounded-xml-queries-run-through-compiler-and-kotoba-script
+  (let [source "(ns pilot.xml (:export [count-links link-name]))
+                (defn count-links [xml :string] :i64
+                  (xml-path-count xml \"robot/link\"))
+                (defn link-name [xml :string index :i64] [:option :string]
+                  (xml-path-attr xml \"robot/link\" index \"name\"))"
+        compiled (compiler/compile-source source :js-kotoba-v1)
+        encoded (.encodeToString (java.util.Base64/getEncoder)
+                                 (.getBytes ^String (:source compiled) "UTF-8"))
+        xml "<robot><link name=\"base\"/><link name=\"tip\"/></robot>"
+        probe (str "import('data:text/javascript;base64," encoded
+                   "').then(m=>{const x=m.instantiateKotoba({}),xml=" (pr-str xml) ";"
+                   "const tip=x['link-name'](xml,1n),missing=x['link-name'](xml,2n);"
+                   "if(x['count-links'](xml)!==2n||!tip[1]||tip[2]!=='tip'||missing[1])process.exit(2)})")
+        result (shell/sh "node" "--input-type=module" "-e" probe)]
+    (is (= 2 (ir/execute (:kir compiled) 'count-links [xml])))
+    (is (= [[:option :string] true "tip"]
+           (ir/execute (:kir compiled) 'link-name [xml 1])))
+    (is (= [[:option :string] false]
+           (ir/execute (:kir compiled) 'link-name [xml 2])))
+    (is (= [:option :string]
+           (get-in compiled [:hir :functions 1 :result])))
+    (is (str/includes? (:source compiled)
+                       "xmlSubsetLimits:Object.freeze({nodes:2048,depth:32,attributesPerNode:32,pathSegments:32})"))
+    (is (zero? (:exit result)) (:err result))))
+
 (deftest map-literal-get-round-trips
   (is (= 1 (oracle "(defn main [] (get {:a 1} :a))")))
   (is (= 2 (oracle "(defn main [] (get {:a 1 :b 2} :b))")))

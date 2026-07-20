@@ -7,6 +7,7 @@
   ;; validation ("Extra input spec: :clojure.core.specs.alpha/ns-form",
   ;; confirmed live).
   (:require [kotoba.compiler.value :as value]
+            [kotoba.compiler.xml :as xml]
             #?@(:cljs [[kotoba.compiler.cljs-i64 :as i64]])))
 
 (def ^:private default-fuel 512)
@@ -46,6 +47,7 @@
      typed-set-new typed-set-count typed-set-contains typed-set-conj typed-set-disj typed-set-equal
      typed-map-new typed-map-count typed-map-contains typed-map-get
      typed-map-entry-at typed-map-assoc typed-map-dissoc typed-map-equal
+     xml-path-count xml-path-attr
      record-new record-get record-assoc record-equal
      vector-count vector-get vector-at vector-drop vector-assoc vector-conj
      vector-f64-new vector-f64-count vector-f64-get vector-f64-at
@@ -664,6 +666,18 @@
         (= op 'string-concat)
         (let [[left right] (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
           (value/bounded-string! (str left right) value/string-value-byte-limit))
+
+        (= op 'xml-path-count)
+        (xml/path-count
+         (eval-expr (first args) env functions fuel heap call-stack cap-call)
+         (eval-expr (second args) env functions fuel heap call-stack cap-call))
+
+        (= op 'xml-path-attr)
+        (xml/path-attr
+         (eval-expr (nth args 0) env functions fuel heap call-stack cap-call)
+         (eval-expr (nth args 1) env functions fuel heap call-stack cap-call)
+         (eval-expr (nth args 2) env functions fuel heap call-stack cap-call)
+         (eval-expr (nth args 3) env functions fuel heap call-stack cap-call))
 
         (= op 'f64-to-bits)
         (value/f64-to-i64-bits

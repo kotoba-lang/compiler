@@ -7,7 +7,7 @@
         ;; Checked-KIR-only JavaScript backend, pinned immutably so standalone
         ;; clones and release builders never depend on a sibling checkout.
         io.github.kotoba-lang/kotoba-script
-        {:git/sha "b80e2f18384cde346bea2f17fe6381cb3887b1a2"}}
+        {:git/sha "ed4b697b4e5aeb4c66dde63dff5a9acdcfe1a90a"}}
  :aliases {:test {:extra-paths ["test"]
                   :main-opts ["-m" "kotoba.compiler.test-runner"]}
            :run {:main-opts ["-m" "kotoba.compiler.cli"]}}}

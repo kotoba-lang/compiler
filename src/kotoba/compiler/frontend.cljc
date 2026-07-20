@@ -127,6 +127,7 @@
     vector-f64-assoc 3 vector-f64-conj 2})
 (def sequencing-operations '#{do})
 (def string-operations '{string-byte-length 1 string=? 2 string-concat 2})
+(def xml-operations '{xml-path-count 2 xml-path-attr 4})
 (def f64-operations
   '{f64-to-bits 1 f64-from-bits 1
     f64-add 2 f64-sub 2 f64-mul 2 f64-div 2 f64-min 2 f64-max 2
@@ -164,6 +165,7 @@
              (set (keys typed-vector-operations))
              (set (keys typed-f64-vector-operations))
              (set (keys string-operations))
+             (set (keys xml-operations))
              (set (keys f64-operations))
              (set (keys f32-operations))
              (set (keys i32-operations))
@@ -1252,6 +1254,11 @@
               (reject! "string operation arity mismatch" form))
             (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
 
+        (contains? xml-operations op)
+        (do (when-not (= (get xml-operations op) (count args))
+              (reject! "XML operation arity mismatch" form))
+            (doseq [arg args] (validate-expr arg locals functions (inc depth) budget)))
+
         (contains? f64-operations op)
         (do (when-not (= (get f64-operations op) (count args))
               (reject! "f64 operation arity mismatch" form))
@@ -1719,6 +1726,18 @@
       (do (doseq [[arg type] (map vector args types)]
             (require-expression-type! type :string arg))
           :string)
+
+      (= op 'xml-path-count)
+      (do (doseq [[arg type] (map vector args types)]
+            (require-expression-type! type :string arg))
+          :i64)
+
+      (= op 'xml-path-attr)
+      (do (require-expression-type! (nth types 0) :string (nth args 0))
+          (require-expression-type! (nth types 1) :string (nth args 1))
+          (require-expression-type! (nth types 2) :i64 (nth args 2))
+          (require-expression-type! (nth types 3) :string (nth args 3))
+          [:option :string])
 
       (= op 'f64-to-bits)
       (do (require-expression-type! (first types) :f64 (first args)) :i64)

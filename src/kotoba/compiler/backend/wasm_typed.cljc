@@ -1,7 +1,7 @@
 (ns kotoba.compiler.backend.wasm-typed
   #?(:cljs (:require [kotoba.compiler.cljs-i64 :as i64])))
 
-(def abi-version 5)
+(def abi-version 6)
 (def custom-section-name "kotoba.typed")
 
 (def ^:private primitive-tags
@@ -199,7 +199,7 @@
                       i32-shift-left i32-shift-right u32-shift-right xorshift32
                       string-byte-length map-get vector-count vector-get vector-f64-count
                       vector-at hetero-vector-count typed-set-count
-                      typed-map-count} op) :i64
+                      typed-map-count xml-path-count} op) :i64
         (= op 'f64-to-bits) :i64
         (= op 'f64-from-bits) :f64
         (contains? '#{i64-to-f64-checked i64-to-f64-rounded} op) :f64
@@ -224,6 +224,7 @@
                       result-ok?-of option-some?-of typed-set-contains
                       typed-map-contains} op) :bool
         (= op 'string-concat) :string
+        (= op 'xml-path-attr) [:option :string]
         (= op 'vector-new) :vector-i64
         (= op 'vector-f64-new) :vector-f64
         (contains? '#{vector-f64-get vector-f64-at} op) :f64
