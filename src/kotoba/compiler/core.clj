@@ -109,7 +109,9 @@
                                         :typed-map-entries 31
                                         :record-fields 32
                                         :vector-i64-items 16384
-                                        :vector-f64-items 16384))
+                                        :vector-f64-items 16384
+                                        :compact-graph-items 128
+                                        :string-index-key-bytes 65536))
          :bytes (wasm/emit kir target)})
 
       ;; ADR-2607151500: cljs backend emits SOURCE TEXT, not bytes -- no
@@ -145,7 +147,9 @@
                                           :typed-map-entries 31
                                           :record-fields 32
                                           :vector-i64-items 16384
-                                          :vector-f64-items 16384))
+                                          :vector-f64-items 16384
+                                          :compact-graph-items 128
+                                          :string-index-key-bytes 65536))
             js-source (script/emit kir (merge {:source-digest source-digest
                                                :kir-digest kir-digest
                                                :compiler-version compiler-version}

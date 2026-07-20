@@ -54,8 +54,15 @@
      vector-count vector-get vector-at vector-drop vector-assoc vector-conj
      vector-f64-new vector-f64-count vector-f64-get vector-f64-at
      vector-f64-drop vector-f64-assoc vector-f64-conj
+     string-index-new string-index-count string-index-contains string-index-get string-index-assoc
+     disjoint-set-i64-new disjoint-set-i64-count disjoint-set-i64-union
+     document-null document-bool document-i64 document-f64 document-string document-keyword
+     document-vector document-map document-count document-contains document-get
+     document-assoc document-dissoc document-merge document-string-value
+     document-bool-value document-i64-value document-f64-value
      i32-wrap u32-wrap i32-wrapping-add i32-wrapping-mul i32-xor
-     i32-shift-left i32-shift-right u32-shift-right xorshift32})
+     i32-shift-left i32-shift-right u32-shift-right xorshift32
+     keyword-from-string})
 
 (defn only-string-typed-features? [hir]
   (letfn [(walk [form]
@@ -405,6 +412,27 @@
         (trap! :invalid-vector-f64-value
                {:position position :message (ex-message error)})))
 
+    :string-index
+    (try
+      (value/bounded-string-index! runtime-value)
+      (catch #?(:clj Exception :cljs :default) error
+        (trap! :invalid-string-index-value
+               {:position position :message (ex-message error)})))
+
+    :disjoint-set-i64
+    (try
+      (value/bounded-disjoint-set-i64! runtime-value)
+      (catch #?(:clj Exception :cljs :default) error
+        (trap! :invalid-disjoint-set-i64-value
+               {:position position :message (ex-message error)})))
+
+    :document
+    (try
+      (value/bounded-document! runtime-value)
+      (catch #?(:clj Exception :cljs :default) error
+        (trap! :invalid-document-value
+               {:position position :message (ex-message error)})))
+
     (try
       (value/bounded-typed-value! type runtime-value)
       (catch #?(:clj Exception :cljs :default) error
@@ -584,6 +612,22 @@
       (trap! :invalid-kgraph-index {:index index}))
     (nth entities i)))
 
+(defn- compact-host-index [index size code]
+  (when-not (and #?(:clj (integer? index) :cljs (i64/bigint-value? index))
+                 (not (neg? index)) (< index size))
+    (trap! code {:index index :size size}))
+  #?(:clj (int index) :cljs (js/Number index)))
+
+(defn- disjoint-root [parents start]
+  (loop [current start remaining (inc (count parents))]
+    (when (zero? remaining)
+      (trap! :invalid-disjoint-set-i64-value {:reason :parent-cycle}))
+    (let [parent (compact-host-index (nth parents current) (count parents)
+                                     :invalid-disjoint-set-i64-value)]
+      (if (= parent current)
+        current
+        (recur parent (dec remaining))))))
+
 (defn eval-expr [form env functions fuel heap call-stack cap-call]
   (cond
     #?(:clj (integer? form)
@@ -683,6 +727,15 @@
         (= op 'string-concat)
         (let [[left right] (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
           (value/bounded-string! (str left right) value/string-value-byte-limit))
+
+        (= op 'keyword-from-string)
+        (let [text (value/bounded-string!
+                    (eval-expr (first args) env functions fuel heap call-stack cap-call)
+                    value/keyword-value-byte-limit)]
+          (when (or (empty? text) (= \: (first text))
+                    (re-find #"[\s\[\]{}()\"',;`~^\\]" text))
+            (trap! :invalid-keyword-source {}))
+          (value/bounded-keyword! (keyword text) value/keyword-value-byte-limit))
 
         (= op 'xml-path-count)
         (xml/path-count
@@ -1329,6 +1382,168 @@
             (trap! :vector-f64-too-large {:limit value/vector-item-limit}))
           (value/bounded-vector-f64! (conj items item)))
 
+        (= op 'string-index-new) []
+
+        (= op 'string-index-count)
+        (let [index (value/bounded-string-index!
+                     (eval-expr (first args) env functions fuel heap call-stack cap-call))]
+          #?(:clj (long (count index)) :cljs (i64/->bigint (count index))))
+
+        (contains? '#{string-index-contains string-index-get} op)
+        (let [[index-form key-form] args
+              index (value/bounded-string-index!
+                     (eval-expr index-form env functions fuel heap call-stack cap-call))
+              key (value/bounded-typed-value!
+                   :string (eval-expr key-form env functions fuel heap call-stack cap-call))
+              found (some (fn [[candidate item]] (when (= candidate key) item)) index)]
+          (if (= op 'string-index-contains)
+            (boolean (some? found))
+            (if (some? found) [[:option :i64] true found] [[:option :i64] false])))
+
+        (= op 'string-index-assoc)
+        (let [[index-form key-form item-form] args
+              index (value/bounded-string-index!
+                     (eval-expr index-form env functions fuel heap call-stack cap-call))
+              key (value/bounded-typed-value!
+                   :string (eval-expr key-form env functions fuel heap call-stack cap-call))
+              item (value/bounded-typed-value!
+                    :i64 (eval-expr item-form env functions fuel heap call-stack cap-call))
+              without-key (filterv #(not= key (first %)) index)]
+          (when (and (= (count without-key) (count index))
+                     (>= (count index) value/compact-graph-item-limit))
+            (trap! :string-index-too-large {:limit value/compact-graph-item-limit}))
+          (value/bounded-string-index! (vec (sort-by first (conj without-key [key item])))))
+
+        (= op 'disjoint-set-i64-new)
+        (let [size-value (eval-expr (first args) env functions fuel heap call-stack cap-call)]
+          (when-not (and #?(:clj (integer? size-value) :cljs (i64/bigint-value? size-value))
+                         (<= 0 size-value value/compact-graph-item-limit))
+            (trap! :disjoint-set-i64-size-out-of-range
+                   {:limit value/compact-graph-item-limit}))
+          (let [size #?(:clj (int size-value) :cljs (js/Number size-value))
+                parents #?(:clj (mapv long (range size))
+                           :cljs (mapv i64/->bigint (range size)))
+                ranks (vec (repeat size #?(:clj 0 :cljs i64/zero)))]
+            (value/bounded-disjoint-set-i64! [parents ranks])))
+
+        (= op 'disjoint-set-i64-count)
+        (let [[parents _] (value/bounded-disjoint-set-i64!
+                           (eval-expr (first args) env functions fuel heap call-stack cap-call))]
+          #?(:clj (long (count parents)) :cljs (i64/->bigint (count parents))))
+
+        (= op 'disjoint-set-i64-union)
+        (let [[set-form left-form right-form] args
+              [parents ranks :as disjoint-set]
+              (value/bounded-disjoint-set-i64!
+               (eval-expr set-form env functions fuel heap call-stack cap-call))
+              left-index (compact-host-index
+                          (eval-expr left-form env functions fuel heap call-stack cap-call)
+                          (count parents) :disjoint-set-i64-index-out-of-range)
+              right-index (compact-host-index
+                           (eval-expr right-form env functions fuel heap call-stack cap-call)
+                           (count parents) :disjoint-set-i64-index-out-of-range)
+              left-root (disjoint-root parents left-index)
+              right-root (disjoint-root parents right-index)
+              option-type [:option :disjoint-set-i64]]
+          (if (= left-root right-root)
+            [option-type false]
+            (let [left-rank (nth ranks left-root)
+                  right-rank (nth ranks right-root)
+                  [child root equal-rank?]
+                  (cond (< left-rank right-rank) [left-root right-root false]
+                        (> left-rank right-rank) [right-root left-root false]
+                        :else [right-root left-root true])
+                  new-parents (assoc parents child #?(:clj (long root) :cljs (i64/->bigint root)))
+                  new-ranks (if equal-rank?
+                              (assoc ranks root #?(:clj (inc (long left-rank))
+                                                   :cljs (+ left-rank i64/one)))
+                              ranks)]
+              [option-type true
+               (value/bounded-disjoint-set-i64! [new-parents new-ranks])])))
+
+        (= op 'document-null) ["null"]
+
+        (contains? '#{document-bool document-i64 document-f64
+                      document-string document-keyword} op)
+        (let [type (case op document-bool :bool document-i64 :i64 document-f64 :f64
+                         document-string :string document-keyword :keyword)
+              tag (name type)
+              item (value/bounded-typed-value!
+                    type (eval-expr (first args) env functions fuel heap call-stack cap-call))]
+          (value/bounded-document! [tag item]))
+
+        (= op 'document-vector)
+        (value/bounded-document!
+         ["vector" (mapv #(value/bounded-document!
+                            (eval-expr % env functions fuel heap call-stack cap-call)) args)])
+
+        (= op 'document-map)
+        (let [entries (mapv (fn [[key-form item-form]]
+                              [(value/bounded-typed-value!
+                                :keyword (eval-expr key-form env functions fuel heap call-stack cap-call))
+                               (value/bounded-document!
+                                (eval-expr item-form env functions fuel heap call-stack cap-call))])
+                            (partition 2 args))]
+          (value/bounded-document! ["map" (vec (sort-by (comp str first) entries))]))
+
+        (= op 'document-count)
+        (let [[tag payload] (value/bounded-document!
+                             (eval-expr (first args) env functions fuel heap call-stack cap-call))]
+          (when-not (contains? #{"map" "vector"} tag)
+            (trap! :document-container-required {:tag tag}))
+          #?(:clj (long (count payload)) :cljs (i64/->bigint (count payload))))
+
+        (contains? '#{document-contains document-get document-assoc document-dissoc} op)
+        (let [[document-form key-form item-form] args
+              [tag entries :as document]
+              (value/bounded-document!
+               (eval-expr document-form env functions fuel heap call-stack cap-call))
+              _ (when-not (= "map" tag) (trap! :document-map-required {:tag tag}))
+              key (value/bounded-typed-value!
+                   :keyword (eval-expr key-form env functions fuel heap call-stack cap-call))
+              position (first (keep-indexed #(when (= key (first %2)) %1) entries))]
+          (case op
+            document-contains (boolean (some? position))
+            document-get (if (some? position)
+                           [[:option :document] true (second (nth entries position))]
+                           [[:option :document] false])
+            document-dissoc (if (some? position)
+                              (value/bounded-document!
+                               ["map" (vec (concat (subvec entries 0 position)
+                                                    (subvec entries (inc position))))])
+                              document)
+            document-assoc
+            (let [item (value/bounded-document!
+                        (eval-expr item-form env functions fuel heap call-stack cap-call))
+                  output (if (some? position)
+                           (assoc entries position [key item])
+                           (conj entries [key item]))]
+              (when (> (count output) value/document-container-item-limit)
+                (trap! :document-map-too-large
+                       {:limit value/document-container-item-limit}))
+              (value/bounded-document! ["map" (vec (sort-by (comp str first) output))]))))
+
+        (= op 'document-merge)
+        (let [documents (mapv #(value/bounded-document!
+                                (eval-expr % env functions fuel heap call-stack cap-call)) args)
+              _ (doseq [[tag _] documents]
+                  (when-not (= "map" tag) (trap! :document-map-required {:tag tag})))
+              entries (reduce (fn [result [key item]] (assoc result key item))
+                              (sorted-map-by #(compare (str %1) (str %2)))
+                              (mapcat second documents))]
+          (when (> (count entries) value/document-container-item-limit)
+            (trap! :document-map-too-large {:limit value/document-container-item-limit}))
+          (value/bounded-document! ["map" (mapv vec entries)]))
+
+        (contains? '#{document-string-value document-bool-value
+                      document-i64-value document-f64-value} op)
+        (let [[tag payload] (value/bounded-document!
+                             (eval-expr (first args) env functions fuel heap call-stack cap-call))
+              type (case op document-string-value :string document-bool-value :bool
+                         document-i64-value :i64 document-f64-value :f64)
+              option-type [:option type]]
+          (if (= tag (name type)) [option-type true payload] [option-type false]))
+
         (contains? '#{kernel-load-u8 kernel-load-u8-4k kernel-load-u8-16k
                       kernel-store-u8 kernel-store-u8-4k
                       kernel-load-u32 kernel-store-u32} op)
@@ -1462,6 +1677,9 @@
          :result-i64 (value/bounded-result-i64! arg)
          :vector-i64 (value/bounded-vector-i64! arg)
          :vector-f64 (value/bounded-vector-f64! arg)
+         :string-index (value/bounded-string-index! arg)
+         :disjoint-set-i64 (value/bounded-disjoint-set-i64! arg)
+         :document (value/bounded-document! arg)
          (value/bounded-typed-value! type arg))))
      (let [invoke #(binding [*runtime-schemas* (:schemas kir)]
                      (invoke-function function

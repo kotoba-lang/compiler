@@ -9,6 +9,8 @@
             [kotoba.compiler.coverage-evidence-test]
             [kotoba.compiler.bounded-edn-test]
             [kotoba.compiler.cache-test]
+            [kotoba.compiler.compact-graph-value-test]
+            [kotoba.compiler.document-value-test]
             [kotoba.compiler.frontend-fuzz-test]
             [kotoba.compiler.f64-value-test]
             [kotoba.compiler.f32-value-test]
@@ -34,6 +36,8 @@
             [kotoba.compiler.reference-runtime-test]
             [kotoba.compiler.state-provider-test]
             [kotoba.compiler.ui-provider-test]
+            [kotoba.compiler.http-provider-test]
+            [kotoba.compiler.llm-provider-test]
             [kotoba.compiler.wasm-typed-test]
             [kotoba.compiler.value-test]
             [kotoba.compiler.verifier-profile-test]))
@@ -48,6 +52,8 @@
                                           'kotoba.compiler.coverage-evidence-test
                                           'kotoba.compiler.bounded-edn-test
                                           'kotoba.compiler.cache-test
+                                          'kotoba.compiler.compact-graph-value-test
+                                          'kotoba.compiler.document-value-test
                                           'kotoba.compiler.frontend-fuzz-test
                                           'kotoba.compiler.f64-value-test
                                           'kotoba.compiler.f32-value-test
@@ -67,6 +73,8 @@
                                           'kotoba.compiler.reference-runtime-test
                                           'kotoba.compiler.state-provider-test
                                           'kotoba.compiler.ui-provider-test
+                                          'kotoba.compiler.http-provider-test
+                                          'kotoba.compiler.llm-provider-test
                                           'kotoba.compiler.wasm-typed-test
                                           'kotoba.compiler.native-executor-test
                                           'kotoba.compiler.receipt-test

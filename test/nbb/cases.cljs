@@ -29,7 +29,11 @@
    {:name "heap" :source "examples/heap.kotoba" :target "wasm32-browser" :policy nil}
    {:name "i64-semantics" :source "examples/i64-semantics.kotoba" :target "wasm32-browser" :policy nil}
    {:name "list" :source "examples/list.kotoba" :target "wasm32-browser" :policy nil}
-   {:name "structured" :source "examples/structured.kotoba" :target "wasm32-browser" :policy nil}
+   ;; One representative artifact is enough to detect loss of deterministic
+   ;; JVM/nbb emission. The remaining cases prove that nbb emits valid Wasm;
+   ;; behavior and ABI semantics are covered by the conformance suites.
+   {:name "structured" :source "examples/structured.kotoba" :target "wasm32-browser"
+    :policy nil :byte-golden? true}
    ;; i64/sleb128 boundary regression cases (this PR): the whole point of
    ;; the `:cljs` port's `cljs-i64`/bigint machinery is the FULL signed
    ;; 64-bit range, which no `examples/*.kotoba` fixture happens to
