@@ -576,6 +576,73 @@
           (desugar-expr (first args))
           (partition 2 (rest args))))
 
+(defn- thread-form [value step last?]
+  (cond
+    (symbol? step) (list step value)
+    (and (seq? step) (symbol? (first step)))
+    (if last?
+      (apply list (first step) (concat (rest step) [value]))
+      (list* (first step) value (rest step)))
+    :else (reject! "thread step must be a symbol or non-empty call" step)))
+
+(defn- desugar-thread [args form last?]
+  (when (empty? args)
+    (reject! (if last? "->> requires an initial value" "-> requires an initial value") form))
+  (desugar-expr (reduce #(thread-form %1 %2 last?) (first args) (rest args))))
+
+(defn- desugar-binding-if [args form when?]
+  (let [[binding & bodies] args]
+    (when-not (and (vector? binding) (= 2 (count binding)))
+      (reject! (if when? "when-let requires one binding pair"
+                           "if-let requires one binding pair") form))
+    (when (if when? (empty? bodies) (not (<= 1 (count bodies) 2)))
+      (reject! (if when? "when-let requires at least one body expression"
+                           "if-let requires then and optional else expressions") form))
+    (let [[pattern value] binding
+          tmp (gensym "binding-if__")
+          then-form (if when?
+                      (if (= 1 (count bodies)) (first bodies) (cons 'do bodies))
+                      (first bodies))
+          else-form (if when? 0 (if (= 2 (count bodies)) (second bodies) 0))]
+      (desugar-expr
+       (list 'let [tmp value]
+             (list 'if tmp (list 'let [pattern tmp] then-form) else-form))))))
+
+(defn- desugar-case [args form]
+  (when (empty? args) (reject! "case requires a dispatch expression" form))
+  (let [[dispatch & clauses] args
+        default? (odd? (count clauses))
+        default (if default? (last clauses) 0)
+        pairs (partition 2 (if default? (butlast clauses) clauses))
+        constants (map first pairs)]
+    (when-not (every? #(or (kotoba-integer? %) (keyword? %) (boolean? %)) constants)
+      (reject! "case constants must be bounded integer, keyword, or boolean literals" form))
+    (when-not (= (count constants) (count (distinct constants)))
+      (reject! "case constants must be unique" form))
+    (let [tmp (gensym "case__")]
+      (list 'let [tmp (desugar-expr dispatch)]
+            (reduce (fn [fallback [constant result]]
+                      (list 'if (list '= tmp (desugar-expr constant))
+                            (desugar-expr result) fallback))
+                    (desugar-expr default)
+                    (reverse pairs))))))
+
+(defn- desugar-comparison-chain [op args form]
+  (when (and (not= op '=) (empty? args))
+    (reject! "ordered comparison requires at least one operand" form))
+  (letfn [(chain [left remaining]
+            (if (empty? remaining)
+              1
+              (let [right (gensym "comparison__")]
+                (list 'let [right (desugar-expr (first remaining))]
+                      (list 'if (list op left right)
+                            (chain right (rest remaining)) 0)))))]
+    (if (empty? args)
+      1
+      (let [left (gensym "comparison__")]
+        (list 'let [left (desugar-expr (first args))]
+              (chain left (rest args)))))))
+
 
 (defn- desugar-do
   "ADR-2607180900 L2: `(do a b c)` -> nested `let` returning last expression."
@@ -870,21 +937,40 @@
                    (list '= (desugar-expr (first args)) 0))
         not (do (when-not (= 1 (count args)) (reject! "not requires one operand" form))
                 (list '= (desugar-expr (first args)) 0))
-        not= (do (when-not (= 2 (count args))
-                   (reject! "not= requires two operands in this bounded profile" form))
-                 (list '= (list '= (desugar-expr (first args))
-                                      (desugar-expr (second args)))
-                       0))
+        not= (if (= 2 (count args))
+               (list '= (list '= (desugar-expr (first args))
+                                    (desugar-expr (second args))) 0)
+               (list '= (desugar-comparison-chain '= args form) 0))
         zero? (do (when-not (= 1 (count args)) (reject! "zero? requires one operand" form))
                   (list '= (desugar-expr (first args)) 0))
         pos? (do (when-not (= 1 (count args)) (reject! "pos? requires one operand" form))
                  (list '> (desugar-expr (first args)) 0))
         neg? (do (when-not (= 1 (count args)) (reject! "neg? requires one operand" form))
                  (list '< (desugar-expr (first args)) 0))
+        = (if (= 2 (count args))
+            (list '= (desugar-expr (first args)) (desugar-expr (second args)))
+            (desugar-comparison-chain '= args form))
+        < (if (= 2 (count args))
+            (list '< (desugar-expr (first args)) (desugar-expr (second args)))
+            (desugar-comparison-chain '< args form))
+        > (if (= 2 (count args))
+            (list '> (desugar-expr (first args)) (desugar-expr (second args)))
+            (desugar-comparison-chain '> args form))
+        <= (if (= 2 (count args))
+             (list '<= (desugar-expr (first args)) (desugar-expr (second args)))
+             (desugar-comparison-chain '<= args form))
+        >= (if (= 2 (count args))
+             (list '>= (desugar-expr (first args)) (desugar-expr (second args)))
+             (desugar-comparison-chain '>= args form))
         and (desugar-and args)
         or (desugar-or args)
+        -> (desugar-thread args form false)
+        ->> (desugar-thread args form true)
         cond (desugar-cond args form)
         cond-> (desugar-cond-thread args form)
+        case (desugar-case args form)
+        if-let (desugar-binding-if args form false)
+        when-let (desugar-binding-if args form true)
         when (do (when (empty? args)
                    (reject! "when requires a test expression" form))
                  (let [[test & body] args
