@@ -79,9 +79,12 @@
 
 (deftest bounded-xml-queries-have-reference-and-typed-wasm-runtime-parity
   (let [source
-        "(ns xml.query (:export [main count-links link-text link-name]))
+        "(ns xml.query (:export [main count-links count-elements element-text link-text link-name]))
          (defn main [] 0)
          (defn count-links [xml :string] :i64 (xml-path-count xml \"robot/link\"))
+         (defn count-elements [xml :string name :string] :i64 (xml-name-count xml name))
+         (defn element-text [xml :string name :string index :i64] [:option :string]
+           (xml-name-text xml name index))
          (defn link-text [xml :string index :i64] [:option :string]
            (xml-path-text xml \"robot/link\" index))
          (defn link-name [xml :string index :i64] [:option :string]
@@ -91,13 +94,16 @@
         probe (node-probe
                compiled
                (str "const x=h.instance.exports,xml=" (pr-str xml) ";"
-                    "const tip=x['link-name'](xml,1n),missing=x['link-name'](xml,2n),text=x['link-text'](xml,0n);"
-                    "if(x['count-links'](xml)!==2n||!tip[1]||tip[2]!=='tip'||missing[1]||!text[1]||text[2]!=='Hello typed Wasm')process.exit(2);"))]
+                    "const tip=x['link-name'](xml,1n),missing=x['link-name'](xml,2n),text=x['link-text'](xml,0n),named=x['element-text'](xml,'link',0n);"
+                    "if(x['count-links'](xml)!==2n||x['count-elements'](xml,'link')!==2n||!tip[1]||tip[2]!=='tip'||missing[1]||!text[1]||text[2]!=='Hello typed Wasm'||!named[1]||named[2]!=='Hello typed Wasm')process.exit(2);"))]
     (is (= 2 (ir/execute (:kir compiled) 'count-links [xml])))
     (is (= [[:option :string] true "tip"]
            (ir/execute (:kir compiled) 'link-name [xml 1])))
     (is (= [[:option :string] true "Hello typed Wasm"]
            (ir/execute (:kir compiled) 'link-text [xml 0])))
+    (is (= 2 (ir/execute (:kir compiled) 'count-elements [xml "link"])))
+    (is (= [[:option :string] true "Hello typed Wasm"]
+           (ir/execute (:kir compiled) 'element-text [xml "link" 0])))
     (is (zero? (:exit probe)) (:err probe))))
 
 (deftest i32-wrapping-shifts-and-xorshift-have-wasm-runtime-parity

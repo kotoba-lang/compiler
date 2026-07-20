@@ -87,6 +87,8 @@ const ALLOWED_IMPORTS = new Set([
   "kotoba:typed/keyword-from-string/function",
   "kotoba:typed/cap-call/function",
   "kotoba:typed/xml-path-count/function",
+  "kotoba:typed/xml-name-count/function",
+  "kotoba:typed/xml-name-text/function",
   "kotoba:typed/xml-path-text/function",
   "kotoba:typed/xml-path-attr/function",
   "kotoba:typed/decimal-f64-parse/function",
@@ -617,6 +619,12 @@ function createTypedRuntime(abi, typedCapCall, allow) {
       reject("invalid-xml", "XML path is invalid");
     return path;
   };
+  const xmlCheckedName = name => {
+    name = xmlString(name);
+    if (!xmlName.test(name)) reject("invalid-xml", "XML element name is invalid");
+    return name;
+  };
+  const xmlElementName = node => node.path.slice(node.path.lastIndexOf("/") + 1);
   const compareSequence = (types, left, right) => {
     const length = Math.min(left.length, right.length);
     for (let index = 0; index < length; index += 1) {
@@ -1395,6 +1403,24 @@ function createTypedRuntime(abi, typedCapCall, allow) {
     "xml-path-count"(xml, path) {
       const wanted = xmlPath(path);
       return BigInt(parseBoundedXml(xml).filter(node => node.path === wanted).length);
+    },
+    "xml-name-count"(xml, name) {
+      const wanted = xmlCheckedName(name);
+      return BigInt(parseBoundedXml(xml).filter(node => xmlElementName(node) === wanted).length);
+    },
+    "xml-name-text"(xml, name, index) {
+      const wanted = xmlCheckedName(name);
+      if (typeof index !== "bigint" || index < 0n || BigInt.asIntN(64, index) !== index)
+        reject("invalid-xml", "XML element index is invalid");
+      const optionDescriptor = abi.descriptors.find(candidate =>
+        Array.isArray(candidate) && candidate[0] === "option" && candidate[1] === "string");
+      if (optionDescriptor === undefined)
+        reject("invalid-typed-operation", "XML string option descriptor is absent");
+      const matches = parseBoundedXml(xml).filter(node => xmlElementName(node) === wanted);
+      const present = index < BigInt(matches.length);
+      return admitValue(optionDescriptor, Object.freeze(present
+        ? [optionDescriptor, true, matches[Number(index)].text]
+        : [optionDescriptor, false]));
     },
     "xml-path-text"(xml, path, index) {
       const wanted = xmlPath(path);

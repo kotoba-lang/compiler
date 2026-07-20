@@ -161,10 +161,34 @@
       (trap! :invalid-xml-path))
     path))
 
+(defn validate-name! [name]
+  (when-not (valid-name? (value/bounded-string! name value/string-value-byte-limit))
+    (trap! :invalid-xml-name))
+  name)
+
+(defn- element-name [node]
+  (last (str/split (:path node) #"/")))
+
 (defn path-count [input path]
   (let [path (validate-path! path)
         result (count (filter #(= path (:path %)) (parse-elements input)))]
     #?(:clj (long result) :cljs (i64/->bigint result))))
+
+(defn name-count [input name]
+  (let [name (validate-name! name)
+        result (count (filter #(= name (element-name %)) (parse-elements input)))]
+    #?(:clj (long result) :cljs (i64/->bigint result))))
+
+(defn name-text [input name index]
+  (let [name (validate-name! name)]
+    (when #?(:clj (neg? index) :cljs (< index i64/zero))
+      (trap! :xml-index-out-of-range))
+    (let [matches (filterv #(= name (element-name %)) (parse-elements input))
+          host-index #?(:clj index :cljs (js/Number index))
+          option-type [:option :string]]
+      (if (>= host-index (count matches))
+        [option-type false]
+        [option-type true (:text (nth matches host-index))]))))
 
 (defn path-text [input path index]
   (let [path (validate-path! path)]
@@ -179,8 +203,7 @@
 
 (defn path-attr [input path index attribute]
   (let [path (validate-path! path)]
-    (when-not (valid-name? (value/bounded-string! attribute value/string-value-byte-limit))
-      (trap! :invalid-xml-name))
+    (validate-name! attribute)
     (when #?(:clj (neg? index) :cljs (< index i64/zero))
       (trap! :xml-index-out-of-range))
     (let [matches (filterv #(= path (:path %)) (parse-elements input))

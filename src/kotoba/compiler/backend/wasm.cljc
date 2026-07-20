@@ -1093,6 +1093,13 @@
                     (= op 'xml-path-count)
                     (concat (emit* (first args) env) (emit* (second args) env)
                             [0x10 (get intrinsic-indices 'xml-path-count)])
+                    (= op 'xml-name-count)
+                    (concat (emit* (first args) env) (emit* (second args) env)
+                            [0x10 (get intrinsic-indices 'xml-name-count)])
+                    (= op 'xml-name-text)
+                    (concat (emit* (nth args 0) env) (emit* (nth args 1) env)
+                            (emit* (nth args 2) env)
+                            [0x10 (get intrinsic-indices 'xml-name-text)])
                     (= op 'xml-path-text)
                     (concat (emit* (nth args 0) env) (emit* (nth args 1) env)
                             (emit* (nth args 2) env)
@@ -1177,7 +1184,9 @@
                                (coll? form) (doseq [item form] (walk item))))]
                      (doseq [function functions] (walk (:body function)))
                      @found))
-        has-xml? (uses-operation? functions '#{xml-path-count xml-path-text xml-path-attr})
+        has-xml? (uses-operation? functions
+                                  '#{xml-path-count xml-name-count xml-name-text
+                                     xml-path-text xml-path-attr})
         has-decimal? (uses-operation? functions '#{decimal-f64-parse})
         has-decimal-x3? (uses-operation? functions '#{decimal-f64x3-parse})
         has-string-index? (uses-operation? functions
@@ -1291,6 +1300,8 @@
                              [0x60 2 0x7f 0x6f 1 0x6f]]])
                          (when has-xml?
                            [['xml-path-count "kotoba:typed" "xml-path-count" [0x60 2 0x6f 0x6f 1 0x7e]]
+                            ['xml-name-count "kotoba:typed" "xml-name-count" [0x60 2 0x6f 0x6f 1 0x7e]]
+                            ['xml-name-text "kotoba:typed" "xml-name-text" [0x60 3 0x6f 0x6f 0x7e 1 0x6f]]
                             ['xml-path-text "kotoba:typed" "xml-path-text" [0x60 3 0x6f 0x6f 0x7e 1 0x6f]]
                             ['xml-path-attr "kotoba:typed" "xml-path-attr" [0x60 4 0x6f 0x6f 0x7e 0x6f 1 0x6f]]])
                          (when has-decimal?
