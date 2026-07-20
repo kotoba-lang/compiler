@@ -1,0 +1,6 @@
+(ns decimal.f64.fixture (:export [main parse]))
+
+(defn main [] :i64 0)
+
+(defn parse [input :string] [:option :f64]
+  (decimal-f64-parse input))

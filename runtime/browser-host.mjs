@@ -1,7 +1,7 @@
 const MAX_MODULE_BYTES = 1024 * 1024;
 const PAIR_CAPACITY = 4096;
 const TYPED_SECTION = "kotoba.typed";
-const TYPED_ABI_VERSION = 6;
+const TYPED_ABI_VERSION = 7;
 const COMPATIBILITY_SECTION = "kotoba.compatibility";
 const COMPATIBILITY_VERSION = 1;
 const MAX_TYPED_DESCRIPTORS = 64;
@@ -53,7 +53,8 @@ const ALLOWED_IMPORTS = new Set([
   "kotoba:typed/map-dissoc-i64/function",
   "kotoba:typed/map-dissoc-ref/function",
   "kotoba:typed/xml-path-count/function",
-  "kotoba:typed/xml-path-attr/function"
+  "kotoba:typed/xml-path-attr/function",
+  "kotoba:typed/decimal-f64-parse/function"
 ]);
 
 export class KotobaHostError extends Error {
@@ -181,7 +182,7 @@ function parseTypedMetadata(module) {
     reject("invalid-typed-metadata", "unknown typed ABI descriptor tag");
   };
   const version = byte();
-  if (version !== 5 && version !== TYPED_ABI_VERSION)
+  if (version !== 5 && version !== 6 && version !== TYPED_ABI_VERSION)
     reject("unsupported-typed-abi", "unsupported Wasm typed ABI version");
   const count = uleb();
   if (count > MAX_TYPED_DESCRIPTORS)
@@ -871,6 +872,20 @@ function createTypedRuntime(abi) {
         Object.prototype.hasOwnProperty.call(matches[Number(index)].attributes, attribute);
       return admitValue(optionDescriptor, Object.freeze(present
         ? [optionDescriptor, true, matches[Number(index)].attributes[attribute]]
+        : [optionDescriptor, false]));
+    },
+    "decimal-f64-parse"(input) {
+      if (typeof input !== "string")
+        reject("invalid-typed-operation", "decimal input must be a string");
+      const optionDescriptor = abi.descriptors.find(candidate =>
+        Array.isArray(candidate) && candidate[0] === "option" && candidate[1] === "f64");
+      if (optionDescriptor === undefined)
+        reject("invalid-typed-operation", "decimal f64 option descriptor is absent");
+      const valid = new TextEncoder().encode(input).length <= 64 &&
+        /^[+-]?(?:(?:[0-9]+(?:\.[0-9]*)?)|(?:\.[0-9]+))(?:[eE][+-]?[0-9]{1,3})?$/u.test(input);
+      const parsed = valid ? Number(input) : Number.NaN;
+      return admitValue(optionDescriptor, Object.freeze(Number.isFinite(parsed)
+        ? [optionDescriptor, true, parsed]
         : [optionDescriptor, false]));
     }
   });
