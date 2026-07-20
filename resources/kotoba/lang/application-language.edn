@@ -18,7 +18,7 @@
   :kits {:state {:version 1 :status :reference-implemented}
          :ui {:version 1 :status :reference-implemented}
          :http {:version 1 :status :reference-implemented}
-         :llm {:status :specified-pending}
+         :llm {:version 1 :status :reference-implemented}
          :storage {:status :specified-pending}
          :clock {:status :specified-pending}
          :log {:status :specified-pending}}
