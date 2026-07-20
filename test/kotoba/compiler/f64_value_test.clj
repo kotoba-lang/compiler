@@ -133,6 +133,42 @@
     (is (zero? (:exit js-result)) (:err js-result))
     (is (zero? (:exit wasm-result)) (:err wasm-result))))
 
+(deftest parsed-f64x3-payloads-compose-into-nominal-records
+  (let [source "(ns decimal.pose (:export [main pose]))
+                (defn main [] :i64 0)
+                (defn pose [xyz-text :string rpy-text :string]
+                  [:option [:record :geometry/pose
+                            [[:xyz [:vector [:f64 :f64 :f64]]]
+                             [:rpy [:vector [:f64 :f64 :f64]]]]]]
+                  (match-option (decimal-f64x3-parse xyz-text)
+                    [:option [:vector [:f64 :f64 :f64]]]
+                    (none (option-none-of [:option [:record :geometry/pose
+                                                    [[:xyz [:vector [:f64 :f64 :f64]]]
+                                                     [:rpy [:vector [:f64 :f64 :f64]]]]]]))
+                    (some xyz
+                      (match-option (decimal-f64x3-parse rpy-text)
+                        [:option [:vector [:f64 :f64 :f64]]]
+                        (none (option-none-of [:option [:record :geometry/pose
+                                                        [[:xyz [:vector [:f64 :f64 :f64]]]
+                                                         [:rpy [:vector [:f64 :f64 :f64]]]]]]))
+                        (some rpy
+                          (option-some-of [:option [:record :geometry/pose
+                                                   [[:xyz [:vector [:f64 :f64 :f64]]]
+                                                    [:rpy [:vector [:f64 :f64 :f64]]]]]]
+                            (record [:record :geometry/pose
+                                     [[:xyz [:vector [:f64 :f64 :f64]]]
+                                      [:rpy [:vector [:f64 :f64 :f64]]]]]
+                              xyz rpy)))))))"
+        artifact (compiler/compile-source source :wasm32-browser-kotoba-v1)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (:bytes artifact))
+        result (node-run
+                (str "import('./runtime/browser-host.mjs').then(async m=>{"
+                     "const h=await m.instantiateKotoba(Buffer.from('" encoded "','base64'));"
+                     "const v=h.instance.exports.pose('1 2 3','4 5 6');"
+                     "if(!v[1]||JSON.stringify(v[2][1].slice(1))!=='[1,2,3]'||JSON.stringify(v[2][2].slice(1))!=='[4,5,6]')process.exit(2)})"
+                     ".catch(e=>{console.error(e);process.exit(70)})"))]
+    (is (zero? (:exit result)) (:err result))))
+
 (deftest f64-native-targets-fail-closed
   (testing "f64 is not silently lowered through the i64 native ABI"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
