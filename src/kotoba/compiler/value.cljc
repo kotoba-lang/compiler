@@ -370,6 +370,9 @@
    (cond
      (contains? leaf-value-types type)
      type
+     (and (vector? type) (= 2 (count type)) (= :ref (first type))
+          (keyword? (second type)) (namespace (second type)))
+     type
      (and (vector? type) (= 3 (count type)) (= :result (first type)))
      (do (validate-value-type! (second type) (inc depth) nodes)
          (validate-value-type! (nth type 2) (inc depth) nodes)

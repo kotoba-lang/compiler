@@ -292,7 +292,6 @@
       (is (not (.contains printed surface)))))
   (doseq [bad ["(defn main [] (second))"
                "(defn main [] (zero? 1 2))"
-               "(defn main [] (not= 1 2 3))"
                "(defn not [x] x) (defn main [] 0)"]]
     (is (thrown? clojure.lang.ExceptionInfo
                  (compiler/compile-source bad :wasm32-kotoba-v1)))))

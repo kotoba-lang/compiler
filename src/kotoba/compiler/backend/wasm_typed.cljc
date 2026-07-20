@@ -1,12 +1,14 @@
 (ns kotoba.compiler.backend.wasm-typed
   #?(:cljs (:require [kotoba.compiler.cljs-i64 :as i64])))
 
-(def abi-version 9)
+(def abi-version 8)
+(def schema-abi-version 9)
+(def compact-graph-abi-version 10)
 (def custom-section-name "kotoba.typed")
 
 (def ^:private primitive-tags
   {:i64 0 :string 1 :keyword 2 :bool 3 :vector-i64 11 :f64 12 :f32 13
-   :vector-f64 14 :string-index 15 :disjoint-set-i64 16})
+   :vector-f64 14 :string-index 16 :disjoint-set-i64 17})
 
 (def ^:private boolean-result-ops
   '#{f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered
@@ -20,7 +22,7 @@
   ;; because literal i64 values are walked alongside descriptors.
   (or (and (keyword? value) (contains? primitive-tags value))
       (and (vector? value)
-           (contains? #{:option :result :variant :vector :set :map :record}
+           (contains? #{:option :result :variant :vector :set :map :record :ref}
                       (first value)))))
 
 (defn- uleb [n]
@@ -67,6 +69,7 @@
                               (encode-descriptor (nth descriptor 2))))
       :record (into [9] (concat (text-bytes (keyword-text (second descriptor)))
                                 (encode-named-members (nth descriptor 2))))
+      :ref (into [15] (text-bytes (keyword-text (second descriptor))))
       (throw (ex-info "unsupported Wasm typed descriptor"
                       {:phase :wasm-typed-metadata :descriptor descriptor})))))
 
@@ -84,6 +87,7 @@
           :set (walk (second value) found)
           :map (->> found (walk (second value)) (walk (nth value 2)))
           :record (reduce (fn [result [_ type]] (walk type result)) found (nth value 2))
+          :ref found
           found)))
 
     (and (seq? value) (contains? boolean-result-ops (first value)))
@@ -121,6 +125,25 @@
 (defn descriptor-indices [kir]
   (into {} (map-indexed (fn [index descriptor] [descriptor index])
                         (descriptor-table kir))))
+
+(defn capability-contracts
+  "Returns the sealed typed capability contracts used by KIR. One capability
+  id has exactly one request/result contract per module."
+  [kir]
+  (let [contracts (->> (:functions kir)
+                       (mapcat #(tree-seq coll? seq (:body %)))
+                       (keep (fn [form]
+                               (when (and (seq? form) (= 'typed-cap-call (first form)))
+                                 (let [[_ id request-type result-type] form]
+                                   {:id id :request-type request-type :result-type result-type}))))
+                       distinct
+                       (sort-by (juxt :id (comp pr-str :request-type) (comp pr-str :result-type)))
+                       vec)]
+    (doseq [[id grouped] (group-by :id contracts)]
+      (when (> (count grouped) 1)
+        (throw (ex-info "typed capability id has conflicting contracts"
+                        {:phase :wasm-typed-metadata :capability id :contracts grouped}))))
+    contracts))
 
 (declare literal-table reference-type?)
 
@@ -169,12 +192,35 @@
 
 (defn metadata-bytes [kir]
   (let [descriptors (descriptor-table kir)
-        literals (literal-table kir)]
-    (vec (concat [abi-version]
+        literals (literal-table kir)
+        schemas (:schemas kir)
+        identities (:schema-identities kir)
+        contracts (capability-contracts kir)
+        compact-graph? (some #{:string-index :disjoint-set-i64} descriptors)
+        schema? (or (seq schemas) (seq contracts))
+        extended-schema? (or schema? compact-graph?)
+        indices (descriptor-indices kir)]
+    (vec (concat [(cond compact-graph? compact-graph-abi-version
+                        schema? schema-abi-version
+                        :else abi-version)]
                  (uleb (count descriptors))
                  (mapcat encode-descriptor descriptors)
                  (uleb (count literals))
-                 (mapcat encode-literal literals)))))
+                 (mapcat encode-literal literals)
+                 (when extended-schema?
+                   (concat
+                    (uleb (count schemas))
+                    (mapcat (fn [[schema-name descriptor]]
+                              (concat (text-bytes (keyword-text schema-name))
+                                      (text-bytes (get identities schema-name))
+                                      (encode-descriptor descriptor)))
+                            (sort-by (comp str key) schemas))
+                    (uleb (count contracts))
+                    (mapcat (fn [{:keys [id request-type result-type]}]
+                              (concat (uleb id)
+                                      (uleb (get indices request-type))
+                                      (uleb (get indices result-type))))
+                            contracts)))))))
 
 (defn reference-type? [type]
   (not (contains? #{:i64 :f32 :f64} type)))
@@ -206,6 +252,7 @@
           (infer-type body env' signatures))
         (= op 'if) (infer-type (second args) env signatures)
         (= op 'do) (infer-type (last args) env signatures)
+        (= op 'typed-cap-call) (nth args 2)
         (contains? '#{+ - * quot bit-xor bit-and cap-call pair pair-first pair-second
                       i32-wrap u32-wrap i32-wrapping-add i32-wrapping-mul i32-xor
                       i32-shift-left i32-shift-right u32-shift-right xorshift32

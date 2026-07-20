@@ -14,6 +14,7 @@
 (def ^:private default-fuel 512)
 (def ^:private default-pair-capacity 4096)
 (def ^:private default-kgraph-capacity 4096)
+(def ^:dynamic *runtime-schemas* nil)
 
 ;; Shared between `kotoba.compiler.core` (JVM `clojure -M:run` path) and
 ;; `kotoba.compiler.nbb.cli` (nbb-native fast path) -- both admit
@@ -336,7 +337,11 @@
        (* exponent 2.3190468138462996e-17))))
 
 (defn- validate-runtime-value! [runtime-value type position]
-  (case type
+  (if (and (vector? type) (= :ref (first type)) (= 2 (count type)))
+    (if-let [descriptor (get *runtime-schemas* (second type))]
+      (validate-runtime-value! runtime-value descriptor position)
+      (trap! :unknown-schema-reference {:schema (second type) :position position}))
+    (case type
     :i64
     (when-not #?(:clj (and (integer? runtime-value)
                             (<= Long/MIN_VALUE runtime-value Long/MAX_VALUE))
@@ -420,7 +425,7 @@
       (value/bounded-typed-value! type runtime-value)
       (catch #?(:clj Exception :cljs :default) error
         (trap! :invalid-parametric-value
-               {:type type :position position :message (ex-message error)}))))
+               {:type type :position position :message (ex-message error)})))))
   runtime-value)
 
 ;; #?(:cljs ...): every i64 arithmetic op coerces both operands via
@@ -660,6 +665,17 @@
             (trap! :capability-denied {:capability cap-id}))
           (let [result (cap-call cap-id (eval-expr value env functions fuel heap call-stack cap-call))]
             #?(:clj (long result) :cljs (i64/->bigint result))))
+
+        (= op 'typed-cap-call)
+        (let [[cap-id request-type result-type request-form] args]
+          (when-not cap-call
+            (trap! :capability-denied {:capability cap-id :typed true}))
+          (let [request (eval-expr request-form env functions fuel heap call-stack cap-call)]
+            (validate-runtime-value! request request-type
+                                     {:capability cap-id :boundary :request})
+            (validate-runtime-value! (cap-call cap-id request-type result-type request)
+                                     result-type
+                                     {:capability cap-id :boundary :result})))
 
         (= op 'pair)
         (let [[left right] (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
@@ -1504,7 +1520,7 @@
   wraps modulo 2^64; bounded strings preserve Unicode text; invalid values,
   division, and resource exhaustion trap."
   ([kir function-name args] (execute kir function-name args {}))
-  ([kir function-name args {:keys [fuel cap-call pair-capacity kgraph-capacity]
+  ([kir function-name args {:keys [fuel cap-call typed-cap-call pair-capacity kgraph-capacity]
                             :or {fuel default-fuel pair-capacity default-pair-capacity
                                  kgraph-capacity default-kgraph-capacity}}]
    (when (and (contains? kir :exports)
@@ -1521,13 +1537,28 @@
    (when-not (and (integer? kgraph-capacity) (<= 0 kgraph-capacity default-kgraph-capacity))
      (throw (ex-info "kgraph capacity is outside runtime limits"
                      {:phase :ir :kgraph-capacity kgraph-capacity})))
-   (let [functions (into {} (map (juxt :name identity) (:functions kir)))
+   (let [cap-dispatch (when (or cap-call typed-cap-call)
+                        (fn
+                          ([cap-id value]
+                           (if cap-call
+                             (cap-call cap-id value)
+                             (trap! :capability-denied {:capability cap-id})))
+                          ([cap-id request-type result-type request]
+                           (if typed-cap-call
+                             (typed-cap-call cap-id request-type result-type request)
+                             (trap! :capability-denied {:capability cap-id :typed true})))))
+         functions (into {} (map (juxt :name identity) (:functions kir)))
          function (get functions function-name)
          param-types (or (:param-types function)
                          (vec (repeat (count (:params function)) :i64)))]
      (when-not (and (sequential? args) (= (count args) (count param-types)))
        (throw (ex-info "arguments do not match function arity" {:phase :ir :args args})))
-     (doseq [[arg type] (map vector args param-types)]
+     (doseq [[arg declared-type] (map vector args param-types)]
+       (let [type (if (and (vector? declared-type) (= :ref (first declared-type)))
+                    (or (get (:schemas kir) (second declared-type))
+                        (throw (ex-info "argument references an unknown schema"
+                                        {:phase :ir :schema (second declared-type)})))
+                    declared-type)]
        (case type
          :i64 (when-not #?(:clj (and (integer? arg) (<= Long/MIN_VALUE arg Long/MAX_VALUE))
                           :cljs (and (or (i64/bigint-value? arg) (integer? arg))
@@ -1544,8 +1575,9 @@
          :vector-f64 (value/bounded-vector-f64! arg)
          :string-index (value/bounded-string-index! arg)
          :disjoint-set-i64 (value/bounded-disjoint-set-i64! arg)
-         (value/bounded-typed-value! type arg)))
-     (let [invoke #(invoke-function function
+         (value/bounded-typed-value! type arg))))
+     (let [invoke #(binding [*runtime-schemas* (:schemas kir)]
+                     (invoke-function function
                                     (mapv (fn [arg type]
                                             (if (= type :i64)
                                               (#?(:clj long :cljs i64/->bigint) arg)
@@ -1554,7 +1586,7 @@
                                     functions
                                     (volatile! fuel) {:cells (volatile! []) :capacity pair-capacity
                                                       :datoms (volatile! []) :kgraph-capacity kgraph-capacity}
-                                    [] cap-call)]
+                                    [] cap-dispatch))]
        #?(:clj
           ;; A host JVM with a small native stack can exhaust that stack just
           ;; before the fixed Kotoba call budget does.  Host resource errors
@@ -1580,6 +1612,8 @@
         base {:format (if typed-values? :kotoba.kir/v4 :kotoba.kir/v3)
               :entry (:entry hir)
               :exports (:exports hir)
+              :schemas (:schemas hir)
+              :schema-identities (:schema-identities hir)
               :signature (when (:entry hir) {:params [] :result (:result hir)})
               :effects (:effects hir)
               :functions (mapv #(select-keys % (cond-> [:name :params :result :effects :body]

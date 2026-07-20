@@ -44,6 +44,19 @@
                :backends #{:compiler :kotoba-wasm :kotoba-cljs}}
   :cond {:desugars-to "left-to-right nested if; final :else is syntax" :level "L2"
          :backends #{:compiler :kotoba-wasm :kotoba-cljs}}
+  :case {:desugars-to "single-evaluation bounded literal dispatch via nested if" :level "L2"
+         :backends #{:compiler}}
+  :if-let {:desugars-to "single-evaluation let/if" :level "L2"
+           :backends #{:compiler}}
+  :when-let {:desugars-to "single-evaluation let/if/do" :level "L2"
+             :backends #{:compiler}}
+  :thread-first {:desugars-to "pure call insertion" :level "L2" :forms [->]
+                 :backends #{:compiler}}
+  :thread-last {:desugars-to "pure call insertion" :level "L2" :forms [->>]
+                :backends #{:compiler}}
+  :variadic-comparison {:desugars-to "short-circuit adjacent binary comparisons" :level "L2"
+                        :forms [= not= < > <= >=]
+                        :backends #{:compiler}}
   :not= {:desugars-to "binary (not (= …))" :level "L2"
          :backends #{:compiler :kotoba-wasm :kotoba-cljs}}
   :do {:desugars-to "sequential drop + last value (wasm) or nested let (compiler)"
@@ -60,9 +73,19 @@
   :conj {:desugars-to "pair prepend after duplicate removal" :level "L2" :backends #{:compiler :kotoba-wasm :kotoba-cljs}}
   :disj {:desugars-to "bounded set removal" :level "L2" :backends #{:compiler :kotoba-wasm :kotoba-cljs}}
   :nested-destructuring
-  {:desugars-to "sequential temp-bound pair/map lookups" :level "L2" :backends #{:compiler :kotoba-wasm :kotoba-cljs}
-   :forms ["nested vector/map" "vector &" "map :keys" "map :or" "map :as" "explicit keyword patterns"]
-   :note "let and function parameter patterns portable; :strs/:syms outside keyword-only identity model"}
+  {:status :implemented-partial
+   :desugars-to "single-evaluation temp-bound vector/map projections" :level "L2"
+   :backends #{:compiler}
+   :implemented ["flat vector" "vector &" "map :keys" "map :or" "map :as"]
+   :missing ["nested vector/map over structured descriptors" "explicit keyword patterns"]
+   :note "nested patterns require descriptor-preserving typed lowering; :strs/:syms remain outside the keyword-only identity model"}
+  :typed-capability-call
+  {:status :implemented-partial
+   :desugars-to "registered capability id plus exact bounded request/result validation"
+   :level "L3" :backends #{:compiler}
+   :implemented ["static request/result descriptor checking" "closed schema references" "reference and browser provider pre/post boundary validation" "ABI v9 Wasm contract metadata and import"]
+   :missing ["qualified native backends"]
+   :note "legacy cap-call remains ABI-compatible and cannot satisfy typed-cap-call"}
   :map {:desugars-to "recursive helper or primary bounded unroll" :level "L2" :backends #{:compiler :kotoba-wasm :kotoba-cljs}
         :note "named, inline, or stored closure callback portable; one to five collections for named/inline and one to four for stored closure; shortest termination"}
   :filter {:desugars-to "recursive helper or primary bounded unroll" :level "L2" :backends #{:compiler :kotoba-wasm :kotoba-cljs}

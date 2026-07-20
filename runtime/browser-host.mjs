@@ -1,7 +1,7 @@
 const MAX_MODULE_BYTES = 1024 * 1024;
 const PAIR_CAPACITY = 4096;
 const TYPED_SECTION = "kotoba.typed";
-const TYPED_ABI_VERSION = 9;
+const TYPED_ABI_VERSION = 10;
 const COMPATIBILITY_SECTION = "kotoba.compatibility";
 const COMPATIBILITY_VERSION = 1;
 const MAX_TYPED_DESCRIPTORS = 64;
@@ -58,6 +58,7 @@ const ALLOWED_IMPORTS = new Set([
   "kotoba:typed/string-index-assoc/function",
   "kotoba:typed/disjoint-set-i64-new/function",
   "kotoba:typed/disjoint-set-i64-union/function",
+  "kotoba:typed/cap-call/function",
   "kotoba:typed/xml-path-count/function",
   "kotoba:typed/xml-path-attr/function",
   "kotoba:typed/decimal-f64-parse/function",
@@ -80,7 +81,7 @@ function exactOptions(options) {
   if (options === undefined) return {};
   if (options === null || typeof options !== "object" || Array.isArray(options))
     reject("invalid-options", "browser host options must be an object");
-  const allowed = new Set(["allowCapabilities", "capCall", "expectedSha256"]);
+  const allowed = new Set(["allowCapabilities", "capCall", "typedCapCall", "expectedSha256"]);
   for (const key of Object.keys(options))
     if (!allowed.has(key)) reject("invalid-options", `unknown browser host option: ${key}`);
   return options;
@@ -162,8 +163,9 @@ function parseTypedMetadata(module) {
     if (tag === 12) return "f64";
     if (tag === 13) return "f32";
     if (tag === 14) return Object.freeze(["vector-f64"]);
-    if (tag === 15) return Object.freeze(["string-index"]);
-    if (tag === 16) return Object.freeze(["disjoint-set-i64"]);
+    if (tag === 15) return Object.freeze(["ref", text()]);
+    if (tag === 16 && version === 10) return Object.freeze(["string-index"]);
+    if (tag === 17 && version === 10) return Object.freeze(["disjoint-set-i64"]);
     if (tag === 4) return Object.freeze(["option", descriptor(depth + 1)]);
     if (tag === 5) return Object.freeze(["result", descriptor(depth + 1), descriptor(depth + 1)]);
     if (tag === 7) {
@@ -191,7 +193,7 @@ function parseTypedMetadata(module) {
     reject("invalid-typed-metadata", "unknown typed ABI descriptor tag");
   };
   const version = byte();
-  if (version !== 5 && version !== 6 && version !== 7 && version !== 8 && version !== TYPED_ABI_VERSION)
+  if (version !== 5 && version !== 6 && version !== 7 && version !== 8 && version !== 9 && version !== TYPED_ABI_VERSION)
     reject("unsupported-typed-abi", "unsupported Wasm typed ABI version");
   const count = uleb();
   if (count > MAX_TYPED_DESCRIPTORS)
@@ -210,11 +212,37 @@ function parseTypedMetadata(module) {
     else if (tag === 2 || tag === 3) literals.push(Object.freeze(["bool", tag === 3]));
     else reject("invalid-typed-metadata", "unknown typed ABI literal tag");
   }
+  const schemas = new Map();
+  const contracts = new Map();
+  if (version >= 9) {
+    const schemaCount = uleb();
+    if (schemaCount > 32) reject("invalid-typed-metadata", "too many application schemas");
+    for (let index = 0; index < schemaCount; index += 1) {
+      const name = text();
+      const digest = text();
+      if (!/^:[^/\s]+\/[^\s]+$/u.test(name) || !/^[0-9a-f]{64}$/u.test(digest) || schemas.has(name))
+        reject("invalid-typed-metadata", "invalid or duplicate application schema identity");
+      nodes = 0;
+      schemas.set(name, Object.freeze({ digest, descriptor: descriptor(1) }));
+    }
+    const contractCount = uleb();
+    if (contractCount > 256) reject("invalid-typed-metadata", "too many typed capability contracts");
+    for (let index = 0; index < contractCount; index += 1) {
+      const id = uleb();
+      const request = uleb();
+      const result = uleb();
+      if (id > 255 || request >= descriptors.length || result >= descriptors.length || contracts.has(id))
+        reject("invalid-typed-metadata", "invalid or duplicate typed capability contract");
+      contracts.set(id, Object.freeze({ request, result }));
+    }
+  }
   if (offset !== bytes.length) reject("invalid-typed-metadata", "trailing typed ABI metadata rejected");
   return Object.freeze({
     version,
     descriptors: Object.freeze(descriptors),
-    literals: Object.freeze(literals)
+    literals: Object.freeze(literals),
+    schemas,
+    contracts
   });
 }
 
@@ -299,8 +327,13 @@ function createHeap() {
   };
 }
 
-function createTypedRuntime(abi) {
+function createTypedRuntime(abi, typedCapCall, allow) {
   if (abi === null) return null;
+  // Copy mutable Map containers before exposing parsed metadata to callers.
+  // Runtime authority must remain sealed even if a consumer mutates the
+  // diagnostic `typedAbi.schemas` or `typedAbi.contracts` maps.
+  const schemaTable = new Map(abi.schemas ?? []);
+  const contractTable = new Map(abi.contracts ?? []);
   const builders = new WeakSet();
   const trustedDescriptors = new WeakSet();
   const trustedValues = new WeakSet();
@@ -310,6 +343,14 @@ function createTypedRuntime(abi) {
     for (const item of descriptor) trustDescriptor(item);
   };
   abi.descriptors.forEach(trustDescriptor);
+  for (const schema of schemaTable.values()) trustDescriptor(schema.descriptor);
+  const resolveDescriptor = descriptor => {
+    if (!Array.isArray(descriptor) || descriptor[0] !== "ref") return descriptor;
+    const schema = schemaTable.get(descriptor[1]);
+    if (schema === undefined)
+      reject("invalid-typed-descriptor", "schema reference is outside the sealed table");
+    return schema.descriptor;
+  };
   const descriptorAt = id => {
     if (!Number.isInteger(id) || id < 0 || id >= abi.descriptors.length)
       reject("invalid-typed-descriptor", "typed descriptor index is out of range");
@@ -515,6 +556,7 @@ function createTypedRuntime(abi) {
     left === right || (Array.isArray(left) && trustedDescriptors.has(left) &&
                        sameDescriptor(left, right));
   const assertValue = (descriptor, value, state = { depth: 0, nodes: 0 }) => {
+    descriptor = resolveDescriptor(descriptor);
     state.nodes += 1;
     state.depth += 1;
     if (state.depth > 8 || state.nodes > 64)
@@ -644,6 +686,20 @@ function createTypedRuntime(abi) {
     catch (error) { trustedValues.delete(value); throw error; }
   };
   const imports = Object.freeze({
+    "cap-call"(id, request) {
+      if (!Number.isInteger(id) || id < 0 || id > 255 || !allow.has(id))
+        reject("capability-denied", "runtime capability policy denied the typed call");
+      const contract = contractTable.get(id);
+      if (contract === undefined)
+        reject("capability-contract-missing", "typed capability has no sealed contract");
+      if (typeof typedCapCall !== "function")
+        reject("capability-unimplemented", "no typed host implementation exists for the capability");
+      const checkedRequest = assertValue(descriptorAt(contract.request), request);
+      const result = typedCapCall(id, checkedRequest, Object.freeze({
+        request: descriptorAt(contract.request), result: descriptorAt(contract.result)
+      }));
+      return assertValue(descriptorAt(contract.result), result);
+    },
     literal: literalAt,
     new(descriptorId, tag) {
       descriptorAt(descriptorId);
@@ -1206,6 +1262,8 @@ export async function instantiateKotoba(source, rawOptions) {
   validateDigest(options.expectedSha256);
   if (options.capCall !== undefined && typeof options.capCall !== "function")
     reject("invalid-policy", "capCall must be a function");
+  if (options.typedCapCall !== undefined && typeof options.typedCapCall !== "function")
+    reject("invalid-policy", "typedCapCall must be a function");
   const bytes = copiedBytes(source);
   const digest = await sha256(bytes);
   if (options.expectedSha256 !== undefined && options.expectedSha256 !== digest)
@@ -1216,7 +1274,7 @@ export async function instantiateKotoba(source, rawOptions) {
   const admission = validateModule(module);
   const typedAbi = admission.typedAbi;
   const compatibility = admission.compatibility;
-  const typed = createTypedRuntime(typedAbi);
+  const typed = createTypedRuntime(typedAbi, options.typedCapCall, allow);
   const heap = createHeap();
   const cap = Object.freeze({
     call(id, value) {

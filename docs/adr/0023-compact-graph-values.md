@@ -11,7 +11,8 @@ global ADT or map limit would enlarge every program's attack surface.
 
 ## Decision
 
-ABI version 9 adds two purpose-specific immutable value types:
+ABI version 10 adds two purpose-specific immutable value types, extending the
+schema and typed-capability metadata introduced by ABI version 9:
 
 - `:string-index` is a canonical sorted string-to-i64 index with at most 128
   unique entries and at most 65,536 aggregate UTF-8 key bytes.
@@ -26,8 +27,9 @@ pure and grant no authority. Out-of-range indexes, malformed parent forests,
 cycles in supplied parent data, duplicate/non-canonical keys, oversized values,
 and aggregate UTF-8 overflow fail closed.
 
-The typed Wasm host admits ABI versions 5 through 9 but only ABI 9 defines tags
-15 and 16 and their imports. Runtime-created compound values are registered as
+The typed Wasm host admits ABI versions 5 through 10. ABI 9 retains tag 15 for
+schema references; only ABI 10 defines compact-value tags 16 and 17 and their
+imports. Runtime-created compound values are registered as
 trusted; copied arrays with otherwise matching descriptors are rejected at the
 Wasm boundary. Restricted JavaScript independently implements the same
 observable operations and limits through the pinned kotoba-script dependency.

@@ -64,6 +64,7 @@
     (is (= 0 (ir/execute kir 'cycle [])))
     (is (some #{:string-index} (typed/descriptor-table kir)))
     (is (some #{:disjoint-set-i64} (typed/descriptor-table kir)))
+    (is (= typed/compact-graph-abi-version (first (typed/metadata-bytes kir))))
     (is (zero? (:exit js-probe)) (:err js-probe))
     (is (zero? (:exit probe)) (:err probe))))
 
