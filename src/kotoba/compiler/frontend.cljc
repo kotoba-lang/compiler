@@ -138,7 +138,7 @@
     document-vector-at 2 document-vector-assoc 3 document-vector-conj 2
     document-vector-drop 2
     document-contains 2 document-get 2 document-assoc 3 document-dissoc 2
-    document-merge 2 document-string-value 1 document-bool-value 1
+    document-merge 2 document-string-value 1 document-keyword-value 1 document-bool-value 1
     document-i64-value 1 document-f64-value 1})
 (def document-variadic-operations '#{document-vector document-map})
 (def sequencing-operations '#{do})
@@ -1966,6 +1966,8 @@
             (require-expression-type! type :document arg)) :document)
       (= op 'document-string-value)
       (do (require-expression-type! (first types) :document (first args)) [:option :string])
+      (= op 'document-keyword-value)
+      (do (require-expression-type! (first types) :document (first args)) [:option :keyword])
       (= op 'document-bool-value)
       (do (require-expression-type! (first types) :document (first args)) [:option :bool])
       (= op 'document-i64-value)

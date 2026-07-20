@@ -117,7 +117,7 @@
                       document-count document-vector-at document-vector-assoc
                       document-vector-conj document-vector-drop
                       document-contains document-get document-assoc
-                      document-dissoc document-merge document-string-value
+                      document-dissoc document-merge document-string-value document-keyword-value
                       document-bool-value document-i64-value document-f64-value}
                     (first value)))
     (reduce (fn [result item] (walk item result)) (conj found :document) value)
@@ -318,6 +318,7 @@
                       document-assoc document-dissoc document-merge} op) :document
         (contains? '#{document-get document-vector-at} op) [:option :document]
         (= op 'document-string-value) [:option :string]
+        (= op 'document-keyword-value) [:option :keyword]
         (= op 'document-bool-value) [:option :bool]
         (= op 'document-i64-value) [:option :i64]
         (= op 'document-f64-value) [:option :f64]

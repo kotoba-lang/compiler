@@ -59,7 +59,7 @@
      document-null document-bool document-i64 document-f64 document-string document-keyword
      document-vector document-map document-count document-contains document-get
      document-vector-at document-vector-assoc document-vector-conj document-vector-drop
-     document-assoc document-dissoc document-merge document-string-value
+     document-assoc document-dissoc document-merge document-string-value document-keyword-value
      document-bool-value document-i64-value document-f64-value
      i32-wrap u32-wrap i32-wrapping-add i32-wrapping-mul i32-xor
      i32-shift-left i32-shift-right u32-shift-right xorshift32
@@ -1592,11 +1592,11 @@
             (trap! :document-map-too-large {:limit value/document-container-item-limit}))
           (value/bounded-document! ["map" (mapv vec entries)]))
 
-        (contains? '#{document-string-value document-bool-value
+        (contains? '#{document-string-value document-keyword-value document-bool-value
                       document-i64-value document-f64-value} op)
         (let [[tag payload] (value/bounded-document!
                              (eval-expr (first args) env functions fuel heap call-stack cap-call))
-              type (case op document-string-value :string document-bool-value :bool
+              type (case op document-string-value :string document-keyword-value :keyword document-bool-value :bool
                          document-i64-value :i64 document-f64-value :f64)
               option-type [:option type]]
           (if (= tag (name type)) [option-type true payload] [option-type false]))

@@ -853,7 +853,7 @@
                              [0x10 (get intrinsic-indices 'typed-document-contains)]))
                     (contains? '#{document-get document-assoc document-dissoc
                                   document-merge document-string-value document-bool-value
-                                  document-i64-value document-f64-value} op)
+                                  document-keyword-value document-i64-value document-f64-value} op)
                     (concat (i32-const (descriptor-id :document))
                             (mapcat #(emit* % env) args)
                             [0x10 (get intrinsic-indices
@@ -862,6 +862,7 @@
                                          'document-dissoc 'typed-document-dissoc
                                          'document-merge 'typed-document-merge
                                          'document-string-value 'typed-document-string-value
+                                         'document-keyword-value 'typed-document-keyword-value
                                          'document-bool-value 'typed-document-bool-value
                                          'document-i64-value 'typed-document-i64-value
                                          'document-f64-value 'typed-document-f64-value} op))])
@@ -1166,7 +1167,8 @@
                                           document-vector-conj document-vector-drop
                                           document-contains document-get document-assoc
                                           document-dissoc document-merge document-string-value
-                                          document-bool-value document-i64-value document-f64-value})
+                                          document-keyword-value document-bool-value
+                                          document-i64-value document-f64-value})
         has-keyword-from-string? (uses-operation? functions '#{keyword-from-string})
         typed-imports (when (and typed? (typed/requires-host-runtime? kir))
                         (vec (concat
@@ -1237,6 +1239,7 @@
                             ['typed-document-dissoc "kotoba:typed" "document-dissoc" [0x60 3 0x7f 0x6f 0x6f 1 0x6f]]
                             ['typed-document-merge "kotoba:typed" "document-merge" [0x60 3 0x7f 0x6f 0x6f 1 0x6f]]
                             ['typed-document-string-value "kotoba:typed" "document-string-value" [0x60 2 0x7f 0x6f 1 0x6f]]
+                            ['typed-document-keyword-value "kotoba:typed" "document-keyword-value" [0x60 2 0x7f 0x6f 1 0x6f]]
                             ['typed-document-bool-value "kotoba:typed" "document-bool-value" [0x60 2 0x7f 0x6f 1 0x6f]]
                             ['typed-document-i64-value "kotoba:typed" "document-i64-value" [0x60 2 0x7f 0x6f 1 0x6f]]
                             ['typed-document-f64-value "kotoba:typed" "document-f64-value" [0x60 2 0x7f 0x6f 1 0x6f]]])
