@@ -1,0 +1,36 @@
+{:kotoba.application-language/format :v1
+ :authority "The language specification and reference conformance vectors are normative; compiler availability is not language admission."
+ :execution-order [:specified :reference-implemented :aot-qualified :jit-qualified]
+ :surface
+ {:grammar :kotoba.lang.guest-grammar/v1
+  :schemas {:identity :qualified-keyword+closed-graph-sha256
+            :limits {:schemas 32 :descriptor-depth 8 :descriptor-nodes 64}}
+  :imports {:form :typed-capability
+            :ambient-host-calls false
+            :request-validation :before-provider
+            :result-validation :after-provider}
+  :exports {:functions :explicit-or-public :mutable-host-object-identity false}
+  :effects {:admission :deny-by-default :declaration :closed-set}}
+ :host
+ {:registry :kotoba.provider-registry/v1
+  :provider-keys [:request-type :result-type :invoke]
+  :contract-match :exact
+  :kits {:state {:version 1 :status :reference-implemented}
+         :ui {:version 1 :status :reference-implemented}
+         :http {:status :specified-pending}
+         :llm {:status :specified-pending}
+         :storage {:status :specified-pending}
+         :clock {:status :specified-pending}
+         :log {:status :specified-pending}}
+  :lifecycle [:validate-request :invoke-provider :validate-result]
+  :resource-model [:fuel :depth :nodes :bytes :provider-timeout]}
+ :reference-runtime
+ {:implementation :kotoba.compiler.reference-runtime/v1
+  :platforms [:clj :cljs]
+  :input :checked-kir
+  :role :normative-executable-semantics}
+ :backend-qualification
+ {:wasm-aot :conformance-required
+  :native-aot :conformance-required
+  :jit :conformance-required
+  :rule "An unavailable backend is an implementation gap, not a reason to remove a specified safe language feature."}}

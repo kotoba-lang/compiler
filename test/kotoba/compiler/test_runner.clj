@@ -32,6 +32,9 @@
             [kotoba.compiler.source-path-test]
             [kotoba.compiler.typed-value-conformance-test]
             [kotoba.compiler.typed-capability-test]
+            [kotoba.compiler.reference-runtime-test]
+            [kotoba.compiler.state-provider-test]
+            [kotoba.compiler.ui-provider-test]
             [kotoba.compiler.wasm-typed-test]
             [kotoba.compiler.value-test]
             [kotoba.compiler.verifier-profile-test]))
@@ -63,6 +66,9 @@
                                           'kotoba.compiler.source-path-test
                                           'kotoba.compiler.typed-value-conformance-test
                                           'kotoba.compiler.typed-capability-test
+                                          'kotoba.compiler.reference-runtime-test
+                                          'kotoba.compiler.state-provider-test
+                                          'kotoba.compiler.ui-provider-test
                                           'kotoba.compiler.wasm-typed-test
                                           'kotoba.compiler.native-executor-test
                                           'kotoba.compiler.receipt-test

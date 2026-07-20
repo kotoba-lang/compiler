@@ -241,8 +241,7 @@ function parseTypedMetadata(module) {
     version,
     descriptors: Object.freeze(descriptors),
     literals: Object.freeze(literals),
-    schemas,
-    contracts
+    ...(version === 9 ? { schemas, contracts } : {})
   });
 }
 
