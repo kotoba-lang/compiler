@@ -640,27 +640,31 @@
     (is (zero? (:exit result)) (:err result))))
 
 (deftest bounded-xml-queries-run-through-compiler-and-kotoba-script
-  (let [source "(ns pilot.xml (:export [count-links link-name]))
+  (let [source "(ns pilot.xml (:export [count-links link-text link-name]))
                 (defn count-links [xml :string] :i64
                   (xml-path-count xml \"robot/link\"))
+                (defn link-text [xml :string index :i64] [:option :string]
+                  (xml-path-text xml \"robot/link\" index))
                 (defn link-name [xml :string index :i64] [:option :string]
                   (xml-path-attr xml \"robot/link\" index \"name\"))"
         compiled (compiler/compile-source source :js-kotoba-v1)
         encoded (.encodeToString (java.util.Base64/getEncoder)
                                  (.getBytes ^String (:source compiled) "UTF-8"))
-        xml "<?xml version=\"1.0\" encoding=\"utf-8\"?><robot><link name=\"base\"/><link name=\"tip\"/></robot>"
+        xml "<?xml version=\"1.0\" encoding=\"utf-8\"?><robot><link name=\"base\"> Hello <span>bounded</span> XML </link><link name=\"tip\"/></robot>"
         probe (str "import('data:text/javascript;base64," encoded
                    "').then(m=>{const x=m.instantiateKotoba({}),xml=" (pr-str xml) ";"
-                   "const tip=x['link-name'](xml,1n),missing=x['link-name'](xml,2n);"
-                   "if(x['count-links'](xml)!==2n||!tip[1]||tip[2]!=='tip'||missing[1])process.exit(2)})")
+                   "const tip=x['link-name'](xml,1n),missing=x['link-name'](xml,2n),text=x['link-text'](xml,0n);"
+                   "if(x['count-links'](xml)!==2n||!tip[1]||tip[2]!=='tip'||missing[1]||!text[1]||text[2]!=='Hello bounded XML')process.exit(2)})")
         result (shell/sh "node" "--input-type=module" "-e" probe)]
     (is (= 2 (ir/execute (:kir compiled) 'count-links [xml])))
     (is (= [[:option :string] true "tip"]
            (ir/execute (:kir compiled) 'link-name [xml 1])))
     (is (= [[:option :string] false]
            (ir/execute (:kir compiled) 'link-name [xml 2])))
+    (is (= [[:option :string] true "Hello bounded XML"]
+           (ir/execute (:kir compiled) 'link-text [xml 0])))
     (is (= [:option :string]
-           (get-in compiled [:hir :functions 1 :result])))
+           (get-in compiled [:hir :functions 2 :result])))
     (is (str/includes? (:source compiled)
                        "xmlSubsetLimits:Object.freeze({nodes:2048,depth:32,attributesPerNode:32,pathSegments:32})"))
     (is (zero? (:exit result)) (:err result))))

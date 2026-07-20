@@ -307,7 +307,7 @@
         (contains? '#{document-contains document-equal?} op) :bool
         (contains? '#{string-concat string-replace-all keyword-name} op) :string
         (contains? '#{keyword-from-string document-kind} op) :keyword
-        (= op 'xml-path-attr) [:option :string]
+        (contains? '#{xml-path-text xml-path-attr} op) [:option :string]
         (= op 'decimal-f64-parse) [:option :f64]
         (= op 'decimal-f64x3-parse) [:option [:vector [:f64 :f64 :f64]]]
         (= op 'vector-new) :vector-i64

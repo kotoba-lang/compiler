@@ -22,6 +22,10 @@
 (defn- char-at [text index]
   (when (< index (count text)) (subs text index (inc index))))
 
+(defn- normalize-text [text]
+  (value/bounded-string! (str/trim (str/replace text #"\s+" " "))
+                         value/string-value-byte-limit))
+
 (defn parse-elements
   "Parse the sealed, text-free XML subset into exact-path element records."
   [input]
@@ -65,7 +69,8 @@
               (let [tag (name!)
                     path (if (seq parent) (str parent "/" tag) tag)
                     attributes (volatile! {})
-                    empty? (volatile! false)]
+                    empty? (volatile! false)
+                    output-index (count @output)]
                 (loop []
                   (skip!)
                   (cond
@@ -99,23 +104,38 @@
                             (vswap! cursor inc)
                             (vswap! attributes assoc attribute attribute-value))))
                       (recur))))
-                (vswap! output conj {:path path :attributes @attributes})
-                (when-not @empty?
-                  (loop []
-                    (comments!)
-                    (skip!)
-                    (cond
-                      (starts? "</")
-                      (do (vswap! cursor + 2)
-                          (let [closing (name!)]
-                            (skip!)
-                            (when (or (not= closing tag)
-                                      (not= ">" (char-at text @cursor)))
-                              (trap! :xml-close-mismatch))
-                            (vswap! cursor inc)))
-                      (= "<" (char-at text @cursor))
-                      (do (element! (inc depth) path) (recur))
-                      :else (trap! :xml-text-rejected))))))]
+                (vswap! output conj nil)
+                (let [content
+                      (if @empty?
+                        ""
+                        (loop [parts []]
+                          (cond
+                            (starts? "</")
+                            (do (vswap! cursor + 2)
+                                (let [closing (name!)]
+                                  (skip!)
+                                  (when (or (not= closing tag)
+                                            (not= ">" (char-at text @cursor)))
+                                    (trap! :xml-close-mismatch))
+                                  (vswap! cursor inc)
+                                  (normalize-text (str/join " " parts))))
+
+                            (starts? "<!--")
+                            (do (comment!) (recur (conj parts " ")))
+
+                            (= "<" (char-at text @cursor))
+                            (recur (conj parts (element! (inc depth) path)))
+
+                            :else
+                            (let [begin @cursor]
+                              (while (and (< @cursor length)
+                                          (not= "<" (char-at text @cursor)))
+                                (vswap! cursor inc))
+                              (when (= begin @cursor) (trap! :invalid-xml-text))
+                              (recur (conj parts (subs text begin @cursor)))))))]
+                  (vswap! output assoc output-index
+                          {:path path :attributes @attributes :text content})
+                  content)))]
       (comments!)
       (when (starts? "<?xml")
         (let [end (str/index-of text "?>" (+ @cursor 5))]
@@ -145,6 +165,17 @@
   (let [path (validate-path! path)
         result (count (filter #(= path (:path %)) (parse-elements input)))]
     #?(:clj (long result) :cljs (i64/->bigint result))))
+
+(defn path-text [input path index]
+  (let [path (validate-path! path)]
+    (when #?(:clj (neg? index) :cljs (< index i64/zero))
+      (trap! :xml-index-out-of-range))
+    (let [matches (filterv #(= path (:path %)) (parse-elements input))
+          host-index #?(:clj index :cljs (js/Number index))
+          option-type [:option :string]]
+      (if (>= host-index (count matches))
+        [option-type false]
+        [option-type true (:text (nth matches host-index))]))))
 
 (defn path-attr [input path index attribute]
   (let [path (validate-path! path)]
