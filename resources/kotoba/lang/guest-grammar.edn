@@ -42,8 +42,10 @@
           :backends #{:compiler :kotoba-wasm :kotoba-cljs}}
   :defdesugar {:desugars-to "registered pure bounded template expansion" :level "L2"
                :backends #{:compiler :kotoba-wasm :kotoba-cljs}}
-  :cond {:desugars-to "nested if" :level "L2" :backends #{:kotoba-wasm}}
-  :not= {:desugars-to "(not (= …))" :level "L2" :backends #{:kotoba-wasm}}
+  :cond {:desugars-to "left-to-right nested if; final :else is syntax" :level "L2"
+         :backends #{:compiler :kotoba-wasm :kotoba-cljs}}
+  :not= {:desugars-to "binary (not (= …))" :level "L2"
+         :backends #{:compiler :kotoba-wasm :kotoba-cljs}}
   :do {:desugars-to "sequential drop + last value (wasm) or nested let (compiler)"
        :level "L2" :backends #{:kotoba-wasm :compiler}}
   :get {:desugars-to "pair-list map scan helper" :level "L2" :backends #{:compiler :kotoba-wasm :kotoba-cljs}}

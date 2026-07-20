@@ -539,6 +539,28 @@
             (list 'let [tmp (desugar-expr (first args))]
                   (list 'if tmp tmp (desugar-or (rest args)))))))
 
+(defn- desugar-cond
+  "Lowers `(cond test value ... :else fallback)` to the already admitted
+  nested `if` core. Tests retain left-to-right, at-most-once evaluation.
+  `:else` is syntax here, not a runtime keyword value, and must be last so
+  unreachable clauses cannot be hidden accidentally. An empty cond has the
+  profile's ordinary false/nil sentinel value, 0."
+  [args form]
+  (when (odd? (count args))
+    (reject! "cond requires test/result pairs" form))
+  (letfn [(lower [clauses]
+            (if (empty? clauses)
+              0
+              (let [[test result & remaining] clauses]
+                (if (= :else test)
+                  (do (when (seq remaining)
+                        (reject! "cond :else clause must be last" form))
+                      (desugar-expr result))
+                  (list 'if (desugar-expr test)
+                        (desugar-expr result)
+                        (lower remaining))))))]
+    (lower args)))
+
 (defn- desugar-cond-thread [args form]
   (when (or (empty? args) (odd? (count (rest args))))
     (reject! "cond-> requires an initial value followed by test/form pairs" form))
@@ -848,6 +870,11 @@
                    (list '= (desugar-expr (first args)) 0))
         not (do (when-not (= 1 (count args)) (reject! "not requires one operand" form))
                 (list '= (desugar-expr (first args)) 0))
+        not= (do (when-not (= 2 (count args))
+                   (reject! "not= requires two operands in this bounded profile" form))
+                 (list '= (list '= (desugar-expr (first args))
+                                      (desugar-expr (second args)))
+                       0))
         zero? (do (when-not (= 1 (count args)) (reject! "zero? requires one operand" form))
                   (list '= (desugar-expr (first args)) 0))
         pos? (do (when-not (= 1 (count args)) (reject! "pos? requires one operand" form))
@@ -856,6 +883,7 @@
                  (list '< (desugar-expr (first args)) 0))
         and (desugar-and args)
         or (desugar-or args)
+        cond (desugar-cond args form)
         cond-> (desugar-cond-thread args form)
         when (do (when (empty? args)
                    (reject! "when requires a test expression" form))
