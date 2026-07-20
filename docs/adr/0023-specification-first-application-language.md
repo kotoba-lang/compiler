@@ -33,6 +33,12 @@ may report a specified feature as not yet qualified, but must not redefine or
 silently weaken its semantics. Shared conformance vectors compare each backend
 with the reference runtime before qualification.
 
+For the portable application ABI, specification-first includes the WIT world
+and Kotoba-to-WIT type mapping. The compiler, rather than an engine-specific
+runner, produces the Component Model artifact. WASI interfaces may enter only
+through capability-kit-declared provider components; they are never ambient
+application authority. See ADR 0036.
+
 ## Consequences
 
 Application migration can proceed on the CLJS reference runtime while code

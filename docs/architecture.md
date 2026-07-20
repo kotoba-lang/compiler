@@ -261,6 +261,13 @@ must agree with the product host vectors. Linux x86-64, Linux Arm64, and macOS
 Arm64 are distinct CI execution profiles; the Linux Arm64 profile additionally
 executes the native AArch64 loader and sanitizer/fuzz boundaries.
 
+This existing WASI target is core Wasm, not a Component Model component. The
+next portable application target, `wasm-component-kotoba-v1`, is emitted by the
+compiler with generated WIT types, a closed application world, and canonical
+ABI adapters. Provider components alone may import capability-kit-declared
+WASI interfaces. Wasmtime validates the standard component artifact and does
+not define Kotoba semantics through a private runner. ADR 0036 is normative.
+
 `runtime/wasi-service.mjs` is the first service lifecycle adapter. Startup
 admits the sealed module digest and target; every request instantiates a fresh
 module so the private fuel global and pair arena cannot leak across tenants.

@@ -408,7 +408,8 @@ shape. This needs no physical hardware or paid signing (Simulator binaries
 run unsigned), but does not by itself count toward this repo's coverage
 percentage -- see ADR-0001's Phase 3 for why.
 
-`wasm32-wasi` is the first server/component profile. Its Wasm custom section
+`wasm32-wasi` is the first sealed server core-Wasm profile. It is not yet a
+WebAssembly Component Model component. Its Wasm custom section
 seals `wasm32-wasi-kotoba-v1`; the dependency-free host rejects missing or
 substituted target identity and admits only `kotoba:cap` and `kotoba:heap`
 functions. Ambient WASI filesystem, socket, clock, random, environment, and
@@ -417,6 +418,13 @@ CI also executes the sealed pure ABI and fuel traps on Wasmtime 42.0.1, fetched
 by an NBB installer that verifies the pinned official release SHA-256. This is
 independent engine evidence alongside Node/V8, not yet a Kubernetes release
 claim.
+
+The planned `wasm-component-kotoba-v1` target is generated directly by the
+compiler: Kotoba schemas and typed capabilities become a closed WIT world and
+canonical ABI component. WASI filesystem, HTTP, clocks, and similar interfaces
+belong only to explicitly declared provider components, never to the
+application as ambient authority. Wasmtime is a conformance engine for that
+artifact; no Wasmtime-specific Rust runner is part of the language ABI.
 The full test matrix includes a native `ubuntu-24.04-arm` runner: AArch64 KEXE
 execution under the W^X loader, sanitizer vectors, architecture-specific
 libFuzzer coverage floors, the WASI host, and Wasmtime all run without CPU

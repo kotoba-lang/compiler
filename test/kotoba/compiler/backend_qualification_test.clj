@@ -14,6 +14,16 @@
 (def claims
   (read-resource "kotoba/lang/backend-provider-qualification-v1.edn"))
 
+(deftest component-model-policy-is-compiler-owned-and-closed
+  (let [policy (:component-model
+                (read-resource "kotoba/lang/application-language.edn"))]
+    (is (= :specified (:status policy)))
+    (is (= :kotoba-lang/compiler (:artifact-owner policy)))
+    (is (= :declared-typed-capabilities-only (get-in policy [:world :imports])))
+    (is (= :reject (get-in policy [:world :undeclared-imports])))
+    (is (false? (get-in policy [:wasi :application-ambient-authority])))
+    (is (= :provider-component (get-in policy [:wasi :owner])))))
+
 (deftest every-backend-is-bound-to-the-same-manifest-gate
   (doseq [backend [:wasmtime :native :cljs]]
     (let [receipt (qualification/verify! backend)]

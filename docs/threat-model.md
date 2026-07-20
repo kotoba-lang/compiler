@@ -496,6 +496,12 @@ read-only filesystems, RuntimeDefault seccomp, no Linux capabilities or
 service-account token, resource limits, and recovery after pod deletion. A
 per-request Worker deadline terminates a sealed infinite-loop module and the
 service must remain healthy afterward.
+
+This profile remains core Wasm. Component Model support must be emitted by the
+compiler as a closed WIT world; it is not established by a Wasmtime-specific
+embedding runner. WASI interfaces are authority of explicitly declared
+provider components only. Application components receive no ambient WASI, and
+composition must reject every undeclared import (ADR 0036).
 The metrics endpoint has a fixed series set and never includes request entries,
 arguments, results, or raw errors, preventing guest-controlled cardinality or
 data exfiltration through labels. External collector identity and transport are
