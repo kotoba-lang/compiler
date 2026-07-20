@@ -35,4 +35,5 @@
  :http/post 4
  :log/read 5
  :log/append 6
- :clock/now 7}
+ :clock/now 7
+ :state/transact 8}

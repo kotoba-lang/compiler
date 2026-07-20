@@ -50,7 +50,7 @@
 ;; renamed, or removed there).
 (def ^:private capability-registry-cljs-fallback
   '{:identity/sign 1 :identity/verify 2 :hash/sha256 3 :http/post 4
-    :log/read 5 :log/append 6 :clock/now 7})
+    :log/read 5 :log/append 6 :clock/now 7 :state/transact 8})
 
 (defn- load-capability-registry []
   #?(:clj
