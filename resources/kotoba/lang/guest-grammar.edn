@@ -44,6 +44,19 @@
                :backends #{:compiler :kotoba-wasm :kotoba-cljs}}
   :cond {:desugars-to "left-to-right nested if; final :else is syntax" :level "L2"
          :backends #{:compiler :kotoba-wasm :kotoba-cljs}}
+  :case {:desugars-to "single-evaluation bounded literal dispatch via nested if" :level "L2"
+         :backends #{:compiler}}
+  :if-let {:desugars-to "single-evaluation let/if" :level "L2"
+           :backends #{:compiler}}
+  :when-let {:desugars-to "single-evaluation let/if/do" :level "L2"
+             :backends #{:compiler}}
+  :thread-first {:desugars-to "pure call insertion" :level "L2" :forms [->]
+                 :backends #{:compiler}}
+  :thread-last {:desugars-to "pure call insertion" :level "L2" :forms [->>]
+                :backends #{:compiler}}
+  :variadic-comparison {:desugars-to "short-circuit adjacent binary comparisons" :level "L2"
+                        :forms [= not= < > <= >=]
+                        :backends #{:compiler}}
   :not= {:desugars-to "binary (not (= …))" :level "L2"
          :backends #{:compiler :kotoba-wasm :kotoba-cljs}}
   :do {:desugars-to "sequential drop + last value (wasm) or nested let (compiler)"
