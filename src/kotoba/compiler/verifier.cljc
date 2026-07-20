@@ -39,7 +39,7 @@
 (def ^:private kgraph-operations '{kgraph-assert! 3 kgraph-get 2 kgraph-count 1 kgraph-entity-at 2})
 (def ^:private string-operations '{string-byte-length 1 string=? 2 string-concat 2})
 (def ^:private xml-operations '{xml-path-count 2 xml-path-attr 4})
-(def ^:private decimal-operations '{decimal-f64-parse 1})
+(def ^:private decimal-operations '{decimal-f64-parse 1 decimal-f64x3-parse 1})
 (def ^:private string-literal-byte-limit 4096)
 
 ;; Mirrors `kotoba.compiler.backend.wasm`'s `utf8` -- `.getBytes` is

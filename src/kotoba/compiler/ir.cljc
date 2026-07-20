@@ -48,7 +48,7 @@
      typed-set-new typed-set-count typed-set-contains typed-set-conj typed-set-disj typed-set-equal
      typed-map-new typed-map-count typed-map-contains typed-map-get
      typed-map-entry-at typed-map-assoc typed-map-dissoc typed-map-equal
-     xml-path-count xml-path-attr decimal-f64-parse
+     xml-path-count xml-path-attr decimal-f64-parse decimal-f64x3-parse
      record-new record-get record-assoc record-equal
      vector-count vector-get vector-at vector-drop vector-assoc vector-conj
      vector-f64-new vector-f64-count vector-f64-get vector-f64-at
@@ -682,6 +682,10 @@
 
         (= op 'decimal-f64-parse)
         (decimal/parse-f64
+         (eval-expr (first args) env functions fuel heap call-stack cap-call))
+
+        (= op 'decimal-f64x3-parse)
+        (decimal/parse-f64x3
          (eval-expr (first args) env functions fuel heap call-stack cap-call))
 
         (= op 'f64-to-bits)

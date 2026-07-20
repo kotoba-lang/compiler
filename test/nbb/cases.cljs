@@ -57,4 +57,5 @@
    {:name "xml-query" :source "test/nbb/fixtures/xml-query.kotoba" :target "wasm32-browser" :policy nil}
    ;; ADR 0019: bounded decimal parsing and its conditional typed import are
    ;; byte-identical on JVM and JVM-free compiler hosts.
-   {:name "decimal-f64" :source "test/nbb/fixtures/decimal-f64.kotoba" :target "wasm32-browser" :policy nil}])
+   {:name "decimal-f64" :source "test/nbb/fixtures/decimal-f64.kotoba" :target "wasm32-browser" :policy nil}
+   {:name "decimal-f64x3" :source "test/nbb/fixtures/decimal-f64x3.kotoba" :target "wasm32-browser" :policy nil}])

@@ -1,7 +1,7 @@
 const MAX_MODULE_BYTES = 1024 * 1024;
 const PAIR_CAPACITY = 4096;
 const TYPED_SECTION = "kotoba.typed";
-const TYPED_ABI_VERSION = 7;
+const TYPED_ABI_VERSION = 8;
 const COMPATIBILITY_SECTION = "kotoba.compatibility";
 const COMPATIBILITY_VERSION = 1;
 const MAX_TYPED_DESCRIPTORS = 64;
@@ -54,7 +54,8 @@ const ALLOWED_IMPORTS = new Set([
   "kotoba:typed/map-dissoc-ref/function",
   "kotoba:typed/xml-path-count/function",
   "kotoba:typed/xml-path-attr/function",
-  "kotoba:typed/decimal-f64-parse/function"
+  "kotoba:typed/decimal-f64-parse/function",
+  "kotoba:typed/decimal-f64x3-parse/function"
 ]);
 
 export class KotobaHostError extends Error {
@@ -182,7 +183,7 @@ function parseTypedMetadata(module) {
     reject("invalid-typed-metadata", "unknown typed ABI descriptor tag");
   };
   const version = byte();
-  if (version !== 5 && version !== 6 && version !== TYPED_ABI_VERSION)
+  if (version !== 5 && version !== 6 && version !== 7 && version !== TYPED_ABI_VERSION)
     reject("unsupported-typed-abi", "unsupported Wasm typed ABI version");
   const count = uleb();
   if (count > MAX_TYPED_DESCRIPTORS)
@@ -886,6 +887,31 @@ function createTypedRuntime(abi) {
       const parsed = valid ? Number(input) : Number.NaN;
       return admitValue(optionDescriptor, Object.freeze(Number.isFinite(parsed)
         ? [optionDescriptor, true, parsed]
+        : [optionDescriptor, false]));
+    },
+    "decimal-f64x3-parse"(input) {
+      if (typeof input !== "string")
+        reject("invalid-typed-operation", "decimal f64x3 input must be a string");
+      const optionDescriptor = abi.descriptors.find(candidate => {
+        const vector = Array.isArray(candidate) && candidate[0] === "option" ? candidate[1] : null;
+        return Array.isArray(vector) && vector[0] === "vector" &&
+          vector[1].length === 3 && vector[1].every(type => type === "f64");
+      });
+      if (optionDescriptor === undefined)
+        reject("invalid-typed-operation", "decimal f64x3 option descriptor is absent");
+      const bytes = new TextEncoder().encode(input).length;
+      const allowed = bytes <= 194 && /^[0-9eE+.\- \t\r\n]+$/u.test(input);
+      const stripped = allowed ? input.replace(/^[ \t\r\n]+|[ \t\r\n]+$/gu, "") : "";
+      const parts = stripped === "" ? [] : stripped.split(/[ \t\r\n]+/u);
+      const decimal = /^[+-]?(?:(?:[0-9]+(?:\.[0-9]*)?)|(?:\.[0-9]+))(?:[eE][+-]?[0-9]{1,3})?$/u;
+      const values = parts.map(part => part.length <= 64 && decimal.test(part) ? Number(part) : Number.NaN);
+      const present = parts.length === 3 && values.every(Number.isFinite);
+      const vectorDescriptor = optionDescriptor[1];
+      const vector = present
+        ? admitValue(vectorDescriptor, Object.freeze([vectorDescriptor, ...values]))
+        : null;
+      return admitValue(optionDescriptor, Object.freeze(present
+        ? [optionDescriptor, true, vector]
         : [optionDescriptor, false]));
     }
   });

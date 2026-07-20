@@ -128,7 +128,7 @@
 (def sequencing-operations '#{do})
 (def string-operations '{string-byte-length 1 string=? 2 string-concat 2})
 (def xml-operations '{xml-path-count 2 xml-path-attr 4})
-(def decimal-operations '{decimal-f64-parse 1})
+(def decimal-operations '{decimal-f64-parse 1 decimal-f64x3-parse 1})
 (def f64-operations
   '{f64-to-bits 1 f64-from-bits 1
     f64-add 2 f64-sub 2 f64-mul 2 f64-div 2 f64-min 2 f64-max 2
@@ -1749,6 +1749,10 @@
       (= op 'decimal-f64-parse)
       (do (require-expression-type! (first types) :string (first args))
           [:option :f64])
+
+      (= op 'decimal-f64x3-parse)
+      (do (require-expression-type! (first types) :string (first args))
+          [:option [:vector [:f64 :f64 :f64]]])
 
       (= op 'f64-to-bits)
       (do (require-expression-type! (first types) :f64 (first args)) :i64)
