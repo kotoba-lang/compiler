@@ -102,6 +102,37 @@
     (is (zero? (:exit js-result)) (:err js-result))
     (is (zero? (:exit wasm-result)) (:err wasm-result))))
 
+(deftest bounded-decimal-f64x3-is-fixed-width-atomic-and-cross-target
+  (let [source "(ns decimal.f64x3 (:export [main parse]))
+                (defn main [] :i64 0)
+                (defn parse [input :string] [:option [:vector [:f64 :f64 :f64]]]
+                  (decimal-f64x3-parse input))"
+        js-artifact (compiler/compile-source source :js-kotoba-v1)
+        wasm-artifact (compiler/compile-source source :wasm32-browser-kotoba-v1)
+        kir (:kir wasm-artifact)
+        js64 (.encodeToString (java.util.Base64/getEncoder)
+                              (.getBytes ^String (:source js-artifact) "UTF-8"))
+        wasm64 (.encodeToString (java.util.Base64/getEncoder) (:bytes wasm-artifact))
+        assertions
+        (str "const good=x.parse(' -0  1.5\\t5e-324 ');"
+             "if(!good[1]||!Object.is(good[2][1],-0)||good[2][2]!==1.5||good[2][3]!==Number.MIN_VALUE)process.exit(2);"
+             "for(const s of ['', '1 2', '1 2 3 4', '1,2,3', '1 NaN 3', '1 1e309 3', '1　2　3', ' '.repeat(195)])"
+             "if(x.parse(s)[1])process.exit(3);")
+        js-result (node-run
+                   (str "import('data:text/javascript;base64," js64
+                        "').then(m=>{const x=m.instantiateKotoba({});" assertions "})"))
+        wasm-result (node-run
+                     (str "import('./runtime/browser-host.mjs').then(async m=>{"
+                          "const h=await m.instantiateKotoba(Buffer.from('" wasm64 "','base64'));"
+                          "const x=h.instance.exports;" assertions "})"))]
+    (is (= [[:option [:vector [:f64 :f64 :f64]]] true
+            [[:vector [:f64 :f64 :f64]] -0.0 1.5 Double/MIN_VALUE]]
+           (ir/execute kir 'parse [" -0  1.5\t5e-324 "])))
+    (is (= [[:option [:vector [:f64 :f64 :f64]]] false]
+           (ir/execute kir 'parse ["1 2"])))
+    (is (zero? (:exit js-result)) (:err js-result))
+    (is (zero? (:exit wasm-result)) (:err wasm-result))))
+
 (deftest f64-native-targets-fail-closed
   (testing "f64 is not silently lowered through the i64 native ABI"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo

@@ -1,10 +1,14 @@
 (ns kotoba.compiler.decimal
-  (:require [kotoba.compiler.value :as value]))
+  (:require [clojure.string :as str]
+            [kotoba.compiler.value :as value]))
 
 (def max-f64-bytes 64)
+(def max-f64x3-bytes 194)
 (def ^:private decimal-f64-pattern
   #"^[+-]?(?:(?:[0-9]+(?:\.[0-9]*)?)|(?:\.[0-9]+))(?:[eE][+-]?[0-9]{1,3})?$")
 (def f64-option-type [:option :f64])
+(def f64x3-type [:vector [:f64 :f64 :f64]])
+(def f64x3-option-type [:option f64x3-type])
 
 (defn parse-f64
   "Parse the sealed finite decimal subset. Data-invalid input returns a typed
@@ -20,3 +24,19 @@
                :cljs (js/Number.isFinite parsed))
           [f64-option-type true parsed]
           [f64-option-type false])))))
+
+(defn parse-f64x3
+  "Parse exactly three bounded decimal f64 components separated only by ASCII
+  whitespace. Any invalid component makes the entire typed option none."
+  [input]
+  (let [bytes (value/utf8-byte-count! input)]
+    (if (or (> bytes max-f64x3-bytes)
+            (nil? (re-matches #"[0-9eE+.\- \t\r\n]+" input)))
+      [f64x3-option-type false]
+      (let [stripped (str/replace input #"^[ \t\r\n]+|[ \t\r\n]+$" "")
+            parts (if (empty? stripped) [] (str/split stripped #"[ \t\r\n]+"))
+            parsed (mapv parse-f64 parts)]
+        (if (and (= 3 (count parsed)) (every? #(true? (second %)) parsed))
+          [f64x3-option-type true
+           (into [f64x3-type] (map #(nth % 2) parsed))]
+          [f64x3-option-type false])))))
