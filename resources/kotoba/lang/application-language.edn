@@ -17,7 +17,7 @@
   :contract-match :exact
   :kits {:state {:version 1 :status :reference-implemented}
          :ui {:version 1 :status :reference-implemented}
-         :http {:status :specified-pending}
+         :http {:version 1 :status :reference-implemented}
          :llm {:status :specified-pending}
          :storage {:status :specified-pending}
          :clock {:status :specified-pending}
