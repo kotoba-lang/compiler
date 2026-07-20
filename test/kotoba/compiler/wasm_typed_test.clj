@@ -79,21 +79,25 @@
 
 (deftest bounded-xml-queries-have-reference-and-typed-wasm-runtime-parity
   (let [source
-        "(ns xml.query (:export [main count-links link-name]))
+        "(ns xml.query (:export [main count-links link-text link-name]))
          (defn main [] 0)
          (defn count-links [xml :string] :i64 (xml-path-count xml \"robot/link\"))
+         (defn link-text [xml :string index :i64] [:option :string]
+           (xml-path-text xml \"robot/link\" index))
          (defn link-name [xml :string index :i64] [:option :string]
            (xml-path-attr xml \"robot/link\" index \"name\"))"
-        xml "<?xml version=\"1.0\" encoding=\"utf-8\"?><robot><link name=\"base\"/><link name=\"tip\"/></robot>"
+        xml "<?xml version=\"1.0\" encoding=\"utf-8\"?><robot><link name=\"base\"> Hello <span>typed</span> Wasm </link><link name=\"tip\"/></robot>"
         compiled (compiler/compile-source source :wasm32-browser-kotoba-v1)
         probe (node-probe
                compiled
                (str "const x=h.instance.exports,xml=" (pr-str xml) ";"
-                    "const tip=x['link-name'](xml,1n),missing=x['link-name'](xml,2n);"
-                    "if(x['count-links'](xml)!==2n||!tip[1]||tip[2]!=='tip'||missing[1])process.exit(2);"))]
+                    "const tip=x['link-name'](xml,1n),missing=x['link-name'](xml,2n),text=x['link-text'](xml,0n);"
+                    "if(x['count-links'](xml)!==2n||!tip[1]||tip[2]!=='tip'||missing[1]||!text[1]||text[2]!=='Hello typed Wasm')process.exit(2);"))]
     (is (= 2 (ir/execute (:kir compiled) 'count-links [xml])))
     (is (= [[:option :string] true "tip"]
            (ir/execute (:kir compiled) 'link-name [xml 1])))
+    (is (= [[:option :string] true "Hello typed Wasm"]
+           (ir/execute (:kir compiled) 'link-text [xml 0])))
     (is (zero? (:exit probe)) (:err probe))))
 
 (deftest i32-wrapping-shifts-and-xorshift-have-wasm-runtime-parity

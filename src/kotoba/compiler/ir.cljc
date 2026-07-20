@@ -51,7 +51,7 @@
      typed-set-new typed-set-count typed-set-contains typed-set-conj typed-set-disj typed-set-equal
      typed-map-new typed-map-count typed-map-contains typed-map-get
      typed-map-entry-at typed-map-assoc typed-map-dissoc typed-map-equal
-     xml-path-count xml-path-attr decimal-f64-parse decimal-f64x3-parse
+     xml-path-count xml-path-text xml-path-attr decimal-f64-parse decimal-f64x3-parse
      record-new record-get record-assoc record-equal
      vector-count vector-get vector-at vector-drop vector-assoc vector-conj
      vector-f64-new vector-f64-count vector-f64-get vector-f64-at
@@ -777,6 +777,12 @@
         (xml/path-count
          (eval-expr (first args) env functions fuel heap call-stack cap-call)
          (eval-expr (second args) env functions fuel heap call-stack cap-call))
+
+        (= op 'xml-path-text)
+        (xml/path-text
+         (eval-expr (nth args 0) env functions fuel heap call-stack cap-call)
+         (eval-expr (nth args 1) env functions fuel heap call-stack cap-call)
+         (eval-expr (nth args 2) env functions fuel heap call-stack cap-call))
 
         (= op 'xml-path-attr)
         (xml/path-attr
