@@ -55,6 +55,14 @@
   `kotoba-lang/kotoba`'s own `has-capability-fn` (\"no POLICY grants
   NOTHING\") rather than defaulting to permissive.
 
+  `typed-cap-call` uses a separate exact provider registry installed through
+  `set-typed-providers!`. Generated modules seal their capability contracts
+  and schema table, validate structured function inputs and outputs, validate
+  requests before provider dispatch and results after it, and deny every
+  typed capability unless its numeric ID is explicitly allowed and installed.
+  The codec implements the bounded record/variant/option/set/map/tuple profile
+  needed by the application capability kits, including exact UTF-8 limits.
+
   Fuel: WASM's `charge!` is a MODULE-GLOBAL mutable counter that starts at
   512 and is never replenished for the life of one Instance (ir.clj: one
   charge per function ENTRY, not per expression -- confirmed by
@@ -64,7 +72,8 @@
   loaded cljs module is, like a WASM Instance, permanently exhausted after
   512 total function calls across its whole lifetime -- not 512 per
   top-level call."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [kotoba.compiler.reference-runtime :as reference-runtime]))
 
 (declare lower-expr)
 
@@ -74,6 +83,7 @@
 (defn- lower-expr [form]
   (cond
     (integer? form) form
+    (or (string? form) (keyword? form) (boolean? form)) form
     (symbol? form) form
     :else
     (let [[op & args] form]
@@ -102,6 +112,22 @@
         cap-call (let [[cap-id value] args]
                    (list 'kotoba$cap-call cap-id (lower-expr value)))
 
+        typed-cap-call
+        (let [[cap-id request-type result-type request] args]
+          (list 'kotoba$typed-cap-call cap-id
+                (list 'quote request-type) (list 'quote result-type)
+                (lower-expr request)))
+
+        string-byte-length
+        (list 'kotoba$utf8-byte-count (lower-expr (first args)))
+
+        string=?
+        (list 'if (list '= (lower-expr (first args)) (lower-expr (second args))) 1 0)
+
+        string-concat
+        (list 'kotoba$typed-value! (list 'quote :string)
+              (list 'str (lower-expr (first args)) (lower-expr (second args))))
+
         (cond
           (contains? comparison-ops op)
           (list 'if (apply list op (map lower-expr args)) 1 0)
@@ -111,9 +137,15 @@
 
           :else (apply list op (map lower-expr args)))))))
 
-(defn- lower-function [{:keys [name params body]} exported?]
-  (list (if exported? 'defn 'defn-) name (vec params)
-        (list 'do '(kotoba$charge!) (lower-expr body))))
+(defn- lower-function [{:keys [name params param-types result body]} exported?]
+  (let [parameter-checks
+        (mapv (fn [parameter type]
+                (list 'kotoba$typed-value! (list 'quote type) parameter))
+              params param-types)
+        lowered-result (list 'kotoba$typed-value! (list 'quote result)
+                             (lower-expr body))]
+    (list (if exported? 'defn 'defn-) name (vec params)
+          (list* 'do '(kotoba$charge!) (concat parameter-checks [lowered-result])))))
 
 (def ^:private prelude-forms
   '[(defonce kotoba$fuel (atom 512))
@@ -148,7 +180,155 @@
         (long (f cap-id value))
         (throw (ex-info "capability-denied"
                         {:kotoba.cljs/trap :capability-denied
-                         :kotoba.cljs/capability cap-id}))))])
+                         :kotoba.cljs/capability cap-id}))))
+    (defonce kotoba$typed-host (atom {:allow #{} :providers {}}))
+    (defn- kotoba$typed-fail! [message data]
+      (throw (ex-info message (assoc data :kotoba.cljs/trap :typed-capability))))
+    (defn- kotoba$utf8-byte-count [text]
+      (loop [index 0 total 0]
+        (if (= index (count text))
+          total
+          (let [unit (subs text index (inc index))]
+            (cond
+              (<= (compare unit "\u007f") 0)
+              (recur (inc index) (inc total))
+              (<= (compare unit "\u07ff") 0)
+              (recur (inc index) (+ total 2))
+              (and (<= (compare "\ud800" unit) 0)
+                   (<= (compare unit "\udbff") 0))
+              (if (< (inc index) (count text))
+                (let [next-unit (subs text (inc index) (+ index 2))]
+                  (if (and (<= (compare "\udc00" next-unit) 0)
+                           (<= (compare next-unit "\udfff") 0))
+                    (recur (+ index 2) (+ total 4))
+                    (kotoba$typed-fail! "invalid-typed-value"
+                                        {:reason :unpaired-surrogate})))
+                (kotoba$typed-fail! "invalid-typed-value"
+                                    {:reason :unpaired-surrogate}))
+              (and (<= (compare "\udc00" unit) 0)
+                   (<= (compare unit "\udfff") 0))
+              (kotoba$typed-fail! "invalid-typed-value"
+                                  {:reason :unpaired-surrogate})
+              :else (recur (inc index) (+ total 3)))))))
+    (defn- kotoba$typed-value! [type value]
+      (let [nodes (atom 0)]
+        (letfn [(walk [descriptor item depth]
+                  (swap! nodes inc)
+                  (when (or (> depth 8) (> @nodes 64))
+                    (kotoba$typed-fail! "invalid-typed-value" {:reason :value-bounds}))
+                  (cond
+                    (= descriptor :i64)
+                    (when-not (and (integer? item)
+                                   (<= (- kotoba$max-safe-integer)
+                                       item kotoba$max-safe-integer))
+                      (kotoba$typed-fail! "invalid-typed-value" {:expected :i64}))
+                    (or (= descriptor :f32) (= descriptor :f64))
+                    (when-not (number? item)
+                      (kotoba$typed-fail! "invalid-typed-value" {:expected descriptor}))
+                    (= descriptor :string)
+                    (when-not (and (string? item)
+                                   (<= (kotoba$utf8-byte-count item) 65536))
+                      (kotoba$typed-fail! "invalid-typed-value" {:expected :string}))
+                    (= descriptor :keyword)
+                    (when-not (and (keyword? item)
+                                   (<= (kotoba$utf8-byte-count (str item)) 512))
+                      (kotoba$typed-fail! "invalid-typed-value" {:expected :keyword}))
+                    (= descriptor :bool)
+                    (when-not (or (true? item) (false? item))
+                      (kotoba$typed-fail! "invalid-typed-value" {:expected :bool}))
+                    (and (vector? descriptor) (= :ref (first descriptor)))
+                    (if-let [resolved (get kotoba$schemas (second descriptor))]
+                      (walk resolved item (inc depth))
+                      (kotoba$typed-fail! "invalid-typed-value" {:reason :unknown-schema}))
+                    (and (vector? descriptor) (= :option (first descriptor)))
+                    (let [[actual present? payload & extra] item]
+                      (when-not (and (vector? item) (empty? extra)
+                                     (= descriptor actual) (boolean? present?)
+                                     (= (count item) (if present? 3 2)))
+                        (kotoba$typed-fail! "invalid-typed-value" {:expected descriptor}))
+                      (when present? (walk (second descriptor) payload (inc depth))))
+                    (and (vector? descriptor) (= :set (first descriptor)))
+                    (let [[actual items & extra] item]
+                      (when-not (and (vector? item) (empty? extra) (= descriptor actual)
+                                     (vector? items) (<= (count items) 32)
+                                     (= (count items) (count (distinct items))))
+                        (kotoba$typed-fail! "invalid-typed-value" {:expected descriptor}))
+                      (doseq [member items]
+                        (walk (second descriptor) member (inc depth))))
+                    (and (vector? descriptor) (= :map (first descriptor)))
+                    (let [[actual entries & extra] item]
+                      (when-not (and (vector? item) (empty? extra) (= descriptor actual)
+                                     (vector? entries) (<= (count entries) 31)
+                                     (every? #(and (vector? %) (= 2 (count %))) entries)
+                                     (= (count entries)
+                                        (count (distinct (map first entries)))))
+                        (kotoba$typed-fail! "invalid-typed-value" {:expected descriptor}))
+                      (doseq [[key map-value] entries]
+                        (walk (second descriptor) key (inc depth))
+                        (walk (nth descriptor 2) map-value (inc depth))))
+                    (and (vector? descriptor) (= :vector (first descriptor)))
+                    (let [[actual & items] item
+                          item-types (second descriptor)]
+                      (when-not (and (vector? item) (= descriptor actual)
+                                     (= (count items) (count item-types)))
+                        (kotoba$typed-fail! "invalid-typed-value" {:expected descriptor}))
+                      (doseq [[item-type member] (map vector item-types items)]
+                        (walk item-type member (inc depth))))
+                    (and (vector? descriptor) (= :record (first descriptor)))
+                    (let [[actual & fields] item
+                          field-types (map second (nth descriptor 2))]
+                      (when-not (and (vector? item) (= descriptor actual)
+                                     (= (count fields) (count field-types)))
+                        (kotoba$typed-fail! "invalid-typed-value" {:expected descriptor}))
+                      (doseq [[field-type field] (map vector field-types fields)]
+                        (walk field-type field (inc depth))))
+                    (and (vector? descriptor) (= :variant (first descriptor)))
+                    (let [[actual tag payload & extra] item
+                          payload-type (some (fn [[case-tag case-type]]
+                                               (when (= case-tag tag) case-type))
+                                             (nth descriptor 2))]
+                      (when-not (and (vector? item) (empty? extra)
+                                     (= descriptor actual) payload-type)
+                        (kotoba$typed-fail! "invalid-typed-value" {:expected descriptor}))
+                      (walk payload-type payload (inc depth)))
+                    :else
+                    (kotoba$typed-fail! "invalid-typed-value"
+                                        {:reason :unknown-type :type descriptor})))]
+          (walk type value 0)
+          value)))
+    (defn set-typed-providers! [options]
+      (when-not (and (map? options) (= #{:allow :providers} (set (keys options))))
+        (kotoba$typed-fail! "typed provider options are not exact" {}))
+      (let [{:keys [allow providers]} options]
+        (when-not (and (set? allow)
+                       (every? #(and (integer? %) (<= 0 % 255)) allow)
+                       (map? providers) (<= (count providers) 256))
+          (kotoba$typed-fail! "typed provider registry is invalid" {}))
+        (doseq [[id provider] providers]
+          (when-not (and (contains? allow id)
+                         (= #{:request-type :result-type :invoke}
+                            (set (keys provider)))
+                         (ifn? (:invoke provider)))
+            (kotoba$typed-fail! "typed provider is not exactly admitted"
+                                {:capability id})))
+        (doseq [[id contract] kotoba$typed-contracts]
+          (when-let [provider (get providers id)]
+            (when-not (= contract (select-keys provider [:request-type :result-type]))
+              (kotoba$typed-fail! "typed provider contract mismatch"
+                                  {:capability id}))))
+        (reset! kotoba$typed-host options)))
+    (defn- kotoba$typed-cap-call [id request-type result-type request]
+      (kotoba$typed-value! request-type request)
+      (let [{:keys [allow providers]} @kotoba$typed-host]
+        (when-not (contains? allow id)
+          (kotoba$typed-fail! "typed capability denied" {:capability id}))
+        (let [provider (or (get providers id)
+                           (kotoba$typed-fail! "typed capability provider is not installed"
+                                               {:capability id}))]
+          (when-not (= {:request-type request-type :result-type result-type}
+                       (select-keys provider [:request-type :result-type]))
+            (kotoba$typed-fail! "typed provider contract mismatch" {:capability id}))
+          (kotoba$typed-value! result-type ((:invoke provider) request)))))])
 
 (def default-ns-name
   "KIR carries no `ns` name (frontend/analyze validates and discards the
@@ -184,6 +364,11 @@
         exported-names (set (or (:exports kir) fn-names))
         fn-forms (mapv #(lower-function % (contains? exported-names (:name %)))
                        (:functions kir))
-        forms (concat [(list 'ns default-ns-name)] prelude-forms
+        schemas (or (:schemas kir) {})
+        contracts (reference-runtime/capability-contracts kir)
+        forms (concat [(list 'ns default-ns-name)
+                       (list 'def 'kotoba$schemas (list 'quote schemas))
+                       (list 'def 'kotoba$typed-contracts (list 'quote contracts))]
+                      prelude-forms
                        [(list* 'declare fn-names)] fn-forms)]
     (str/join "\n\n" (map pr-str forms))))

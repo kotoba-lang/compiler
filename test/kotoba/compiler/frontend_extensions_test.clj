@@ -21,7 +21,8 @@
        (catch clojure.lang.ExceptionInfo e (ex-message e))))
 
 (defn- unsupported-typed-targets []
-  (remove #(contains? #{:js-kotoba-v1 :wasm32-kotoba-v1} (target/backend %))
+  (remove #(contains? #{:js-kotoba-v1 :wasm32-kotoba-v1 :cljs-kotoba-v1}
+                       (target/backend %))
           compiler/supported-targets))
 
 (deftest sealed-multi-arity-resolves-every-call-before-hir

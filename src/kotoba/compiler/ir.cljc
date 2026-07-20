@@ -80,6 +80,26 @@
                    (walk body)))
             (:functions hir))))
 
+(defn only-cljs-provider-typed-features?
+  "True when typed values appear only as function boundary types and sealed
+  typed-cap-call request/result descriptors. The CLJS backend owns the codec
+  for those boundaries, but does not yet lower general typed construction or
+  mutation operations."
+  [hir]
+  (letfn [(walk [form]
+            (cond
+              (or (string? form) (integer? form) (symbol? form)) true
+              (or (keyword? form) (boolean? form)) false
+              (seq? form)
+              (let [[op & args] form]
+                (and (not (contains? non-string-typed-ops op))
+                     (every? walk args)))
+              ;; Type descriptors inside typed-cap-call are vectors and are
+              ;; sealed constants, not runtime construction operations.
+              (vector? form) true
+              :else false))]
+    (every? #(walk (:body %)) (:functions hir))))
+
 (defn uses-f64? [program]
   (boolean
    (some (fn [{:keys [param-types result body]}]
