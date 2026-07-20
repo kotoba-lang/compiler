@@ -15,7 +15,13 @@
  {:registry :kotoba.provider-registry/v1
   :provider-keys [:request-type :result-type :invoke]
   :contract-match :exact
-  :kits [:state :ui :http :llm :storage :clock :log]
+  :kits {:state {:version 1 :status :reference-implemented}
+         :ui {:status :specified-pending}
+         :http {:status :specified-pending}
+         :llm {:status :specified-pending}
+         :storage {:status :specified-pending}
+         :clock {:status :specified-pending}
+         :log {:status :specified-pending}}
   :lifecycle [:validate-request :invoke-provider :validate-result]
   :resource-model [:fuel :depth :nodes :bytes :provider-timeout]}
  :reference-runtime
