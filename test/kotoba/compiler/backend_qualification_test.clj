@@ -24,8 +24,11 @@
     (is (= :reject (get-in policy [:world :undeclared-imports])))
     (is (false? (get-in policy [:wasi :application-ambient-authority])))
     (is (= :provider-component (get-in policy [:wasi :owner])))
-    (is (= "0.2.11" (get-in contract [:spec-baseline :wasi :default])))
-    (is (= :deferred (get-in contract [:spec-baseline :wasi :async-profile :status])))
+    (is (= "0.3.0" (get-in contract [:spec-baseline :wasi :default])))
+    (is (= :func (get-in contract [:spec-baseline :wasi :profiles :sync :function-mode])))
+    (is (= :async-func (get-in contract [:spec-baseline :wasi :profiles :async :function-mode])))
+    (is (= :legacy-explicit
+           (get-in contract [:spec-baseline :wasi :compatibility 0 :status])))
     (is (= :reject-v1 (get-in contract [:types :recursive-schema :disposition])))
     (is (= :not-required (get-in contract [:limits :wit-bounded-list-feature])))))
 
@@ -39,15 +42,15 @@
     (is (every? #(and (string? (:interface %))
                       (string? (:function %))
                       (vector? (:provider-wasi %))) entries))
-    (is (= ["wasi:http/outgoing-handler@0.2.11"]
+    (is (= ["wasi:http/outgoing-handler@0.3.0"]
            (:provider-wasi (first (filter #(= :http/post (:name %)) entries)))))
-    (is (= #{"wasi:clocks/wall-clock@0.2.11"
-             "wasi:clocks/monotonic-clock@0.2.11"}
+    (is (= #{"wasi:clocks/wall-clock@0.3.0"
+             "wasi:clocks/monotonic-clock@0.3.0"}
            (set (:provider-wasi
                  (first (filter #(= :clock/now (:name %)) entries)))))
     (is (every? empty?
                 (map :provider-wasi
-                     (remove #(contains? #{:http/post :clock/now} (:name %)) entries))))))
+                     (remove #(contains? #{:http/post :clock/now} (:name %)) entries)))))))
 
 (deftest every-backend-is-bound-to-the-same-manifest-gate
   (doseq [backend [:wasmtime :native :cljs]]

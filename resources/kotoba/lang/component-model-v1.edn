@@ -11,13 +11,18 @@
                   :memory :compiler-owned
                   :realloc :compiler-generated
                   :post-return :compiler-generated-when-required}
-  :wasi {:default "0.2.11"
-         :source "https://github.com/WebAssembly/WASI/releases/tag/v0.2.11"
-         :revision "ed73919426173babd88ae145e31deca3d484bbd0"
-         :async-profile {:version "0.3.0" :status :deferred
-                         :revision "3ee2a590c766594ae44a54730fc74fc27da5c609"
-                         :features [:async-func :stream :future]
-                         :minimum-wasmtime-major 43}}}
+  :wasi {:default "0.3.0"
+         :source "https://github.com/WebAssembly/WASI/releases/tag/v0.3.0"
+         :revision "3ee2a590c766594ae44a54730fc74fc27da5c609"
+         :profiles {:sync {:function-mode :func :async-types false}
+                    :async {:function-mode :async-func
+                            :features [:stream :future]
+                            :requires [:declared-async-effect :cancellation
+                                       :deadline :item-budget :byte-budget]}}
+         :compatibility [{:version "0.2.11"
+                          :revision "ed73919426173babd88ae145e31deca3d484bbd0"
+                          :status :legacy-explicit}]
+         :minimum-wasmtime-major 43}}
  :types
  {:i64 {:wit :s64}
   :f32 {:wit :f32}
@@ -39,16 +44,22 @@
   :exports :exact-declared-entry-functions
   :undeclared-import :reject
   :ambient-wasi false}
+ :lowering {:sync-function :wit-func
+            :async-function :wit-async-func
+            :future :declared-only
+            :stream :declared-only
+            :canonical-abi :compiler-generated
+            :private-externref-abi :legacy-only}
  :capabilities
  [{:name :http/post :id 4 :interface "http-post" :function "post"
-   :kit :http :provider-wasi ["wasi:http/outgoing-handler@0.2.11"]}
+   :kit :http :provider-wasi ["wasi:http/outgoing-handler@0.3.0"]}
   {:name :log/read :id 5 :interface "log" :function "read"
    :kit :log :provider-wasi []}
   {:name :log/append :id 6 :interface "log" :function "append"
    :kit :log :provider-wasi []}
   {:name :clock/now :id 7 :interface "clock" :function "now"
    :kit :clock
-   :provider-wasi ["wasi:clocks/wall-clock@0.2.11" "wasi:clocks/monotonic-clock@0.2.11"]}
+   :provider-wasi ["wasi:clocks/wall-clock@0.3.0" "wasi:clocks/monotonic-clock@0.3.0"]}
   {:name :state/transact :id 8 :interface "state" :function "transact"
    :kit :state :provider-wasi []}
   {:name :ui/commit :id 9 :interface "ui" :function "commit"

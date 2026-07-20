@@ -38,6 +38,8 @@
   :contract :kotoba.component-model/v1
   :artifact-owner :kotoba-lang/compiler
   :target :wasm-component-kotoba-v1
+  :wasi-baseline "0.3.0"
+  :function-profiles [:sync :async-explicit]
   :world {:imports :declared-typed-capabilities-only
           :exports :declared-entry-points-only
           :undeclared-imports :reject}

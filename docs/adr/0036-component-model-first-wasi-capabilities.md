@@ -31,9 +31,10 @@ standard WIT value types do not provide the same general recursive ADT model.
 Component lowering rejects every type whose bounds or identity would be
 weakened.
 
-The synchronous v1 profile pins WASI 0.2.11. WASI 0.3.0 is stable and adds
-native `async func`, `stream<T>`, and `future<T>`, but those constructs require
-a separately versioned Kotoba async/effect contract and are deferred. Standard
+The platform baseline is WASI 0.3.0. Synchronous v1 functions remain WIT
+`func`; native `async func`, `stream<T>`, and `future<T>` require the separately
+declared bounded async/effect profile. WASI 0.2.11 remains an explicit legacy
+compatibility profile and is never selected implicitly. Standard
 WIT lists carry no relied-upon Kotoba bound: collection limits and canonical
 set/map ordering are enforced by generated pre/post boundary validators.
 

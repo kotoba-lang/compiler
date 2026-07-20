@@ -16,14 +16,13 @@ This document records the official specifications reviewed for
 - Canonical ABI from the same revision. The compiler must generate the core
   memory, reallocation, lifting/lowering, and required post-return adapters;
   Kotoba's existing `externref` host representation is not the component ABI.
-- WASI 0.2.11 at tag revision
-  `ed73919426173babd88ae145e31deca3d484bbd0` is the synchronous v1 provider
-  baseline.
 - WASI 0.3.0 at tag revision
-  `3ee2a590c766594ae44a54730fc74fc27da5c609` is stable and introduces native
-  async functions, streams, and futures. It is deliberately deferred to a
-  separately versioned Kotoba async profile; it is not silently exposed to
-  synchronous v1 applications.
+  `3ee2a590c766594ae44a54730fc74fc27da5c609` is the platform baseline. Ordinary
+  deterministic providers continue to use WIT `func`; native async functions,
+  streams, and futures require the explicit bounded async profile.
+- WASI 0.2.11 at tag revision
+  `ed73919426173babd88ae145e31deca3d484bbd0` remains an explicit legacy
+  compatibility profile and is never selected implicitly.
 
 ## Kotoba interpretation
 
@@ -42,6 +41,10 @@ declared capabilities. WASI interfaces appear only in provider components and
 only as listed in the relevant capability rule. In particular, storage does
 not imply filesystem access and LLM does not imply socket access.
 
+The compiler rejects `async func`, `future<T>`, and `stream<T>` unless the
+checked language effect declares async execution and supplies cancellation,
+deadline, item, and byte budgets. Selecting WASI 0.3 alone grants no authority.
+
 ## Official sources
 
 - https://github.com/WebAssembly/component-model
@@ -49,5 +52,6 @@ not imply filesystem access and LLM does not imply socket access.
 - https://github.com/WebAssembly/component-model/blob/main/design/mvp/CanonicalABI.md
 - https://github.com/WebAssembly/component-model/blob/main/design/mvp/Binary.md
 - https://github.com/WebAssembly/WASI/releases/tag/v0.2.11
+- https://github.com/WebAssembly/WASI/releases/tag/v0.3.0
 - https://wasi.dev/releases/wasi-p3
 - https://wasi.dev/roadmap
