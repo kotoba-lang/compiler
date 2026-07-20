@@ -136,7 +136,7 @@
   '{document-null 0 document-bool 1 document-i64 1 document-f64 1
     document-string 1 document-keyword 1 document-count 1
     document-vector-at 2 document-vector-assoc 3 document-vector-conj 2
-    document-vector-drop 2
+    document-vector-drop 2 document-vector-remove 2
     document-contains 2 document-get 2 document-assoc 3 document-dissoc 2
     document-merge 2 document-string-value 1 document-keyword-value 1 document-bool-value 1
     document-i64-value 1 document-f64-value 1})
@@ -1946,6 +1946,9 @@
       (do (require-expression-type! (nth types 0) :document (nth args 0))
           (require-expression-type! (nth types 1) :document (nth args 1)) :document)
       (= op 'document-vector-drop)
+      (do (require-expression-type! (nth types 0) :document (nth args 0))
+          (require-expression-type! (nth types 1) :i64 (nth args 1)) :document)
+      (= op 'document-vector-remove)
       (do (require-expression-type! (nth types 0) :document (nth args 0))
           (require-expression-type! (nth types 1) :i64 (nth args 1)) :document)
       (= op 'document-contains)

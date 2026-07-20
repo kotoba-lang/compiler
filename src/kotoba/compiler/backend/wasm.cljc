@@ -838,14 +838,16 @@
                     (concat (i32-const (descriptor-id :document)) (emit* (first args) env)
                             [0x10 (get intrinsic-indices 'typed-count)])
                     (contains? '#{document-vector-at document-vector-assoc
-                                  document-vector-conj document-vector-drop} op)
+                                  document-vector-conj document-vector-drop
+                                  document-vector-remove} op)
                     (concat (i32-const (descriptor-id :document))
                             (mapcat #(emit* % env) args)
                             [0x10 (get intrinsic-indices
                                        ({'document-vector-at 'typed-document-vector-at
                                          'document-vector-assoc 'typed-document-vector-assoc
                                          'document-vector-conj 'typed-document-vector-conj
-                                         'document-vector-drop 'typed-document-vector-drop} op))])
+                                         'document-vector-drop 'typed-document-vector-drop
+                                         'document-vector-remove 'typed-document-vector-remove} op))])
                     (= op 'document-contains)
                     (emit-bool
                      (concat (i32-const (descriptor-id :document))
@@ -1164,7 +1166,7 @@
                                        '#{document-null document-bool document-i64 document-f64
                                           document-string document-keyword document-vector document-map
                                           document-count document-vector-at document-vector-assoc
-                                          document-vector-conj document-vector-drop
+                                          document-vector-conj document-vector-drop document-vector-remove
                                           document-contains document-get document-assoc
                                           document-dissoc document-merge document-string-value
                                           document-keyword-value document-bool-value
@@ -1233,6 +1235,7 @@
                             ['typed-document-vector-assoc "kotoba:typed" "document-vector-assoc" [0x60 4 0x7f 0x6f 0x7e 0x6f 1 0x6f]]
                             ['typed-document-vector-conj "kotoba:typed" "document-vector-conj" [0x60 3 0x7f 0x6f 0x6f 1 0x6f]]
                             ['typed-document-vector-drop "kotoba:typed" "document-vector-drop" [0x60 3 0x7f 0x6f 0x7e 1 0x6f]]
+                            ['typed-document-vector-remove "kotoba:typed" "document-vector-remove" [0x60 3 0x7f 0x6f 0x7e 1 0x6f]]
                             ['typed-document-contains "kotoba:typed" "document-contains" [0x60 3 0x7f 0x6f 0x6f 1 0x7f]]
                             ['typed-document-get "kotoba:typed" "document-get" [0x60 3 0x7f 0x6f 0x6f 1 0x6f]]
                             ['typed-document-assoc "kotoba:typed" "document-assoc" [0x60 4 0x7f 0x6f 0x6f 0x6f 1 0x6f]]
