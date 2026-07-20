@@ -74,6 +74,16 @@
   (is (= 0 (oracle "(defn main [] (let [{:keys [a c]} {:a 10 :b 20}] (- a a c)))"))
       "a missing key in {:keys [...]} defaults to 0, same as bare `get`"))
 
+(deftest map-destructuring-supports-bounded-defaults-and-as
+  (is (= 23 (oracle "(defn main []
+                       (let [{:keys [a b] :or {b 3} :as whole} {:a 10}]
+                         (+ a (+ b (get whole :a)))))")))
+  (is (= 9 (oracle "(defn fallback [] 9)
+                    (defn main [] (let [{:keys [a] :or {a (fallback)}} {}] a))")))
+  (is (= 4 (oracle "(defn main []
+                      (let [{:keys [a] :or {a 9}} {:a 4}] a))"))
+      "a present value does not use its default"))
+
 (deftest destructuring-value-expr-is-evaluated-exactly-once
   ;; Every destructure-binding pattern binds a single gensym'd temp to the
   ;; value first -- verifies a side-effecting-ish (recursive, fuel-consuming)
@@ -86,8 +96,10 @@
       "a vector pattern nested inside a vector pattern is not supported")
   (is (some? (rejection-message "(defn main [] (let [[a & b & c] [1 2 3]] a))"))
       "more than one rest-binding symbol after `&` is rejected")
-  (is (some? (rejection-message "(defn main [] (let [{:keys [a] :or {a 1}} {}] a))"))
-      "map destructuring supports only {:keys [...]}, no :or/:as/:strs"))
+  (is (some? (rejection-message "(defn main [] (let [{:keys [a] :strs [b]} {}] a))"))
+      "map destructuring deliberately excludes string-key coercion")
+  (is (some? (rejection-message "(defn main [] (let [{:keys [a] :or {b 1}} {}] a))"))
+      ":or may only default names declared by :keys"))
 
 (deftest first-map-profile-rejects-nested-map-values
   (is (= "expression type mismatch: expected i64, got map"

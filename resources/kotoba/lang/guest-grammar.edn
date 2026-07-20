@@ -73,9 +73,12 @@
   :conj {:desugars-to "pair prepend after duplicate removal" :level "L2" :backends #{:compiler :kotoba-wasm :kotoba-cljs}}
   :disj {:desugars-to "bounded set removal" :level "L2" :backends #{:compiler :kotoba-wasm :kotoba-cljs}}
   :nested-destructuring
-  {:desugars-to "sequential temp-bound pair/map lookups" :level "L2" :backends #{:compiler :kotoba-wasm :kotoba-cljs}
-   :forms ["nested vector/map" "vector &" "map :keys" "map :or" "map :as" "explicit keyword patterns"]
-   :note "let and function parameter patterns portable; :strs/:syms outside keyword-only identity model"}
+  {:status :implemented-partial
+   :desugars-to "single-evaluation temp-bound vector/map projections" :level "L2"
+   :backends #{:compiler}
+   :implemented ["flat vector" "vector &" "map :keys" "map :or" "map :as"]
+   :missing ["nested vector/map over structured descriptors" "explicit keyword patterns"]
+   :note "nested patterns require descriptor-preserving typed lowering; :strs/:syms remain outside the keyword-only identity model"}
   :map {:desugars-to "recursive helper or primary bounded unroll" :level "L2" :backends #{:compiler :kotoba-wasm :kotoba-cljs}
         :note "named, inline, or stored closure callback portable; one to five collections for named/inline and one to four for stored closure; shortest termination"}
   :filter {:desugars-to "recursive helper or primary bounded unroll" :level "L2" :backends #{:compiler :kotoba-wasm :kotoba-cljs}

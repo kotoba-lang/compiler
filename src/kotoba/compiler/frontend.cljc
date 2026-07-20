@@ -756,21 +756,27 @@
                [[rest-name (list 'vector-drop tmp (count positional))]]))))
 
     (map? pattern)
-    (let [keys-vec (:keys pattern)]
-      (when-not (and (= 1 (count pattern)) keys-vec (vector? keys-vec) (every? symbol? keys-vec))
-        (reject! "map destructuring supports only {:keys [...]} (no :or/:as/:strs)" pattern))
+    (let [keys-vec (:keys pattern)
+          defaults (:or pattern {})
+          as-name (:as pattern)
+          admitted-keys #{:keys :or :as}]
+      (when-not (and (every? admitted-keys (keys pattern))
+                     keys-vec (vector? keys-vec) (every? symbol? keys-vec)
+                     (map? defaults) (every? symbol? (keys defaults))
+                     (every? (set keys-vec) (keys defaults))
+                     (or (nil? as-name) (symbol? as-name)))
+        (reject! "map destructuring supports {:keys [...]} with bounded :or defaults and optional :as" pattern))
       (let [tmp (gensym "destr-map__")]
         (into [[tmp value-expr]]
-              ;; Builds the same ALREADY-DESUGARED shape as the `get` case
-              ;; in desugar-expr's case dispatch below
-              ;; (`(map-get-helper-name m k default)`), not the sugared
-              ;; `(get m k)` source form -- this generated call is never
-              ;; routed back through desugar-expr, so it must already be in
-              ;; its final form: both a bare `(get ...)` op (unresolvable,
-              ;; "operation has no admitted lowering") and a raw keyword key
-              ;; (unrepresentable at runtime) were caught live before this
-              ;; fix.
-              (map (fn [k] [k (list 'map-get tmp (keyword k) 0)]) keys-vec))))
+              (concat
+               ;; map-get is already a primitive shape here. Defaults are
+               ;; desugared exactly once and evaluated only for a missing key.
+               (map (fn [k]
+                      [k (list 'map-get tmp (keyword k)
+                               (if (contains? defaults k)
+                                 (desugar-expr (get defaults k)) 0))])
+                    keys-vec)
+               (when as-name [[as-name tmp]])))))
 
     :else (reject! "unsupported destructuring pattern" pattern)))
 
