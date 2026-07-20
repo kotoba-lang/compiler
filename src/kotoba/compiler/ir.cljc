@@ -455,7 +455,7 @@
 
 (defn- i32-shl [value count]
   (let [shift (checked-shift32 count)]
-    #?(:clj (long (bit-shift-left (unchecked-int (long value)) shift))
+    #?(:clj (i32-wrap (bit-shift-left (unchecked-int (long value)) shift))
        :cljs (js/BigInt.asIntN
               32 (* (i32-wrap value) (js/BigInt (js/Math.pow 2 shift)))))))
 
@@ -466,7 +466,7 @@
 
 (defn- u32-shr [value count]
   (let [shift (checked-shift32 count)]
-    #?(:clj (long (unsigned-bit-shift-right (unchecked-int (long value)) shift))
+    #?(:clj (u32-wrap (unsigned-bit-shift-right (u32-wrap value) shift))
        :cljs (/ (u32-wrap value) (js/BigInt (js/Math.pow 2 shift))))))
 
 (defn- xorshift32 [value]

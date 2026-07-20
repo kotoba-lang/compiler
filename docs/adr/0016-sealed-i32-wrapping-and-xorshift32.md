@@ -41,8 +41,9 @@ policy belongs to the caller; the primitive maps zero to zero.
 ## Verification
 
 - Boundary vectors cover signed/unsigned wrap, overflow add/multiply, signed
-  and unsigned shifts, and the first three xorshift32 outputs from seed 1.
-- Compiler: 312 tests / 3,960 assertions.
+  and unsigned shifts, the first three xorshift32 outputs from seed 1, and the
+  high-bit seed `0x80000000` that catches JVM long-promotion mistakes.
+- Compiler: 312 tests / 3,961 assertions.
 - Kotoba Script: 38 tests / 130 assertions.
 - Browser host passes and JVM/nbb Wasm output is byte-identical for all 20
   fixtures, including `i32-profile.kotoba`.

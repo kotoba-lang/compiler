@@ -219,6 +219,7 @@
     (is (= -2147483648 (ir/execute kir 'add [2147483647 1])))
     (is (= -2 (ir/execute kir 'mul [2147483647 2])))
     (is (= 270369 (ir/execute kir 'next [1])))
+    (is (= 2148024320 (ir/execute kir 'next [2147483648])))
     (is (zero? (:exit result)) (:err result))
     (doseq [target-name (unsupported-typed-targets)]
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
