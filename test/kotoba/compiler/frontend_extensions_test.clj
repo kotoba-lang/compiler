@@ -777,20 +777,40 @@
            (value/f64-to-i64-bits (ir/execute (:kir js) 'signed-zero []))))
     (is (Double/isNaN ^double (ir/execute (:kir js) 'nan-value [])))
     (is (= (:kir js) (:kir wasm)) "targets consume the same substituted canonical KIR"))
-  (is (= "constant value must be closed bounded integer/string/keyword/boolean/nil/vector/map data"
+  (is (= "constant value must be closed bounded integer/string/keyword/boolean/nil/vector/map or non-empty keyword-set data"
          (rejection-message "(def unsafe (host-value))
                              (defn main [] :f64 unsafe)"))))
+
+(deftest bounded-keyword-set-constants-lower-to-canonical-typed-values
+  (let [source "(ns pilot.keyword-set (:export [count-kinds has-blue?]))
+                (def kinds #{:red :green :blue})
+                (defn count-kinds []
+                  (typed-set-count [:set :keyword] kinds))
+                (defn has-blue? [] :bool
+                  (typed-set-contains [:set :keyword] kinds :blue))"
+        js (compiler/compile-source source :js-kotoba-v1)
+        wasm (compiler/compile-source source :wasm32-kotoba-v1)]
+    (is (= 3 (ir/execute (:kir js) 'count-kinds [])))
+    (is (true? (ir/execute (:kir js) 'has-blue? [])))
+    (is (= (:kir js) (:kir wasm)) "all targets consume one canonical typed-set KIR"))
+  (doseq [source ["(def values #{}) (defn main [] values)"
+                  "(def values #{:ok 1}) (defn main [] values)"
+                  (str "(def values #{"
+                       (clojure.string/join " " (map #(str ":k" %) (range 33)))
+                       "}) (defn main [] values)")]]
+    (is (= "constant value must be closed bounded integer/string/keyword/boolean/nil/vector/map or non-empty keyword-set data"
+           (rejection-message source)))))
 
 (deftest literal-keyword-constructor-is-closed-at-compile-time
   (is (= (keyword "@context")
          (oracle "(def context-key (keyword \"@context\"))
                   (defn main [] :keyword context-key)")))
-  (is (= "constant value must be closed bounded integer/string/keyword/boolean/nil/vector/map data"
+  (is (= "constant value must be closed bounded integer/string/keyword/boolean/nil/vector/map or non-empty keyword-set data"
          (rejection-message "(def context-key (keyword (host-value)))
                              (defn main [] context-key)"))))
 
 (deftest top-level-constants-never-execute-code-or-shadow-locals
-  (is (= "constant value must be closed bounded integer/string/keyword/boolean/nil/vector/map data"
+  (is (= "constant value must be closed bounded integer/string/keyword/boolean/nil/vector/map or non-empty keyword-set data"
          (rejection-message "(def danger (+ 1 2)) (defn main [] danger)")))
   (is (= "duplicate constant name"
          (rejection-message "(def x 1) (def x 2) (defn main [] x)")))

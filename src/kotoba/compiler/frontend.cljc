@@ -856,6 +856,11 @@
     (boolean? form) form
     (nil? form) '(option-none)
     (map? form) (desugar-map form)
+    ;; Top-level constants admit only bounded, non-empty keyword sets. Lower
+    ;; them into the typed-set profile in canonical order so raw set iteration
+    ;; order is never observable in KIR or an artifact.
+    (set? form) (list* 'typed-set-new [:set :keyword]
+                       (sort-by pr-str form))
     ;; Vector literals now enter the owned bounded vector-i64 profile rather
     ;; than the legacy untagged pair arena. Binding and parameter vectors are
     ;; consumed by their enclosing forms and never reach this branch.
@@ -2678,6 +2683,11 @@
     (vector? value) (or (type-alias-form? value)
                         (and (<= (count value) max-list-items)
                              (every? constant-literal? value)))
+    ;; Keep inferred source sets deliberately narrow. Other item types use
+    ;; `typed-set` with an explicit descriptor in function code.
+    (set? value) (and (seq value)
+                      (<= (count value) max-typed-set-items)
+                      (every? keyword? value))
     (map? value) (and (<= (count value) max-list-items)
                       (every? constant-literal? (mapcat identity value)))
     :else false))
@@ -2700,7 +2710,7 @@
                   (keyword (second value-form))
                   value-form)]
       (when-not (constant-literal? value)
-        (reject! "constant value must be closed bounded integer/string/keyword/boolean/nil/vector/map data" value))
+        (reject! "constant value must be closed bounded integer/string/keyword/boolean/nil/vector/map or non-empty keyword-set data" value))
       {:name name :value value})))
 
 (defn- resolve-constant-aliases!
@@ -2758,6 +2768,7 @@
                    (list* op (map #(substitute-constants % constants bound) args)))]
       (if (seq (meta form)) (with-meta result (meta form)) result))
     (vector? form) (mapv #(substitute-constants % constants bound) form)
+    (set? form) (set (map #(substitute-constants % constants bound) form))
     (map? form) (into (empty form)
                       (map (fn [[k v]] [(substitute-constants k constants bound)
                                        (substitute-constants v constants bound)]))
