@@ -79,7 +79,7 @@
                     "if(x.add(2147483647n,1n)!==-2147483648n||x.mul(2147483647n,2n)!==-2n)process.exit(3);"
                     "if(x.xor(-1n,2147483647n)!==-2147483648n||x.shl(1n)!==-2147483648n)process.exit(4);"
                     "if(x.shr(-2147483648n)!==-1n||x.ushr(-1n)!==2147483647n)process.exit(5);"
-                    "if(x.next(1n)!==270369n||x.next(270369n)!==67634689n||x.next(67634689n)!==2647435461n)process.exit(6);"))]
+                    "if(x.next(1n)!==270369n||x.next(270369n)!==67634689n||x.next(67634689n)!==2647435461n||x.next(2147483648n)!==2148024320n)process.exit(6);"))]
     (is (zero? (:exit probe)) (:err probe))))
 
 (deftest local-indices-above-127-use-canonical-uleb128
