@@ -137,7 +137,7 @@
     document-string 1 document-keyword 1 document-count 1 document-kind 1
     document-vector-at 2 document-map-entry-at 2 document-vector-assoc 3 document-vector-conj 2
     document-vector-drop 2 document-vector-remove 2
-    document-contains 2 document-get 2 document-assoc 3 document-dissoc 2
+    document-equal? 2 document-contains 2 document-get 2 document-assoc 3 document-dissoc 2
     document-merge 2 document-string-value 1 document-keyword-value 1 document-bool-value 1
     document-i64-value 1 document-f64-value 1})
 (def document-variadic-operations '#{document-vector document-map})
@@ -1960,6 +1960,9 @@
       (= op 'document-contains)
       (do (require-expression-type! (nth types 0) :document (nth args 0))
           (require-expression-type! (nth types 1) :keyword (nth args 1)) :bool)
+      (= op 'document-equal?)
+      (do (require-expression-type! (nth types 0) :document (nth args 0))
+          (require-expression-type! (nth types 1) :document (nth args 1)) :bool)
       (= op 'document-get)
       (do (require-expression-type! (nth types 0) :document (nth args 0))
           (require-expression-type! (nth types 1) :keyword (nth args 1)) [:option :document])

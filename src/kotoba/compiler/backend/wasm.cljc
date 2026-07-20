@@ -869,6 +869,11 @@
                      (concat (i32-const (descriptor-id :document))
                              (emit* (first args) env) (emit* (second args) env)
                              [0x10 (get intrinsic-indices 'typed-document-contains)]))
+                    (= op 'document-equal?)
+                    (emit-bool
+                     (concat (i32-const (descriptor-id :document))
+                             (emit* (first args) env) (emit* (second args) env)
+                             [0x10 (get intrinsic-indices 'typed-equal)]))
                     (contains? '#{document-get document-assoc document-dissoc
                                   document-merge document-string-value document-bool-value
                                   document-keyword-value document-i64-value document-f64-value} op)
@@ -1186,7 +1191,7 @@
                                           document-string document-keyword document-vector document-map
                                           document-count document-kind document-vector-at document-map-entry-at document-vector-assoc
                                           document-vector-conj document-vector-drop document-vector-remove
-                                          document-contains document-get document-assoc
+                                          document-equal? document-contains document-get document-assoc
                                           document-dissoc document-merge document-string-value
                                           document-keyword-value document-bool-value
                                           document-i64-value document-f64-value})

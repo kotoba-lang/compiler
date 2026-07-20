@@ -59,7 +59,7 @@
      string-index-new string-index-count string-index-contains string-index-get string-index-assoc
      disjoint-set-i64-new disjoint-set-i64-count disjoint-set-i64-union
      document-null document-bool document-i64 document-f64 document-string document-keyword
-     document-vector document-map document-count document-kind document-contains document-get
+     document-vector document-map document-count document-kind document-equal? document-contains document-get
      document-vector-at document-map-entry-at document-vector-assoc document-vector-conj document-vector-drop
      document-vector-remove
      document-assoc document-dissoc document-merge document-string-value document-keyword-value
@@ -1590,6 +1590,12 @@
               (value/bounded-document!
                (eval-expr (first args) env functions fuel heap call-stack cap-call))]
           (value/bounded-keyword! (keyword tag) value/keyword-value-byte-limit))
+
+        (= op 'document-equal?)
+        (let [[left right]
+              (mapv #(value/bounded-document!
+                      (eval-expr % env functions fuel heap call-stack cap-call)) args)]
+          (= left right))
 
         (contains? '#{document-contains document-get document-assoc document-dissoc} op)
         (let [[document-form key-form item-form] args
