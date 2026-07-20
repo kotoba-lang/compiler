@@ -977,6 +977,13 @@
                       (concat (i32-const (descriptor-id type)) (emit* value env)
                               (emit* key env) (emit* item env)
                               [0x10 (get intrinsic-indices intrinsic)]))
+                    (= op 'xml-path-count)
+                    (concat (emit* (first args) env) (emit* (second args) env)
+                            [0x10 (get intrinsic-indices 'xml-path-count)])
+                    (= op 'xml-path-attr)
+                    (concat (emit* (nth args 0) env) (emit* (nth args 1) env)
+                            (emit* (nth args 2) env) (emit* (nth args 3) env)
+                            [0x10 (get intrinsic-indices 'xml-path-attr)])
                     :else
                     (if-let [function-index (get function-indices op)]
                       (concat (mapcat #(emit* % env) args) [0x10 function-index])
@@ -1022,6 +1029,13 @@
         body (concat declarations instructions [0x0b])]
     (concat (uleb (count body)) body)))
 
+(defn- uses-operation? [functions operations]
+  (boolean
+   (some (fn [function]
+           (some #(and (seq? %) (contains? operations (first %)))
+                 (tree-seq coll? seq (:body function))))
+         functions)))
+
 (defn emit [kir target]
   (let [functions (:functions kir)
         typed? (= :kotoba.kir/v4 (:format kir))
@@ -1039,8 +1053,10 @@
                                (coll? form) (doseq [item form] (walk item))))]
                      (doseq [function functions] (walk (:body function)))
                      @found))
+        has-xml? (uses-operation? functions '#{xml-path-count xml-path-attr})
         typed-imports (when (and typed? (typed/requires-host-runtime? kir))
-                        [['typed-literal "kotoba:typed" "literal" [0x60 1 0x7f 1 0x6f]]
+                        (vec (concat
+                         [['typed-literal "kotoba:typed" "literal" [0x60 1 0x7f 1 0x6f]]
                          ['typed-new "kotoba:typed" "new" [0x60 2 0x7f 0x7f 1 0x6f]]
                          ['typed-push-i64 "kotoba:typed" "push-i64" [0x60 2 0x6f 0x7e 1 0x6f]]
                          ['typed-push-f64 "kotoba:typed" "push-f64" [0x60 2 0x6f 0x7c 1 0x6f]]
@@ -1081,7 +1097,10 @@
                          ['typed-map-assoc-ri "kotoba:typed" "map-assoc-ri" [0x60 4 0x7f 0x6f 0x6f 0x7e 1 0x6f]]
                          ['typed-map-assoc-rr "kotoba:typed" "map-assoc-rr" [0x60 4 0x7f 0x6f 0x6f 0x6f 1 0x6f]]
                          ['typed-map-dissoc-i64 "kotoba:typed" "map-dissoc-i64" [0x60 3 0x7f 0x6f 0x7e 1 0x6f]]
-                         ['typed-map-dissoc-ref "kotoba:typed" "map-dissoc-ref" [0x60 3 0x7f 0x6f 0x6f 1 0x6f]]])
+                         ['typed-map-dissoc-ref "kotoba:typed" "map-dissoc-ref" [0x60 3 0x7f 0x6f 0x6f 1 0x6f]]]
+                         (when has-xml?
+                           [['xml-path-count "kotoba:typed" "xml-path-count" [0x60 2 0x6f 0x6f 1 0x7e]]
+                            ['xml-path-attr "kotoba:typed" "xml-path-attr" [0x60 4 0x6f 0x6f 0x7e 0x6f 1 0x6f]]]))))
         imports (vec (concat typed-imports
                       (when has-cap? [['cap-call "kotoba:cap" "call"
                                        [0x60 2 0x7e 0x7e 1 0x7e]]])

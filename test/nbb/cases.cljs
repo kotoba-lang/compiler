@@ -51,4 +51,7 @@
    {:name "i32-profile" :source "test/nbb/fixtures/i32-profile.kotoba" :target "wasm32-browser" :policy nil}
    ;; ADR 0017: source-name/arity resolution and canonical ABI mangling must
    ;; be byte-identical on JVM and JVM-free compiler hosts.
-   {:name "multi-arity" :source "test/nbb/fixtures/multi-arity.kotoba" :target "wasm32-browser" :policy nil}])
+   {:name "multi-arity" :source "test/nbb/fixtures/multi-arity.kotoba" :target "wasm32-browser" :policy nil}
+   ;; ADR 0018: XML query typing and typed Wasm import lowering must remain
+   ;; byte-identical on JVM and JVM-free compiler hosts.
+   {:name "xml-query" :source "test/nbb/fixtures/xml-query.kotoba" :target "wasm32-browser" :policy nil}])

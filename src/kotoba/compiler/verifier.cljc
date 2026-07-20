@@ -38,6 +38,7 @@
 (def ^:private heap-operations '{pair 2 pair-first 1 pair-second 1})
 (def ^:private kgraph-operations '{kgraph-assert! 3 kgraph-get 2 kgraph-count 1 kgraph-entity-at 2})
 (def ^:private string-operations '{string-byte-length 1 string=? 2 string-concat 2})
+(def ^:private xml-operations '{xml-path-count 2 xml-path-attr 4})
 (def ^:private string-literal-byte-limit 4096)
 
 ;; Mirrors `kotoba.compiler.backend.wasm`'s `utf8` -- `.getBytes` is
@@ -180,6 +181,12 @@
         (do
           (when-not (= (get string-operations op) (count args))
             (reject! "runtime KIR string operation arity rejected" {:operation op}))
+          (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
+
+        (contains? xml-operations op)
+        (do
+          (when-not (= (get xml-operations op) (count args))
+            (reject! "runtime KIR XML operation arity rejected" {:operation op}))
           (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
 
         (contains? '#{kernel-load-u8 kernel-load-u8-4k kernel-load-u8-16k
