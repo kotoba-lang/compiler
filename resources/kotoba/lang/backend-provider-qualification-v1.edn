@@ -5,8 +5,7 @@
  :backends
   {:wasmtime {:manifest-gate :required
              :execution-status :pending
-             :gaps [:component-artifact-emission
-                    :closed-wit-world
+             :gaps [:standard32-canonical-core-names
                     :canonical-request-result-abi
                     :provider-component-composition
                     :component-runtime-semantic-vectors]

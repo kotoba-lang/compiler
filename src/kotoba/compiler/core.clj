@@ -9,6 +9,7 @@
             [kotoba.compiler.backend.wasm :as wasm]
             [kotoba.compiler.backend.wasm-typed :as typed]
             [kotoba.compiler.component-wit :as component-wit]
+            [kotoba.compiler.component-artifact :as component-artifact]
             [kotoba.compiler.backend.cljs :as cljs]
             [kotoba.script :as script]
             [kotoba.compiler.backend.x86-64 :as x86-64]
@@ -61,6 +62,18 @@
          checked (admission/check hir policy)
          kir (ir/lower hir)]
      (assoc (component-wit/emit kir) :admission checked))))
+
+(declare compile-source)
+
+(defn compile-component
+  "Compile the currently qualified scalar slice to a validated Component Model
+  binary. Structured/provider Canonical ABI lowering remains fail-closed."
+  ([source] (compile-component source {}))
+  ([source policy]
+   (let [core (compile-source source :wasm32-wasi-kotoba-v1 policy)
+         wit (component-wit/emit (:kir core))]
+     (assoc (component-artifact/package (:bytes core) (:kir core) wit)
+            :wit wit :admission (:admission core)))))
 
 (defn- compile-source*
   ([source target] (compile-source* source target {}))
