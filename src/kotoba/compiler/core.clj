@@ -8,6 +8,7 @@
             [kotoba.compiler.admission :as admission]
             [kotoba.compiler.backend.wasm :as wasm]
             [kotoba.compiler.backend.wasm-typed :as typed]
+            [kotoba.compiler.component-wit :as component-wit]
             [kotoba.compiler.backend.cljs :as cljs]
             [kotoba.script :as script]
             [kotoba.compiler.backend.x86-64 :as x86-64]
@@ -50,6 +51,16 @@
   ([source policy]
    (let [hir (frontend/analyze source)]
      {:hir hir :admission (admission/check hir policy)})))
+
+(defn compile-component-wit
+  "Compile source through checked HIR/KIR and emit its deterministic closed WIT
+  package. This does not claim to emit a Component binary."
+  ([source] (compile-component-wit source {}))
+  ([source policy]
+   (let [hir (frontend/analyze source)
+         checked (admission/check hir policy)
+         kir (ir/lower hir)]
+     (assoc (component-wit/emit kir) :admission checked))))
 
 (defn- compile-source*
   ([source target] (compile-source* source target {}))

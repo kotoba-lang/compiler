@@ -45,6 +45,10 @@ The compiler rejects `async func`, `future<T>`, and `stream<T>` unless the
 checked language effect declares async execution and supplies cancellation,
 deadline, item, and byte budgets. Selecting WASI 0.3 alone grants no authority.
 
+The first implemented stage is deterministic synchronous WIT generation from
+checked KIR (`kotoba.compiler.core/compile-component-wit`, ADR 0037). Component
+binary emission and Canonical ABI lowering remain separate pending stages.
+
 ## Official sources
 
 - https://github.com/WebAssembly/component-model
