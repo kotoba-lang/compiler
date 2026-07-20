@@ -25,7 +25,8 @@ new artifacts.
 
 Evidence:
 
-- kotoba-script PR #45, merge `ed4b697b4e5aeb4c66dde63dff5a9acdcfe1a90a`:
+- kotoba-script PRs #45 and #46, latest merge
+  `86aefe1475f1c92bdef8e9ed3ee6022c59caf3b7`:
   39 tests and 133 assertions.
 - Compiler reference, restricted JavaScript, and actual typed Wasm runtime
   agree on URDF-shaped count, attribute, and typed-absence vectors.

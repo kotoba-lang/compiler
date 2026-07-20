@@ -647,7 +647,7 @@
         compiled (compiler/compile-source source :js-kotoba-v1)
         encoded (.encodeToString (java.util.Base64/getEncoder)
                                  (.getBytes ^String (:source compiled) "UTF-8"))
-        xml "<robot><link name=\"base\"/><link name=\"tip\"/></robot>"
+        xml "<?xml version=\"1.0\" encoding=\"utf-8\"?><robot><link name=\"base\"/><link name=\"tip\"/></robot>"
         probe (str "import('data:text/javascript;base64," encoded
                    "').then(m=>{const x=m.instantiateKotoba({}),xml=" (pr-str xml) ";"
                    "const tip=x['link-name'](xml,1n),missing=x['link-name'](xml,2n);"

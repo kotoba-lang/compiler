@@ -424,7 +424,7 @@ function createTypedRuntime(abi) {
     comments();
     if (text.startsWith("<?xml", cursor)) {
       const end = text.indexOf("?>", cursor + 5);
-      if (end < 0 || !/^<\?xml\s+version=(?:"1\.[01]"|'1\.[01]')(?:\s+encoding=(?:"UTF-8"|'UTF-8'))?\s*\?>$/u.test(text.slice(cursor, end + 2)))
+      if (end < 0 || !/^<\?xml\s+version=(?:"1\.[01]"|'1\.[01]')(?:\s+encoding=(?:"(?:UTF-8|utf-8)"|'(?:UTF-8|utf-8)'))?\s*\?>$/u.test(text.slice(cursor, end + 2)))
         reject("invalid-xml", "XML declaration is invalid");
       cursor = end + 2;
     }

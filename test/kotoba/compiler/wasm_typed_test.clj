@@ -84,7 +84,7 @@
          (defn count-links [xml :string] :i64 (xml-path-count xml \"robot/link\"))
          (defn link-name [xml :string index :i64] [:option :string]
            (xml-path-attr xml \"robot/link\" index \"name\"))"
-        xml "<robot><link name=\"base\"/><link name=\"tip\"/></robot>"
+        xml "<?xml version=\"1.0\" encoding=\"utf-8\"?><robot><link name=\"base\"/><link name=\"tip\"/></robot>"
         compiled (compiler/compile-source source :wasm32-browser-kotoba-v1)
         probe (node-probe
                compiled

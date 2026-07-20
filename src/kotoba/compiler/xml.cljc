@@ -122,7 +122,7 @@
           (when (nil? end) (trap! :invalid-xml-declaration))
           (let [declaration (subs text @cursor (+ end 2))]
             (when-not (re-matches
-                       #"<\?xml\s+version=(?:\"1\.[01]\"|'1\.[01]')(?:\s+encoding=(?:\"UTF-8\"|'UTF-8'))?\s*\?>"
+                       #"<\?xml\s+version=(?:\"1\.[01]\"|'1\.[01]')(?:\s+encoding=(?:\"(?:UTF-8|utf-8)\"|'(?:UTF-8|utf-8)'))?\s*\?>"
                        declaration)
               (trap! :invalid-xml-declaration)))
           (vreset! cursor (+ end 2))))
