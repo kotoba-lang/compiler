@@ -12,6 +12,7 @@
            :gaps [:typed-provider-syscall-abi :request-result-host-codec]
            :evidence {}}
   :cljs {:manifest-gate :required
-         :execution-status :pending
-         :gaps [:full-i64-structured-values]
-         :evidence {}}}}
+         :execution-status :qualified
+         :gaps []
+         :evidence {:runtime-boundary "kotoba.compiler.backend-cljs-test/real-nbb-round-trips-full-i64-provider-values"
+                    :semantic-vectors "kotoba.compiler.backend-cljs-test/typed-provider-dispatch-runs-all-application-kit-contracts"}}}}

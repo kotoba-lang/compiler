@@ -18,6 +18,7 @@
   hand before this commit; see ADR-2607151500."
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.java.shell :as shell]
+            [clojure.tools.reader :as reader]
             [kotoba.compiler.core :as compiler]
             [kotoba.compiler.provider.clock :as clock]
             [kotoba.compiler.provider.http :as http]
@@ -31,6 +32,10 @@
   ([source] (compiler/compile-source source :cljs-kotoba-v1))
   ([source policy] (compiler/compile-source source :cljs-kotoba-v1 policy)))
 
+(defn- read-generated [source-text]
+  (reader/read-string {:read-cond :allow :features #{:clj}}
+                      (str "(" source-text ")")))
+
 (defn- eval-in-fresh-ns
   "Reads and evals every top-level form EXCEPT the emitted `(ns ...)` form
   (a real cljs host would `require` the emitted namespace by name; here we
@@ -39,7 +44,7 @@
   fuel atom must not leak between tests)."
   [source-text]
   (let [ns-sym (gensym "kotoba-cljs-eval-test-ns-")
-        forms (read-string (str "(" source-text ")"))
+        forms (read-generated source-text)
         target-ns (create-ns ns-sym)]
     (binding [*ns* target-ns]
       (clojure.core/refer-clojure)
@@ -55,7 +60,7 @@
 
 (deftest emit-produces-readable-multi-form-cljs-source
   (let [{:keys [source]} (compile-cljs "(defn main [] (+ 1 2))")
-        forms (read-string (str "(" source ")"))]
+        forms (read-generated source)]
     (is (= '(ns kotoba.compiled.generated) (first forms)))
     (is (some #(and (seq? %) (= 'defn (first %)) (= 'main (second %))) forms))))
 
@@ -314,6 +319,45 @@
     (let [execution (shell/sh "npx" "nbb" (.getPath script))]
       (is (zero? (:exit execution)) (:err execution))
       (is (= "typed-provider-nbb-ok\n" (:out execution))))))
+
+(deftest real-nbb-round-trips-full-i64-provider-values
+  (let [request-type [:record :demo.i64/request [[:minimum :i64] [:maximum :i64]]]
+        result-type [:record :demo.i64/result [[:minimum :i64] [:maximum :i64]]]
+        source (str "(ns demo.i64 (:export [invoke]) (:capabilities #{:http/post}))"
+                    (typed-function "invoke" ":http/post" request-type result-type))
+        compiled (compile-cljs source {:allow #{[:cap/call 4]}})
+        script (doto (java.io.File/createTempFile "kotoba-typed-i64-" ".cljs")
+                 (.deleteOnExit))]
+    (spit script
+          (str (:source compiled) "\n"
+               "(def minimum (js/BigInt \"-9223372036854775808\"))\n"
+               "(def maximum (js/BigInt \"9223372036854775807\"))\n"
+               "(def below (js/BigInt \"-9223372036854775809\"))\n"
+               "(def above (js/BigInt \"9223372036854775808\"))\n"
+               "(def request-type " (pr-str request-type) ")\n"
+               "(def result-type " (pr-str result-type) ")\n"
+               "(set-typed-providers! {:allow #{4} :providers {4 "
+               "{:request-type request-type :result-type result-type "
+               ":invoke (fn [request] [result-type (nth request 1) (nth request 2)])}}})\n"
+               "(when-not (= [result-type minimum maximum] "
+               "(invoke [request-type minimum maximum])) "
+               "(throw (ex-info \"full-i64-round-trip\" {})))\n"
+               "(doseq [invalid [below above]] "
+               "(try (invoke [request-type invalid maximum]) "
+               "(throw (ex-info \"out-of-range-admitted\" {})) "
+               "(catch :default error "
+               "(when (= \"out-of-range-admitted\" (ex-message error)) (throw error)))))\n"
+               "(set-typed-providers! {:allow #{4} :providers {4 "
+               "{:request-type request-type :result-type result-type "
+               ":invoke (fn [_] [result-type above maximum])}}})\n"
+               "(try (invoke [request-type minimum maximum]) "
+               "(throw (ex-info \"out-of-range-result-admitted\" {})) "
+               "(catch :default error "
+               "(when (= \"out-of-range-result-admitted\" (ex-message error)) (throw error))))\n"
+               "(println \"typed-provider-full-i64-ok\")\n"))
+    (let [execution (shell/sh "npx" "nbb" (.getPath script))]
+      (is (zero? (:exit execution)) (:err execution))
+      (is (= "typed-provider-full-i64-ok\n" (:out execution))))))
 
 (deftest cljs-typed-admission-remains-narrow-to-boundaries
   (is (thrown-with-msg?

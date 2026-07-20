@@ -80,6 +80,17 @@
 (def ^:private comparison-ops '#{= < > <= >=})
 (def ^:private wraparound-arith-ops '#{+ - *})
 
+(def ^:private i64-predicate-source
+  "(defn- kotoba$i64-value? [value]
+  #?(:clj (and (integer? value)
+                (<= -9223372036854775808 value 9223372036854775807))
+     :cljs (or (and (number? value) (js/Number.isSafeInteger value))
+               (and (some? value)
+                    (try (= (.-constructor value) js/BigInt)
+                         (catch :default _ false))
+                    (<= (js/BigInt \"-9223372036854775808\") value
+                        (js/BigInt \"9223372036854775807\"))))))")
+
 (defn- lower-expr [form]
   (cond
     (integer? form) form
@@ -218,9 +229,7 @@
                     (kotoba$typed-fail! "invalid-typed-value" {:reason :value-bounds}))
                   (cond
                     (= descriptor :i64)
-                    (when-not (and (integer? item)
-                                   (<= (- kotoba$max-safe-integer)
-                                       item kotoba$max-safe-integer))
+                    (when-not (kotoba$i64-value? item)
                       (kotoba$typed-fail! "invalid-typed-value" {:expected :i64}))
                     (or (= descriptor :f32) (= descriptor :f64))
                     (when-not (number? item)
@@ -366,9 +375,10 @@
                        (:functions kir))
         schemas (or (:schemas kir) {})
         contracts (reference-runtime/capability-contracts kir)
-        forms (concat [(list 'ns default-ns-name)
-                       (list 'def 'kotoba$schemas (list 'quote schemas))
+        forms (concat [(list 'def 'kotoba$schemas (list 'quote schemas))
                        (list 'def 'kotoba$typed-contracts (list 'quote contracts))]
                       prelude-forms
                        [(list* 'declare fn-names)] fn-forms)]
-    (str/join "\n\n" (map pr-str forms))))
+    (str/join "\n\n"
+              (concat [(pr-str (list 'ns default-ns-name)) i64-predicate-source]
+                      (map pr-str forms)))))
