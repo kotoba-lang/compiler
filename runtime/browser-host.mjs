@@ -299,11 +299,7 @@ function createTypedRuntime(abi) {
   const trustDescriptor = descriptor => {
     if (!Array.isArray(descriptor) || trustedDescriptors.has(descriptor)) return;
     trustedDescriptors.add(descriptor);
-    for (const item of descriptor) {
-      if (Array.isArray(item) && item.length === 2 && typeof item[0] === "string")
-        trustDescriptor(item[1]);
-      else trustDescriptor(item);
-    }
+    for (const item of descriptor) trustDescriptor(item);
   };
   abi.descriptors.forEach(trustDescriptor);
   const descriptorAt = id => {
