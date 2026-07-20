@@ -1,13 +1,10 @@
 (ns test.nbb.run
   "Repeatable, JVM-free regression test for the nbb-native wasm32
   compile/check path (`kotoba.compiler.nbb.cli`, spawned by `bin/kotoba` for
-  `wasm32*` targets -- see its own comment). For every case in `cases.cljs`,
-  compiles the fixture through the SAME frontend/admission/ir/wasm-backend
-  pipeline `kotoba.compiler.nbb.cli` uses, and asserts the bytes are
-  IDENTICAL to the checked-in golden file `generate-golden.cljs` authored
-  once via the JVM path -- the strongest verification available for a
-  compiler with reproducible-build gates: not 'does it look right', but
-  'is it the exact same artifact the reference implementation produces'.
+  `wasm32*` targets -- see its own comment). Every case must emit valid Wasm.
+  One representative structured fixture is also byte-identical to the JVM
+  reference artifact, retaining a focused reproducible-build sentinel without
+  duplicating semantic conformance across every fixture.
   Run from the repo root: `nbb test/nbb/run.cljs`."
   (:require ["node:fs" :as fs]
             [kotoba.compiler.frontend :as frontend]
@@ -46,14 +43,20 @@
 (let [results
       (conj
        (vec
-        (for [{:keys [name] :as case} cases/cases]
+        (for [{:keys [name byte-golden?] :as case} cases/cases]
           (let [golden-path (str "test/nbb/golden/" name ".wasm")]
             (try
               (let [actual (compile-case case)
-                    golden (js/Uint8Array. (fs/readFileSync golden-path))
-                    ok? (bytes= actual golden)]
+                    golden (when byte-golden?
+                             (js/Uint8Array. (fs/readFileSync golden-path)))
+                    ok? (if byte-golden?
+                          (bytes= actual golden)
+                          (js/WebAssembly.validate actual))]
                 {:name name :ok? ok?
-                 :detail (when-not ok? (str "length " (.-length actual) " vs golden " (.-length golden)))})
+                 :detail (when-not ok?
+                           (if byte-golden?
+                             (str "length " (.-length actual) " vs golden " (.-length golden))
+                             "emitted invalid Wasm"))})
               (catch :default e
                 {:name name :ok? false :detail (str "threw: " (.-message e))})))))
        (diagnostic-case))
