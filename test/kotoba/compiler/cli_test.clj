@@ -2,6 +2,7 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
+            [clojure.tools.reader :as reader]
             [clojure.test :refer [deftest is testing]]
             [kotoba.compiler.cli :as cli]
             [kotoba.compiler.frontend :as frontend])
@@ -229,7 +230,8 @@
         ;; the written text must be genuinely readable cljs source, not an
         ;; EDN-escaped string literal (what write-edn!'s pr-str would have
         ;; produced instead)
-        (is (seq? (read-string (str "(" written ")"))))))))
+        (is (seq? (reader/read-string {:read-cond :allow :features #{:cljs}}
+                                      (str "(" written ")"))))))))
 
 (deftest compile-cljs-target-default-output-extension-is-cljs
   (let [source (temp-kotoba-source! "(defn main [] 42)")
