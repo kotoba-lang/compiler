@@ -739,6 +739,15 @@
                     (= op 'string-byte-length)
                     (concat (i32-const (descriptor-id :string)) (emit* (first args) env)
                             [0x10 (get intrinsic-indices 'typed-count)])
+                    (= op 'string-concat)
+                    (concat (i32-const (descriptor-id :string))
+                            (emit* (first args) env) (emit* (second args) env)
+                            [0x10 (get intrinsic-indices 'typed-string-concat)])
+                    (= op 'string-replace-all)
+                    (concat (i32-const (descriptor-id :string))
+                            (emit* (first args) env) (emit* (second args) env)
+                            (emit* (nth args 2) env)
+                            [0x10 (get intrinsic-indices 'typed-string-replace-all)])
                     (= op 'keyword-from-string)
                     (concat (i32-const (descriptor-id :keyword)) (emit* (first args) env)
                             [0x10 (get intrinsic-indices 'typed-keyword-from-string)])
@@ -1159,6 +1168,8 @@
                                             '#{string-index-new string-index-count
                                                string-index-contains string-index-get
                                                string-index-assoc})
+        has-string-concat? (uses-operation? functions '#{string-concat})
+        has-string-replace? (uses-operation? functions '#{string-replace-all})
         has-disjoint-set? (uses-operation? functions
                                             '#{disjoint-set-i64-new disjoint-set-i64-count
                                                disjoint-set-i64-union})
@@ -1189,7 +1200,14 @@
                          ['typed-get-ref "kotoba:typed" "get-ref" [0x60 3 0x7f 0x6f 0x7f 1 0x6f]]
                          ['typed-count "kotoba:typed" "count" [0x60 2 0x7f 0x6f 1 0x7e]]
                          ['typed-bool "kotoba:typed" "bool" [0x60 1 0x7f 1 0x6f]]
-                         ['typed-equal "kotoba:typed" "equal" [0x60 3 0x7f 0x6f 0x6f 1 0x7f]]
+                         ['typed-equal "kotoba:typed" "equal" [0x60 3 0x7f 0x6f 0x6f 1 0x7f]]]
+                         (when has-string-concat?
+                           [['typed-string-concat "kotoba:typed" "string-concat"
+                             [0x60 3 0x7f 0x6f 0x6f 1 0x6f]]])
+                         (when has-string-replace?
+                           [['typed-string-replace-all "kotoba:typed" "string-replace-all"
+                             [0x60 4 0x7f 0x6f 0x6f 0x6f 1 0x6f]]])
+                         [
                          ['typed-assoc-i64 "kotoba:typed" "assoc-i64" [0x60 4 0x7f 0x6f 0x7f 0x7e 1 0x6f]]
                          ['typed-assoc-f64 "kotoba:typed" "assoc-f64" [0x60 4 0x7f 0x6f 0x7f 0x7c 1 0x6f]]
                          ['typed-assoc-f32 "kotoba:typed" "assoc-f32" [0x60 4 0x7f 0x6f 0x7f 0x7d 1 0x6f]]

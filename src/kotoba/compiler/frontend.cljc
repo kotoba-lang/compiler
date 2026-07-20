@@ -142,7 +142,8 @@
     document-i64-value 1 document-f64-value 1})
 (def document-variadic-operations '#{document-vector document-map})
 (def sequencing-operations '#{do})
-(def string-operations '{string-byte-length 1 string=? 2 string-concat 2 keyword-from-string 1})
+(def string-operations '{string-byte-length 1 string=? 2 string-concat 2
+                         string-replace-all 3 keyword-from-string 1})
 (def xml-operations '{xml-path-count 2 xml-path-attr 4})
 (def decimal-operations '{decimal-f64-parse 1 decimal-f64x3-parse 1})
 (def f64-operations
@@ -2011,6 +2012,11 @@
           :i64)
 
       (= op 'string-concat)
+      (do (doseq [[arg type] (map vector args types)]
+            (require-expression-type! type :string arg))
+          :string)
+
+      (= op 'string-replace-all)
       (do (doseq [[arg type] (map vector args types)]
             (require-expression-type! type :string arg))
           :string)
