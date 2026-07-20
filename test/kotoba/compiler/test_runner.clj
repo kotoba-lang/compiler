@@ -40,6 +40,7 @@
             [kotoba.compiler.llm-provider-test]
             [kotoba.compiler.storage-provider-test]
             [kotoba.compiler.clock-provider-test]
+            [kotoba.compiler.log-provider-test]
             [kotoba.compiler.wasm-typed-test]
             [kotoba.compiler.value-test]
             [kotoba.compiler.verifier-profile-test]))
@@ -79,6 +80,7 @@
                                           'kotoba.compiler.llm-provider-test
                                           'kotoba.compiler.storage-provider-test
                                           'kotoba.compiler.clock-provider-test
+                                          'kotoba.compiler.log-provider-test
                                           'kotoba.compiler.wasm-typed-test
                                           'kotoba.compiler.native-executor-test
                                           'kotoba.compiler.receipt-test
