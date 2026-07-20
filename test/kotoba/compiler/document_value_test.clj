@@ -87,7 +87,7 @@
                   (reduce (fn [item _] ["vector" [item]]) ["null"] (range 9)))))))
 
 (def vector-source
-  "(ns document.vector (:export [main first-item kind key-name entry changed tail removed missing missing-entry bad-assoc bad-drop]))
+  "(ns document.vector (:export [main first-item kind doc-kind bool-kind key-name entry changed tail removed missing missing-entry bad-assoc bad-drop]))
    (defn main [] :i64 (first-item))
    (defn items [] :document (document-vector (document-i64 1) (document-i64 2)))
    (defn first-item [] :i64
@@ -98,6 +98,9 @@
    (defn kind [] :keyword
      (option-value-of [:option :keyword]
        (document-keyword-value (document-keyword :fixed)) :missing))
+   (defn doc-kind [value :document] :keyword (document-kind value))
+   (defn bool-kind [] :bool
+     (if (= (document-kind (document-bool true)) :bool) true false))
    (defn key-name [] :string (keyword-name :rdf/type))
    (defn entry [] :document
      (option-value-of [:option :document]
@@ -125,6 +128,8 @@
         observe (fn [execute]
                   (is (= 1 (execute 'first-item)))
                   (is (= :fixed (execute 'kind)))
+                  (is (= :vector (ir/execute kir 'doc-kind [["vector" []]])))
+                  (is (true? (execute 'bool-kind)))
                   (is (= "type" (execute 'key-name)))
                   (is (= ["vector" [["keyword" :a] ["string" "first"]]]
                          (execute 'entry)))
@@ -136,15 +141,19 @@
                   (is (false? (execute 'missing-entry))))
         js-probe (script-probe
                   script
-                  (str "if(x['first-item']()!==1n||x.kind()!==':fixed'||x['key-name']()!=='type'||x.missing()!==false||x['missing-entry']()!==false)process.exit(2);"
+                  (str "if(x['first-item']()!==1n||x.kind()!==':fixed'||x['bool-kind']()!==true||x['key-name']()!=='type'||x.missing()!==false||x['missing-entry']()!==false)process.exit(2);"
+                       "for(const [v,k] of [[['null'],':null'],[['bool',true],':bool'],[['i64',1n],':i64'],[['f64',1],':f64'],[['string','x'],':string'],[['keyword',':x'],':keyword'],[['vector',[]],':vector'],[['map',[]],':map']])if(x['doc-kind'](v)!==k)process.exit(6);"
                        "const e=x.entry();if(e[0]!=='vector'||e[1][0][1]!==':a'||e[1][1][1]!=='first')process.exit(5);"
                        "const t=x.tail(),r=x.removed();if(t[1].length!==2||t[1][0][1]!==7n||t[1][1][1]!==9n||r[1].length!==2||r[1][1][1]!==9n)process.exit(3);"
+                       "for(const bad of [{},['map',[[':b',['null']],[':a',['null']]]]]){let rejected=false;try{x['doc-kind'](bad)}catch(e){rejected=true}if(!rejected)process.exit(7)}"
                        "for(const name of ['bad-assoc','bad-drop']){let rejected=false;try{x[name]()}catch(e){rejected=true}if(!rejected)process.exit(4)}"))
         wasm-probe (node-probe
                     wasm
-                    (str "const x=h.instance.exports;if(x['first-item']()!==1n||x.kind()!==':fixed'||x['key-name']()!=='type'||x.missing()!==false||x['missing-entry']()!==false)process.exit(2);"
+                    (str "const x=h.instance.exports;if(x['first-item']()!==1n||x.kind()!==':fixed'||x['bool-kind']()!==true||x['key-name']()!=='type'||x.missing()!==false||x['missing-entry']()!==false)process.exit(2);"
+                         "for(const [v,k] of [[['null'],':null'],[['bool',true],':bool'],[['i64',1n],':i64'],[['f64',1],':f64'],[['string','x'],':string'],[['keyword',':x'],':keyword'],[['vector',[]],':vector'],[['map',[]],':map']])if(x['doc-kind'](h.typedValues.document(v))!==k)process.exit(6);"
                          "const e=x.entry();if(e[0]!=='vector'||e[1][0][1]!==':a'||e[1][1][1]!=='first')process.exit(5);"
                          "const t=x.tail(),r=x.removed();if(t[1].length!==2||t[1][0][1]!==7n||t[1][1][1]!==9n||r[1].length!==2||r[1][1][1]!==9n)process.exit(3);"
+                         "for(const bad of [{},['map',[[':b',['null']],[':a',['null']]]]]){let rejected=false;try{x['doc-kind'](bad)}catch(e){rejected=true}if(!rejected)process.exit(7)}"
                          "for(const name of ['bad-assoc','bad-drop']){let rejected=false;try{x[name]()}catch(e){rejected=true}if(!rejected)process.exit(4)}"))]
     (observe #(ir/execute kir % []))
     (is (thrown? clojure.lang.ExceptionInfo (ir/execute kir 'bad-assoc [])))

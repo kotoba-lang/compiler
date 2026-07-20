@@ -67,6 +67,7 @@ const ALLOWED_IMPORTS = new Set([
   "kotoba:typed/document-f64/function",
   "kotoba:typed/document-string/function",
   "kotoba:typed/document-keyword/function",
+  "kotoba:typed/document-kind/function",
   "kotoba:typed/document-contains/function",
   "kotoba:typed/document-vector-at/function",
   "kotoba:typed/document-map-entry-at/function",
@@ -1226,6 +1227,11 @@ function createTypedRuntime(abi, typedCapCall, allow) {
       if (descriptorAt(descriptorId) !== documentDescriptor)
         reject("invalid-typed-operation", "document descriptor required");
       return admitDocument(["keyword", item]);
+    },
+    "document-kind"(descriptorId, value) {
+      if (descriptorAt(descriptorId) !== documentDescriptor)
+        reject("invalid-typed-operation", "document descriptor required");
+      return `:${assertDocument(value)[0]}`;
     },
     "document-contains"(descriptorId, value, key) {
       if (descriptorAt(descriptorId) !== documentDescriptor)

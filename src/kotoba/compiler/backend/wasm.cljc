@@ -849,6 +849,9 @@
                     (= op 'document-count)
                     (concat (i32-const (descriptor-id :document)) (emit* (first args) env)
                             [0x10 (get intrinsic-indices 'typed-count)])
+                    (= op 'document-kind)
+                    (concat (i32-const (descriptor-id :document)) (emit* (first args) env)
+                            [0x10 (get intrinsic-indices 'typed-document-kind)])
                     (contains? '#{document-vector-at document-map-entry-at document-vector-assoc
                                   document-vector-conj document-vector-drop
                                   document-vector-remove} op)
@@ -1181,7 +1184,7 @@
         has-document? (uses-operation? functions
                                        '#{document-null document-bool document-i64 document-f64
                                           document-string document-keyword document-vector document-map
-                                          document-count document-vector-at document-map-entry-at document-vector-assoc
+                                          document-count document-kind document-vector-at document-map-entry-at document-vector-assoc
                                           document-vector-conj document-vector-drop document-vector-remove
                                           document-contains document-get document-assoc
                                           document-dissoc document-merge document-string-value
@@ -1257,6 +1260,7 @@
                             ['typed-document-f64 "kotoba:typed" "document-f64" [0x60 2 0x7f 0x7c 1 0x6f]]
                             ['typed-document-string "kotoba:typed" "document-string" [0x60 2 0x7f 0x6f 1 0x6f]]
                             ['typed-document-keyword "kotoba:typed" "document-keyword" [0x60 2 0x7f 0x6f 1 0x6f]]
+                            ['typed-document-kind "kotoba:typed" "document-kind" [0x60 2 0x7f 0x6f 1 0x6f]]
                             ['typed-document-vector-at "kotoba:typed" "document-vector-at" [0x60 3 0x7f 0x6f 0x7e 1 0x6f]]
                             ['typed-document-map-entry-at "kotoba:typed" "document-map-entry-at" [0x60 3 0x7f 0x6f 0x7e 1 0x6f]]
                             ['typed-document-vector-assoc "kotoba:typed" "document-vector-assoc" [0x60 4 0x7f 0x6f 0x7e 0x6f 1 0x6f]]
