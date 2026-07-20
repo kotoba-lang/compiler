@@ -2664,6 +2664,10 @@
   [value]
   (cond
     (kotoba-integer? value) true
+    ;; Function-body f64 literals already lower through canonical IEEE-754
+    ;; bits. A top-level constant is only lexically substituted into that same
+    ;; path, so admitting a closed Double here adds no evaluation authority.
+    (value/f64-value? value) true
     (string? value) (try
                       (value/bounded-string! value value/string-literal-byte-limit)
                       true
