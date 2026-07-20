@@ -283,8 +283,22 @@
       (throw (ex-info "vector item is not a signed i64" {:phase :value}))))
   value)
 
+(defn bounded-vector-f64!
+  "Validate a bounded homogeneous IEEE-754 binary64 vector."
+  [value]
+  (when-not (vector? value)
+    (throw (ex-info "value is not a vector-f64" {:phase :value :value value})))
+  (when (> (count value) vector-item-limit)
+    (throw (ex-info "vector-f64 exceeds item limit"
+                    {:phase :value :items (count value) :limit vector-item-limit})))
+  (doseq [item value]
+    (when-not (f64-value? item)
+      (throw (ex-info "vector-f64 item is not f64" {:phase :value}))))
+  value)
+
 (def ^:private leaf-value-types
-  #{:i64 :f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64})
+  #{:i64 :f32 :f64 :string :keyword :map :bool :option-i64 :result-i64
+    :vector-i64 :vector-f64})
 
 (defn validate-value-type!
   ([type] (validate-value-type! type 0 (volatile! 0)))
@@ -467,6 +481,7 @@
      :option-i64 (bounded-option-i64! value)
      :result-i64 (bounded-result-i64! value)
      :vector-i64 (bounded-vector-i64! value)
+     :vector-f64 (bounded-vector-f64! value)
      (cond
        (= :result (first type))
        (do

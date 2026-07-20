@@ -91,6 +91,7 @@
     (= type :option-i64) '(option-none)
     (= type :result-i64) '(result-ok 0)
     (= type :vector-i64) '(vector-i64)
+    (= type :vector-f64) '(vector-f64)
     (and (vector? type) (= :result (first type)))
     (list 'result-ok-of type (stub-value (second type)))
     (and (vector? type) (= :option (first type)))

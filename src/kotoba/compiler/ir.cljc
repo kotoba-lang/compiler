@@ -47,7 +47,9 @@
      typed-map-new typed-map-count typed-map-contains typed-map-get
      typed-map-entry-at typed-map-assoc typed-map-dissoc typed-map-equal
      record-new record-get record-assoc record-equal
-     vector-count vector-get vector-at vector-drop vector-assoc vector-conj})
+     vector-count vector-get vector-at vector-drop vector-assoc vector-conj
+     vector-f64-new vector-f64-count vector-f64-get vector-f64-at
+     vector-f64-drop vector-f64-assoc vector-f64-conj})
 
 (defn only-string-typed-features? [hir]
   (letfn [(walk [form]
@@ -384,6 +386,13 @@
       (value/bounded-vector-i64! runtime-value)
       (catch #?(:clj Exception :cljs :default) error
         (trap! :invalid-vector-i64-value
+               {:position position :message (ex-message error)})))
+
+    :vector-f64
+    (try
+      (value/bounded-vector-f64! runtime-value)
+      (catch #?(:clj Exception :cljs :default) error
+        (trap! :invalid-vector-f64-value
                {:position position :message (ex-message error)})))
 
     (try
@@ -1163,6 +1172,70 @@
             (trap! :vector-too-large {:limit value/vector-item-limit}))
           (value/bounded-vector-i64! (conj items item)))
 
+        (= op 'vector-f64-new)
+        (value/bounded-vector-f64!
+         (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args))
+
+        (= op 'vector-f64-count)
+        (let [items (value/bounded-vector-f64!
+                     (eval-expr (first args) env functions fuel heap call-stack cap-call))]
+          #?(:clj (long (count items)) :cljs (i64/->bigint (count items))))
+
+        (= op 'vector-f64-get)
+        (let [[items-form index-form fallback-form] args
+              items (value/bounded-vector-f64!
+                     (eval-expr items-form env functions fuel heap call-stack cap-call))
+              index (eval-expr index-form env functions fuel heap call-stack cap-call)]
+          (if (and #?(:clj (integer? index) :cljs (i64/bigint-value? index))
+                   (not (neg? index)) (< index (count items)))
+            (nth items #?(:clj index :cljs (js/Number index)))
+            (value/bounded-typed-value!
+             :f64 (eval-expr fallback-form env functions fuel heap call-stack cap-call))))
+
+        (= op 'vector-f64-at)
+        (let [[items-form index-form] args
+              items (value/bounded-vector-f64!
+                     (eval-expr items-form env functions fuel heap call-stack cap-call))
+              index (eval-expr index-form env functions fuel heap call-stack cap-call)]
+          (when-not (and #?(:clj (integer? index) :cljs (i64/bigint-value? index))
+                         (not (neg? index)) (< index (count items)))
+            (trap! :vector-f64-index-out-of-range {:index index}))
+          (nth items #?(:clj index :cljs (js/Number index))))
+
+        (= op 'vector-f64-drop)
+        (let [[items-form count-form] args
+              items (value/bounded-vector-f64!
+                     (eval-expr items-form env functions fuel heap call-stack cap-call))
+              drop-count (eval-expr count-form env functions fuel heap call-stack cap-call)]
+          (when-not (and #?(:clj (integer? drop-count) :cljs (i64/bigint-value? drop-count))
+                         (not (neg? drop-count)) (<= drop-count (count items)))
+            (trap! :vector-f64-drop-out-of-range {:count drop-count}))
+          (value/bounded-vector-f64!
+           (subvec items #?(:clj drop-count :cljs (js/Number drop-count)))))
+
+        (= op 'vector-f64-assoc)
+        (let [[items-form index-form item-form] args
+              items (value/bounded-vector-f64!
+                     (eval-expr items-form env functions fuel heap call-stack cap-call))
+              index (eval-expr index-form env functions fuel heap call-stack cap-call)
+              item (value/bounded-typed-value!
+                    :f64 (eval-expr item-form env functions fuel heap call-stack cap-call))]
+          (when-not (and #?(:clj (integer? index) :cljs (i64/bigint-value? index))
+                         (not (neg? index)) (< index (count items)))
+            (trap! :vector-f64-index-out-of-range {:index index}))
+          (value/bounded-vector-f64!
+           (assoc items #?(:clj index :cljs (js/Number index)) item)))
+
+        (= op 'vector-f64-conj)
+        (let [[items-form item-form] args
+              items (value/bounded-vector-f64!
+                     (eval-expr items-form env functions fuel heap call-stack cap-call))
+              item (value/bounded-typed-value!
+                    :f64 (eval-expr item-form env functions fuel heap call-stack cap-call))]
+          (when (>= (count items) value/vector-item-limit)
+            (trap! :vector-f64-too-large {:limit value/vector-item-limit}))
+          (value/bounded-vector-f64! (conj items item)))
+
         (contains? '#{kernel-load-u8 kernel-load-u8-4k kernel-load-u8-16k
                       kernel-store-u8 kernel-store-u8-4k
                       kernel-load-u32 kernel-store-u32} op)
@@ -1266,6 +1339,7 @@
          :option-i64 (value/bounded-option-i64! arg)
          :result-i64 (value/bounded-result-i64! arg)
          :vector-i64 (value/bounded-vector-i64! arg)
+         :vector-f64 (value/bounded-vector-f64! arg)
          (value/bounded-typed-value! type arg)))
      (let [invoke #(invoke-function function
                                     (mapv (fn [arg type]

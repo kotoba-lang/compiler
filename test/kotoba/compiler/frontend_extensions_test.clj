@@ -9,7 +9,8 @@
             [kotoba.compiler.core :as compiler]
             [kotoba.compiler.frontend :as frontend]
             [kotoba.compiler.ir :as ir]
-            [kotoba.compiler.target :as target]))
+            [kotoba.compiler.target :as target]
+            [kotoba.compiler.value :as value]))
 
 (defn- oracle [source]
   (let [kir (ir/lower (:hir (compiler/check-source source)))]
@@ -148,6 +149,47 @@
               (str "(defn main [] :vector-i64 (vector-i64 "
                    (clojure.string/join " " (range 129)) "))"))))
   (is (some? (rejection-message "(defn bad [] :vector-i64 (vector-i64 1 true))"))))
+
+(deftest bounded-vector-f64-has-owned-reference-and-web-semantics
+  (let [source "(ns pilot.vector-f64 (:export [make count-items lookup at update append drop-items]))
+                (defn make [] :vector-f64 (vector-f64 -0.0 ##NaN 1.5))
+                (defn count-items [value :vector-f64] :i64 (vector-f64-count value))
+                (defn lookup [value :vector-f64 index :i64 fallback :f64] :f64
+                  (vector-f64-get value index fallback))
+                (defn at [value :vector-f64 index :i64] :f64 (vector-f64-at value index))
+                (defn update [value :vector-f64 index :i64 item :f64] :vector-f64
+                  (vector-f64-assoc value index item))
+                (defn append [value :vector-f64 item :f64] :vector-f64
+                  (vector-f64-conj value item))
+                (defn drop-items [value :vector-f64 count :i64] :vector-f64
+                  (vector-f64-drop value count))"
+        checked (compiler/check-source source)
+        compiled (compiler/compile-source source :js-kotoba-v1)
+        kir (:kir compiled)
+        encoded (.encodeToString (java.util.Base64/getEncoder)
+                                 (.getBytes ^String (:source compiled) "UTF-8"))
+        probe (str "import('data:text/javascript;base64," encoded
+                   "').then(m=>{const x=m.instantiateKotoba({}),v=x.make();"
+                   "if(!Object.is(v[0],-0)||!Number.isNaN(v[1])||x['count-items'](v)!==3n)process.exit(2);"
+                   "const changed=x.update(v,2n,-0),appended=x.append(v,Infinity),dropped=x['drop-items'](v,2n);"
+                   "if(v[2]!==1.5||!Object.is(changed[2],-0)||appended[3]!==Infinity||dropped[0]!==1.5)process.exit(3);"
+                   "if(!Number.isNaN(x.lookup(v,1n,7))||x.lookup(v,99n,-2.5)!==-2.5)process.exit(4);"
+                   "try{x.at(v,-1n);process.exit(5)}catch(e){if(e.message!=='vector-f64-index-out-of-range')process.exit(6)}})")
+        result (shell/sh "node" "--input-type=module" "-e" probe)]
+    (is (= '(vector-f64-new (f64-from-bits -9223372036854775808)
+                            (f64-from-bits 9221120237041090560)
+                            (f64-from-bits 4609434218613702656))
+           (get-in checked [:hir :functions 0 :body])))
+    (let [value (ir/execute kir 'make [])]
+      (is (= 3 (count value)))
+      (is (= (value/f64-to-i64-bits -0.0) (value/f64-to-i64-bits (first value))))
+      (is (Double/isNaN (second value))))
+    (is (= -2.5 (ir/execute kir 'lookup [[-0.0 ##NaN 1.5] 99 -2.5])))
+    (is (= 16384 (get-in compiled [:manifest :kotoba.artifact/limits :vector-f64-items])))
+    (is (zero? (:exit result)) (:err result)))
+  (is (some? (rejection-message "(defn bad [] :vector-f64 (vector-f64 1.0 2))")))
+  (is (some? (rejection-message
+              "(defn bad [v :vector-f64] :f64 (vector-f64-get v 0 1))"))))
 
 ;; ───────────────────────── keyword + map + get + assoc ─────────────────────────
 

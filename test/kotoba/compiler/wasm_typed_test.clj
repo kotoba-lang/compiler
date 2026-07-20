@@ -306,8 +306,35 @@
                     "()=>h.typedValues.vectorI64([1n,2]),"
                     "()=>x['count-items'](Object.freeze([v[0],10n,20n,30n]))]){"
                     "let rejected=false;try{run()}catch(e){rejected=true}if(!rejected)process.exit(4)}"))]
-    (is (= 4 typed/abi-version))
+    (is (= 5 typed/abi-version))
     (is (some #{:vector-i64} (typed/descriptor-table (:kir compiled))))
+    (is (zero? (:exit probe)) (:err probe))))
+
+(deftest bounded-vector-f64-has-sealed-wasm-runtime-parity
+  (let [source
+        (str "(ns typed.vector-f64 (:export [main make count-items lookup lazy-lookup at update append drop-items]))\n"
+             "(defn main [] :i64 42)\n"
+             "(defn make [] :vector-f64 (vector-f64 -0.0 ##NaN 1.5))\n"
+             "(defn count-items [items :vector-f64] :i64 (vector-f64-count items))\n"
+             "(defn lookup [items :vector-f64 index :i64 fallback :f64] :f64 (vector-f64-get items index fallback))\n"
+             "(defn lazy-lookup [items :vector-f64] :f64 "
+             "  (vector-f64-get items 0 (i64-to-f64-checked (f64-to-i64-checked ##NaN))))\n"
+             "(defn at [items :vector-f64 index :i64] :f64 (vector-f64-at items index))\n"
+             "(defn update [items :vector-f64 index :i64 item :f64] :vector-f64 (vector-f64-assoc items index item))\n"
+             "(defn append [items :vector-f64 item :f64] :vector-f64 (vector-f64-conj items item))\n"
+             "(defn drop-items [items :vector-f64 count :i64] :vector-f64 (vector-f64-drop items count))")
+        compiled (compiler/compile-source source :wasm32-kotoba-v1)
+        probe (node-probe
+               compiled
+               (str "const x=h.instance.exports,v=x.make();"
+                    "if(x['count-items'](v)!==3n||!Object.is(x.at(v,0n),-0)||!Number.isNaN(x.at(v,1n))||x.at(v,2n)!==1.5)process.exit(2);"
+                    "if(!Object.is(x['lazy-lookup'](h.typedValues.vectorF64([-0])), -0)||x.lookup(v,99n,-2.5)!==-2.5)process.exit(3);"
+                    "const updated=x.update(v,2n,-0),appended=x.append(v,Infinity),dropped=x['drop-items'](v,2n);"
+                    "if(!Object.is(x.at(updated,2n),-0)||x.at(appended,3n)!==Infinity||x.at(dropped,0n)!==1.5)process.exit(4);"
+                    "for(const run of [()=>x.at(v,-1n),()=>x.update(v,3n,0),()=>x['drop-items'](v,4n),"
+                    "()=>h.typedValues.vectorF64(Array(16385).fill(0)),()=>h.typedValues.vectorF64([0n])]){"
+                    "let rejected=false;try{run()}catch(e){rejected=true}if(!rejected)process.exit(5)}"))]
+    (is (some #{:vector-f64} (typed/descriptor-table (:kir compiled))))
     (is (zero? (:exit probe)) (:err probe))))
 
 (deftest bounded-typed-map-has-real-wasm-runtime-parity

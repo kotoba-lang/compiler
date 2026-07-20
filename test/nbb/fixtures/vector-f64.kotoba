@@ -1,0 +1,14 @@
+(ns nbb.vector-f64
+  (:export [main make at update]))
+
+(defn main [] :i64
+  (vector-f64-count (vector-f64 -0.0 ##NaN 1.5)))
+
+(defn make [] :vector-f64
+  (vector-f64 -0.0 ##NaN 1.5))
+
+(defn at [items :vector-f64 index :i64] :f64
+  (vector-f64-at items index))
+
+(defn update [items :vector-f64 index :i64 item :f64] :vector-f64
+  (vector-f64-assoc items index item))
