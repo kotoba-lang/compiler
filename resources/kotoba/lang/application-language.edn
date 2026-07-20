@@ -29,6 +29,10 @@
   :platforms [:clj :cljs]
   :input :checked-kir
   :role :normative-executable-semantics}
+ :provider-conformance
+ {:manifest :kotoba.provider-conformance/v1
+  :structural-qualification :required
+  :semantic-kit-vectors :required}
  :backend-qualification
  {:wasm-aot :conformance-required
   :native-aot :conformance-required
