@@ -16,7 +16,7 @@
   :provider-keys [:request-type :result-type :invoke]
   :contract-match :exact
   :kits {:state {:version 1 :status :reference-implemented}
-         :ui {:status :specified-pending}
+         :ui {:version 1 :status :reference-implemented}
          :http {:status :specified-pending}
          :llm {:status :specified-pending}
          :storage {:status :specified-pending}

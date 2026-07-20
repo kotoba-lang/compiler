@@ -36,4 +36,6 @@
  :log/read 5
  :log/append 6
  :clock/now 7
- :state/transact 8}
+ :state/transact 8
+ :ui/commit 9
+ :ui/next-event 10}
