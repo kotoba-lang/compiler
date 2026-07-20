@@ -3,9 +3,13 @@
                      :sha256 "5d7599b5701b6fb9660de7488afbfa0b85314f90208a3f11b2ea28ca502e476e"
                      :capability-count 9}
  :backends
- {:wasmtime {:manifest-gate :required
+  {:wasmtime {:manifest-gate :required
              :execution-status :pending
-             :gaps [:typed-provider-import-abi :request-result-host-codec]
+             :gaps [:component-artifact-emission
+                    :closed-wit-world
+                    :canonical-request-result-abi
+                    :provider-component-composition
+                    :component-runtime-semantic-vectors]
              :evidence {}}
   :native {:manifest-gate :required
            :execution-status :pending

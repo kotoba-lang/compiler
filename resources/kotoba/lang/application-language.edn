@@ -35,18 +35,19 @@
   :semantic-kit-vectors :required}
  :component-model
  {:status :specified
+  :contract :kotoba.component-model/v1
   :artifact-owner :kotoba-lang/compiler
   :target :wasm-component-kotoba-v1
   :world {:imports :declared-typed-capabilities-only
           :exports :declared-entry-points-only
           :undeclared-imports :reject}
-  :wit-mapping {:i64 :s64 :f32 :float32 :f64 :float64 :bool :bool
+  :wit-mapping {:i64 :s64 :f32 :f32 :f64 :f64 :bool :bool
                 :string :string :keyword :bounded-string-newtype
                 :option :option :result :result :record :record
-                :variant :variant :vector :bounded-list
-                :set :canonical-bounded-list
-                :map :canonical-bounded-entry-list
-                :recursive-schema :digest-bound-named-type}
+                :variant :variant :vector :validated-list
+                :set :validated-canonical-list
+                :map :validated-canonical-entry-list
+                :recursive-schema :reject-v1}
   :lowering-rule "Reject schemas whose bounds or identity cannot be preserved by generated WIT and the canonical ABI."
   :runtime-rule "No runtime-specific runner or private import adapter is normative."
   :wasi {:application-ambient-authority false

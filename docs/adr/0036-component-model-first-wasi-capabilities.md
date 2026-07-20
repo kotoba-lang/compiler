@@ -26,8 +26,16 @@ compiled application's WIT world imports exactly those interfaces and exports
 only its declared entry points. Closed Kotoba schemas map to WIT records,
 variants, options, results, lists, and scalars according to the normative
 mapping in `application-language.edn`. Recursive schema identity remains
-digest-bound. Component lowering rejects types whose bounds or identity would
-be weakened.
+digest-bound inside Kotoba, but Component v1 rejects recursive schemas because
+standard WIT value types do not provide the same general recursive ADT model.
+Component lowering rejects every type whose bounds or identity would be
+weakened.
+
+The synchronous v1 profile pins WASI 0.2.11. WASI 0.3.0 is stable and adds
+native `async func`, `stream<T>`, and `future<T>`, but those constructs require
+a separately versioned Kotoba async/effect contract and are deferred. Standard
+WIT lists carry no relied-upon Kotoba bound: collection limits and canonical
+set/map ordering are enforced by generated pre/post boundary validators.
 
 WASI authority is confined to provider components. Application components do
 not receive filesystem, sockets, clocks, random, environment, or process
@@ -50,3 +58,6 @@ valid component artifact, compose bounded provider components, then qualify
 engines. Wasmtime typed-provider gaps remain pending until that path exists.
 Temporary engine adapters may be non-normative test fixtures, but cannot
 establish backend qualification.
+
+The normative version pins, type mappings, capability interfaces, and provider
+WASI imports are recorded in `component-model-v1.edn`.
