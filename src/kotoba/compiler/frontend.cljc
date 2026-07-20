@@ -135,8 +135,10 @@
 (def document-fixed-operations
   '{document-null 0 document-bool 1 document-i64 1 document-f64 1
     document-string 1 document-keyword 1 document-count 1
+    document-vector-at 2 document-vector-assoc 3 document-vector-conj 2
+    document-vector-drop 2
     document-contains 2 document-get 2 document-assoc 3 document-dissoc 2
-    document-merge 2 document-string-value 1 document-bool-value 1
+    document-merge 2 document-string-value 1 document-keyword-value 1 document-bool-value 1
     document-i64-value 1 document-f64-value 1})
 (def document-variadic-operations '#{document-vector document-map})
 (def sequencing-operations '#{do})
@@ -1933,6 +1935,19 @@
             (require-expression-type! item-type :document item-form)) :document)
       (= op 'document-count)
       (do (require-expression-type! (first types) :document (first args)) :i64)
+      (= op 'document-vector-at)
+      (do (require-expression-type! (nth types 0) :document (nth args 0))
+          (require-expression-type! (nth types 1) :i64 (nth args 1)) [:option :document])
+      (= op 'document-vector-assoc)
+      (do (require-expression-type! (nth types 0) :document (nth args 0))
+          (require-expression-type! (nth types 1) :i64 (nth args 1))
+          (require-expression-type! (nth types 2) :document (nth args 2)) :document)
+      (= op 'document-vector-conj)
+      (do (require-expression-type! (nth types 0) :document (nth args 0))
+          (require-expression-type! (nth types 1) :document (nth args 1)) :document)
+      (= op 'document-vector-drop)
+      (do (require-expression-type! (nth types 0) :document (nth args 0))
+          (require-expression-type! (nth types 1) :i64 (nth args 1)) :document)
       (= op 'document-contains)
       (do (require-expression-type! (nth types 0) :document (nth args 0))
           (require-expression-type! (nth types 1) :keyword (nth args 1)) :bool)
@@ -1951,6 +1966,8 @@
             (require-expression-type! type :document arg)) :document)
       (= op 'document-string-value)
       (do (require-expression-type! (first types) :document (first args)) [:option :string])
+      (= op 'document-keyword-value)
+      (do (require-expression-type! (first types) :document (first args)) [:option :keyword])
       (= op 'document-bool-value)
       (do (require-expression-type! (first types) :document (first args)) [:option :bool])
       (= op 'document-i64-value)

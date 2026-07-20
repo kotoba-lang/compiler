@@ -65,11 +65,16 @@ const ALLOWED_IMPORTS = new Set([
   "kotoba:typed/document-string/function",
   "kotoba:typed/document-keyword/function",
   "kotoba:typed/document-contains/function",
+  "kotoba:typed/document-vector-at/function",
+  "kotoba:typed/document-vector-assoc/function",
+  "kotoba:typed/document-vector-conj/function",
+  "kotoba:typed/document-vector-drop/function",
   "kotoba:typed/document-get/function",
   "kotoba:typed/document-assoc/function",
   "kotoba:typed/document-dissoc/function",
   "kotoba:typed/document-merge/function",
   "kotoba:typed/document-string-value/function",
+  "kotoba:typed/document-keyword-value/function",
   "kotoba:typed/document-bool-value/function",
   "kotoba:typed/document-i64-value/function",
   "kotoba:typed/document-f64-value/function",
@@ -1197,6 +1202,41 @@ function createTypedRuntime(abi, typedCapCall, allow) {
         reject("invalid-typed-operation", "document descriptor required");
       return documentPosition(value, key)[2] < 0 ? 0 : 1;
     },
+    "document-vector-at"(descriptorId, value, rawIndex) {
+      if (descriptorAt(descriptorId) !== documentDescriptor)
+        reject("invalid-typed-operation", "document descriptor required");
+      value = assertDocument(value); const index = i64(rawIndex);
+      if (value[0] !== "vector") reject("invalid-typed-operation", "document vector required");
+      const ok = index >= 0n && index < BigInt(value[1].length);
+      return documentOption(documentDescriptor, ok, ok ? value[1][Number(index)] : undefined);
+    },
+    "document-vector-assoc"(descriptorId, value, rawIndex, item) {
+      if (descriptorAt(descriptorId) !== documentDescriptor)
+        reject("invalid-typed-operation", "document descriptor required");
+      value = assertDocument(value); const index = i64(rawIndex); item = assertDocument(item);
+      if (value[0] !== "vector") reject("invalid-typed-operation", "document vector required");
+      if (index < 0n || index >= BigInt(value[1].length))
+        reject("invalid-typed-operation", "document vector index out of range");
+      const output = [...value[1]]; output[Number(index)] = item;
+      return admitDocument(["vector", output]);
+    },
+    "document-vector-conj"(descriptorId, value, item) {
+      if (descriptorAt(descriptorId) !== documentDescriptor)
+        reject("invalid-typed-operation", "document descriptor required");
+      value = assertDocument(value); item = assertDocument(item);
+      if (value[0] !== "vector") reject("invalid-typed-operation", "document vector required");
+      if (value[1].length >= 32) reject("invalid-typed-value", "document vector item budget exceeded");
+      return admitDocument(["vector", [...value[1], item]]);
+    },
+    "document-vector-drop"(descriptorId, value, rawCount) {
+      if (descriptorAt(descriptorId) !== documentDescriptor)
+        reject("invalid-typed-operation", "document descriptor required");
+      value = assertDocument(value); const count = i64(rawCount);
+      if (value[0] !== "vector") reject("invalid-typed-operation", "document vector required");
+      if (count < 0n || count > BigInt(value[1].length))
+        reject("invalid-typed-operation", "document vector drop out of range");
+      return admitDocument(["vector", value[1].slice(Number(count))]);
+    },
     "document-get"(descriptorId, value, key) {
       if (descriptorAt(descriptorId) !== documentDescriptor)
         reject("invalid-typed-operation", "document descriptor required");
@@ -1235,6 +1275,11 @@ function createTypedRuntime(abi, typedCapCall, allow) {
       if (descriptorAt(descriptorId) !== documentDescriptor)
         reject("invalid-typed-operation", "document descriptor required");
       value = assertDocument(value); return documentOption("string", value[0] === "string", value[1]);
+    },
+    "document-keyword-value"(descriptorId, value) {
+      if (descriptorAt(descriptorId) !== documentDescriptor)
+        reject("invalid-typed-operation", "document descriptor required");
+      value = assertDocument(value); return documentOption("keyword", value[0] === "keyword", value[1]);
     },
     "document-bool-value"(descriptorId, value) {
       if (descriptorAt(descriptorId) !== documentDescriptor)

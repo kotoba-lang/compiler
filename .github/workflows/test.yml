@@ -85,6 +85,7 @@ jobs:
       - uses: DeLaGuardo/setup-clojure@4c7a6f613e5089821bb3bb2a33a3ee115578580d # 13.6.1
         with:
           cli: 1.12.5.1654
+      - uses: bytecodealliance/actions/wasm-tools/setup@7ee36389ead2e51422087f820a7e17e39811b05f # main
       - run: npm ci
       - run: npx nbb scripts/check-workflows.cljs
       - run: npm run test-browser-host
