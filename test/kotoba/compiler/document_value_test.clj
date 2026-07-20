@@ -85,3 +85,47 @@
     (is (thrown? clojure.lang.ExceptionInfo
                  (value/bounded-document!
                   (reduce (fn [item _] ["vector" [item]]) ["null"] (range 9)))))))
+
+(def vector-source
+  "(ns document.vector (:export [main first-item changed tail missing bad-assoc bad-drop]))
+   (defn main [] :i64 (first-item))
+   (defn items [] :document (document-vector (document-i64 1) (document-i64 2)))
+   (defn first-item [] :i64
+     (option-value-of [:option :i64]
+       (document-i64-value
+         (option-value-of [:option :document]
+           (document-vector-at (items) 0) (document-null))) -1))
+   (defn changed [] :document
+     (document-vector-conj
+       (document-vector-assoc (items) 1 (document-i64 7))
+       (document-i64 9)))
+   (defn tail [] :document (document-vector-drop (changed) 1))
+   (defn missing [] :bool
+     (option-some?-of [:option :document] (document-vector-at (items) 9)))
+   (defn bad-assoc [] :document (document-vector-assoc (items) -1 (document-null)))
+   (defn bad-drop [] :document (document-vector-drop (items) 3))")
+
+(deftest document-vector-operations-have-reference-script-and-real-wasm-parity
+  (let [wasm (compiler/compile-source vector-source :wasm32-browser-kotoba-v1)
+        script (compiler/compile-source vector-source :js-kotoba-v1)
+        kir (:kir wasm)
+        observe (fn [execute]
+                  (is (= 1 (execute 'first-item)))
+                  (is (= ["vector" [["i64" 7] ["i64" 9]]]
+                         (execute 'tail)))
+                  (is (false? (execute 'missing))))
+        js-probe (script-probe
+                  script
+                  (str "if(x['first-item']()!==1n||x.missing()!==false)process.exit(2);"
+                       "const t=x.tail();if(t[1].length!==2||t[1][0][1]!==7n||t[1][1][1]!==9n)process.exit(3);"
+                       "for(const name of ['bad-assoc','bad-drop']){let rejected=false;try{x[name]()}catch(e){rejected=true}if(!rejected)process.exit(4)}"))
+        wasm-probe (node-probe
+                    wasm
+                    (str "const x=h.instance.exports;if(x['first-item']()!==1n||x.missing()!==false)process.exit(2);"
+                         "const t=x.tail();if(t[1].length!==2||t[1][0][1]!==7n||t[1][1][1]!==9n)process.exit(3);"
+                         "for(const name of ['bad-assoc','bad-drop']){let rejected=false;try{x[name]()}catch(e){rejected=true}if(!rejected)process.exit(4)}"))]
+    (observe #(ir/execute kir % []))
+    (is (thrown? clojure.lang.ExceptionInfo (ir/execute kir 'bad-assoc [])))
+    (is (thrown? clojure.lang.ExceptionInfo (ir/execute kir 'bad-drop [])))
+    (is (zero? (:exit js-probe)) (:err js-probe))
+    (is (zero? (:exit wasm-probe)) (:err wasm-probe))))

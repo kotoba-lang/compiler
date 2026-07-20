@@ -58,6 +58,7 @@
      disjoint-set-i64-new disjoint-set-i64-count disjoint-set-i64-union
      document-null document-bool document-i64 document-f64 document-string document-keyword
      document-vector document-map document-count document-contains document-get
+     document-vector-at document-vector-assoc document-vector-conj document-vector-drop
      document-assoc document-dissoc document-merge document-string-value
      document-bool-value document-i64-value document-f64-value
      i32-wrap u32-wrap i32-wrapping-add i32-wrapping-mul i32-xor
@@ -1512,6 +1513,42 @@
           (when-not (contains? #{"map" "vector"} tag)
             (trap! :document-container-required {:tag tag}))
           #?(:clj (long (count payload)) :cljs (i64/->bigint (count payload))))
+
+        (contains? '#{document-vector-at document-vector-assoc
+                      document-vector-conj document-vector-drop} op)
+        (let [[document-form index-or-item-form item-form] args
+              [tag items]
+              (value/bounded-document!
+               (eval-expr document-form env functions fuel heap call-stack cap-call))
+              _ (when-not (= "vector" tag) (trap! :document-vector-required {:tag tag}))]
+          (case op
+            document-vector-at
+            (let [index (value/bounded-typed-value!
+                         :i64 (eval-expr index-or-item-form env functions fuel heap call-stack cap-call))]
+              (if (and (not (neg? index)) (< index (count items)))
+                [[:option :document] true (nth items index)]
+                [[:option :document] false]))
+            document-vector-assoc
+            (let [index (value/bounded-typed-value!
+                         :i64 (eval-expr index-or-item-form env functions fuel heap call-stack cap-call))
+                  item (value/bounded-document!
+                        (eval-expr item-form env functions fuel heap call-stack cap-call))]
+              (when-not (and (not (neg? index)) (< index (count items)))
+                (trap! :document-vector-index-out-of-range {:index index :count (count items)}))
+              (value/bounded-document! ["vector" (assoc items index item)]))
+            document-vector-conj
+            (let [item (value/bounded-document!
+                        (eval-expr index-or-item-form env functions fuel heap call-stack cap-call))]
+              (when (>= (count items) value/document-container-item-limit)
+                (trap! :document-vector-too-large {:limit value/document-container-item-limit}))
+              (value/bounded-document! ["vector" (conj items item)]))
+            document-vector-drop
+            (let [drop-count (value/bounded-typed-value!
+                              :i64 (eval-expr index-or-item-form env functions fuel heap call-stack cap-call))]
+              (when-not (and (not (neg? drop-count)) (<= drop-count (count items)))
+                (trap! :document-vector-drop-out-of-range
+                       {:count drop-count :items (count items)}))
+              (value/bounded-document! ["vector" (subvec items drop-count)]))))
 
         (contains? '#{document-contains document-get document-assoc document-dissoc} op)
         (let [[document-form key-form item-form] args

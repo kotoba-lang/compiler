@@ -114,7 +114,9 @@
     (and (seq? value)
          (contains? '#{document-null document-bool document-i64 document-f64
                       document-string document-keyword document-vector document-map
-                      document-count document-contains document-get document-assoc
+                      document-count document-vector-at document-vector-assoc
+                      document-vector-conj document-vector-drop
+                      document-contains document-get document-assoc
                       document-dissoc document-merge document-string-value
                       document-bool-value document-i64-value document-f64-value}
                     (first value)))
@@ -312,8 +314,9 @@
         (= op 'disjoint-set-i64-union) [:option :disjoint-set-i64]
         (contains? '#{document-null document-bool document-i64 document-f64
                       document-string document-keyword document-vector document-map
+                      document-vector-assoc document-vector-conj document-vector-drop
                       document-assoc document-dissoc document-merge} op) :document
-        (= op 'document-get) [:option :document]
+        (contains? '#{document-get document-vector-at} op) [:option :document]
         (= op 'document-string-value) [:option :string]
         (= op 'document-bool-value) [:option :bool]
         (= op 'document-i64-value) [:option :i64]
