@@ -1,7 +1,7 @@
 const MAX_MODULE_BYTES = 1024 * 1024;
 const PAIR_CAPACITY = 4096;
 const TYPED_SECTION = "kotoba.typed";
-const TYPED_ABI_VERSION = 10;
+const TYPED_ABI_VERSION = 11;
 const COMPATIBILITY_SECTION = "kotoba.compatibility";
 const COMPATIBILITY_VERSION = 1;
 const MAX_TYPED_DESCRIPTORS = 64;
@@ -58,6 +58,22 @@ const ALLOWED_IMPORTS = new Set([
   "kotoba:typed/string-index-assoc/function",
   "kotoba:typed/disjoint-set-i64-new/function",
   "kotoba:typed/disjoint-set-i64-union/function",
+  "kotoba:typed/document-null/function",
+  "kotoba:typed/document-bool/function",
+  "kotoba:typed/document-i64/function",
+  "kotoba:typed/document-f64/function",
+  "kotoba:typed/document-string/function",
+  "kotoba:typed/document-keyword/function",
+  "kotoba:typed/document-contains/function",
+  "kotoba:typed/document-get/function",
+  "kotoba:typed/document-assoc/function",
+  "kotoba:typed/document-dissoc/function",
+  "kotoba:typed/document-merge/function",
+  "kotoba:typed/document-string-value/function",
+  "kotoba:typed/document-bool-value/function",
+  "kotoba:typed/document-i64-value/function",
+  "kotoba:typed/document-f64-value/function",
+  "kotoba:typed/keyword-from-string/function",
   "kotoba:typed/cap-call/function",
   "kotoba:typed/xml-path-count/function",
   "kotoba:typed/xml-path-attr/function",
@@ -142,7 +158,7 @@ function parseTypedMetadata(module) {
     }
     reject("invalid-typed-metadata", "oversized typed ABI integer");
   };
-  const text = () => {
+  const text = (allowEmpty = false) => {
     const length = uleb();
     if (length > 4096 || offset + length > bytes.length)
       reject("invalid-typed-metadata", "invalid typed ABI text length");
@@ -150,7 +166,8 @@ function parseTypedMetadata(module) {
     try { decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(offset, offset + length)); }
     catch (error) { reject("invalid-typed-metadata", "typed ABI text is not UTF-8", error); }
     offset += length;
-    if (decoded.length === 0) reject("invalid-typed-metadata", "typed ABI names must be non-empty");
+    if (!allowEmpty && decoded.length === 0)
+      reject("invalid-typed-metadata", "typed ABI names must be non-empty");
     return decoded;
   };
   const descriptor = depth => {
@@ -164,8 +181,9 @@ function parseTypedMetadata(module) {
     if (tag === 13) return "f32";
     if (tag === 14) return Object.freeze(["vector-f64"]);
     if (tag === 15) return Object.freeze(["ref", text()]);
-    if (tag === 16 && version === 10) return Object.freeze(["string-index"]);
-    if (tag === 17 && version === 10) return Object.freeze(["disjoint-set-i64"]);
+    if (tag === 16 && version >= 10) return Object.freeze(["string-index"]);
+    if (tag === 17 && version >= 10) return Object.freeze(["disjoint-set-i64"]);
+    if (tag === 18 && version === 11) return Object.freeze(["document"]);
     if (tag === 4) return Object.freeze(["option", descriptor(depth + 1)]);
     if (tag === 5) return Object.freeze(["result", descriptor(depth + 1), descriptor(depth + 1)]);
     if (tag === 7) {
@@ -193,7 +211,7 @@ function parseTypedMetadata(module) {
     reject("invalid-typed-metadata", "unknown typed ABI descriptor tag");
   };
   const version = byte();
-  if (version !== 5 && version !== 6 && version !== 7 && version !== 8 && version !== 9 && version !== TYPED_ABI_VERSION)
+  if (version !== 5 && version !== 6 && version !== 7 && version !== 8 && version !== 9 && version !== 10 && version !== TYPED_ABI_VERSION)
     reject("unsupported-typed-abi", "unsupported Wasm typed ABI version");
   const count = uleb();
   if (count > MAX_TYPED_DESCRIPTORS)
@@ -207,7 +225,7 @@ function parseTypedMetadata(module) {
   const literals = [];
   for (let index = 0; index < literalCount; index += 1) {
     const tag = byte();
-    if (tag === 0) literals.push(Object.freeze(["string", text()]));
+    if (tag === 0) literals.push(Object.freeze(["string", text(true)]));
     else if (tag === 1) literals.push(Object.freeze(["keyword", text()]));
     else if (tag === 2 || tag === 3) literals.push(Object.freeze(["bool", tag === 3]));
     else reject("invalid-typed-metadata", "unknown typed ABI literal tag");
@@ -241,7 +259,8 @@ function parseTypedMetadata(module) {
     version,
     descriptors: Object.freeze(descriptors),
     literals: Object.freeze(literals),
-    ...(version === 9 ? { schemas, contracts } : {})
+    schemas,
+    contracts
   });
 }
 
@@ -389,6 +408,91 @@ function createTypedRuntime(abi, typedCapCall, allow) {
       }
     }
     return new TextEncoder().encode(value).byteLength;
+  };
+  const documentDescriptor = abi.descriptors.find(descriptor =>
+    Array.isArray(descriptor) && descriptor[0] === "document");
+  const copyDocument = source => {
+    const state = { nodes: 0, bytes: 0, seen: new WeakSet() };
+    const text = (value, keyword = false) => {
+      if (typeof value !== "string" || (keyword && !value.startsWith(":")))
+        reject("invalid-typed-value", keyword ? "document keyword is invalid" : "document string is invalid");
+      const size = utf8Length(value);
+      if (size > (keyword ? 512 : 65536))
+        reject("invalid-typed-value", "document scalar text is oversized");
+      state.bytes += size;
+      if (state.bytes > 65536) reject("invalid-typed-value", "document UTF-8 budget exceeded");
+      return value;
+    };
+    const walk = (node, depth) => {
+      state.nodes += 1;
+      if (depth > 8 || state.nodes > 256)
+        reject("invalid-typed-value", "document depth or node budget exceeded");
+      if (!Array.isArray(node) || Object.getPrototypeOf(node) !== Array.prototype || state.seen.has(node))
+        reject("invalid-typed-value", "document must be an acyclic unshared array tree");
+      state.seen.add(node);
+      const tag = node[0];
+      if (tag === "null" && node.length === 1) return Object.freeze(["null"]);
+      if (node.length !== 2 || typeof tag !== "string")
+        reject("invalid-typed-value", "document node shape is invalid");
+      const payload = node[1];
+      if (tag === "bool") {
+        if (typeof payload !== "boolean") reject("invalid-typed-value", "document bool is invalid");
+        return Object.freeze([tag, payload]);
+      }
+      if (tag === "i64") return Object.freeze([tag, i64(payload)]);
+      if (tag === "f64") {
+        if (typeof payload !== "number" || !Number.isFinite(payload))
+          reject("invalid-typed-value", "document f64 must be finite");
+        return Object.freeze([tag, payload]);
+      }
+      if (tag === "string") return Object.freeze([tag, text(payload)]);
+      if (tag === "keyword") return Object.freeze([tag, text(payload, true)]);
+      if (tag === "vector") {
+        if (!Array.isArray(payload) || Object.getPrototypeOf(payload) !== Array.prototype || payload.length > 32)
+          reject("invalid-typed-value", "document vector is invalid or oversized");
+        if (state.seen.has(payload)) reject("invalid-typed-value", "document arrays cannot be shared");
+        state.seen.add(payload);
+        return Object.freeze([tag, Object.freeze(payload.map(item => walk(item, depth + 1)))]);
+      }
+      if (tag === "map") {
+        if (!Array.isArray(payload) || Object.getPrototypeOf(payload) !== Array.prototype || payload.length > 32)
+          reject("invalid-typed-value", "document map is invalid or oversized");
+        if (state.seen.has(payload)) reject("invalid-typed-value", "document arrays cannot be shared");
+        state.seen.add(payload);
+        let previous = null;
+        const entries = payload.map(entry => {
+          if (!Array.isArray(entry) || Object.getPrototypeOf(entry) !== Array.prototype ||
+              entry.length !== 2 || state.seen.has(entry))
+            reject("invalid-typed-value", "document map entry is invalid or shared");
+          state.seen.add(entry);
+          const key = text(entry[0], true);
+          if (previous !== null && previous >= key)
+            reject("invalid-typed-value", "document map keys are duplicate or noncanonical");
+          previous = key;
+          return Object.freeze([key, walk(entry[1], depth + 1)]);
+        });
+        return Object.freeze([tag, Object.freeze(entries)]);
+      }
+      reject("invalid-typed-value", "unknown document tag");
+    };
+    return walk(source, 0);
+  };
+  const admitDocument = source => {
+    if (documentDescriptor === undefined)
+      reject("invalid-typed-operation", "document descriptor is absent");
+    const result = copyDocument(source);
+    const trust = node => {
+      trustedValues.add(node);
+      if (node[0] === "vector") node[1].forEach(trust);
+      else if (node[0] === "map") node[1].forEach(entry => trust(entry[1]));
+    };
+    trust(result);
+    return result;
+  };
+  const assertDocument = value => {
+    if (!Array.isArray(value) || !Object.isFrozen(value) || !trustedValues.has(value))
+      reject("invalid-typed-value", "forged document value rejected");
+    return value;
   };
   const xmlName = /^[A-Za-z_][A-Za-z0-9_.:-]{0,127}$/u;
   const xmlString = value => {
@@ -578,6 +682,7 @@ function createTypedRuntime(abi, typedCapCall, allow) {
         return value;
       }
       const kind = descriptor[0];
+      if (kind === "document") return assertDocument(value);
       if (!Array.isArray(value) || !Object.isFrozen(value))
         reject("invalid-typed-value", "compound typed value must be a frozen array");
       if (!trustedValues.has(value))
@@ -684,6 +789,28 @@ function createTypedRuntime(abi, typedCapCall, allow) {
     try { return assertValue(descriptor, value); }
     catch (error) { trustedValues.delete(value); throw error; }
   };
+  const documentEntries = value => {
+    value = assertDocument(value);
+    if (value[0] !== "map") reject("invalid-typed-operation", "document map required");
+    return value[1];
+  };
+  const documentKey = value => {
+    if (typeof value !== "string" || !value.startsWith(":") || utf8Length(value) > 512)
+      reject("invalid-typed-value", "document map key is invalid");
+    return value;
+  };
+  const documentPosition = (value, key) => {
+    const entries = documentEntries(value);
+    key = documentKey(key);
+    return [entries, key, entries.findIndex(entry => entry[0] === key)];
+  };
+  const documentOption = (type, present, value) => {
+    const descriptor = abi.descriptors.find(candidate => Array.isArray(candidate) &&
+      candidate[0] === "option" && sameDescriptor(candidate[1], type));
+    if (descriptor === undefined) reject("invalid-typed-operation", "document result option descriptor is absent");
+    return admitValue(descriptor, Object.freeze(present
+      ? [descriptor, true, value] : [descriptor, false]));
+  };
   const imports = Object.freeze({
     "cap-call"(id, request) {
       if (!Number.isInteger(id) || id < 0 || id > 255 || !allow.has(id))
@@ -700,6 +827,14 @@ function createTypedRuntime(abi, typedCapCall, allow) {
       return assertValue(descriptorAt(contract.result), result);
     },
     literal: literalAt,
+    "keyword-from-string"(descriptorId, value) {
+      if (descriptorAt(descriptorId) !== "keyword" || typeof value !== "string" ||
+          value.length === 0 || value[0] === ":" || /[\s\[\]{}()"',;`~^\\]/u.test(value))
+        reject("invalid-typed-value", "keyword source text is invalid");
+      const result = `:${value}`;
+      if (utf8Length(result) > 512) reject("invalid-typed-value", "keyword is oversized");
+      return result;
+    },
     new(descriptorId, tag) {
       descriptorAt(descriptorId);
       const builder = Object.freeze({ descriptorId, tag, slots: Object.freeze([]) });
@@ -763,6 +898,18 @@ function createTypedRuntime(abi, typedCapCall, allow) {
           if (compareValue(descriptor[1], entries[index - 1][0], entries[index][0]) === 0)
             reject("invalid-typed-map", "duplicate typed map key rejected");
         result = [descriptor, Object.freeze(entries)];
+      } else if (kind === "document") {
+        if (builder.tag === -1) result = ["vector", builder.slots];
+        else if (builder.tag === -2) {
+          if (builder.slots.length % 2 !== 0)
+            reject("invalid-typed-builder", "document map builder has an unmatched key");
+          const entries = [];
+          for (let index = 0; index < builder.slots.length; index += 2)
+            entries.push([builder.slots[index], builder.slots[index + 1]]);
+          entries.sort((left, right) => left[0] < right[0] ? -1 : left[0] > right[0] ? 1 : 0);
+          result = ["map", entries];
+        } else reject("invalid-typed-builder", "document builder tag is invalid");
+        return admitDocument(result);
       } else reject("invalid-typed-builder", "primitive descriptor cannot be constructed");
       return admitValue(descriptor, Object.freeze(result));
     },
@@ -825,6 +972,11 @@ function createTypedRuntime(abi, typedCapCall, allow) {
       if (descriptor[0] === "map") return BigInt(checked[1].length);
       if (descriptor[0] === "string-index") return BigInt(checked[1].length);
       if (descriptor[0] === "disjoint-set-i64") return BigInt(checked[1].length);
+      if (descriptor[0] === "document") {
+        if (checked[0] !== "map" && checked[0] !== "vector")
+          reject("invalid-typed-operation", "document container required");
+        return BigInt(checked[1].length);
+      }
       reject("invalid-typed-operation", "count is not defined for this descriptor");
     },
     bool(value) { return value !== 0; },
@@ -1009,6 +1161,95 @@ function createTypedRuntime(abi, typedCapCall, allow) {
       if (checked[2][leftRoot] === checked[2][rightRoot]) ranks[parent] += 1n;
       const result = admitValue(descriptor, Object.freeze([descriptor, Object.freeze(parents), Object.freeze(ranks)]));
       return admitValue(optionDescriptor, Object.freeze([optionDescriptor, true, result]));
+    },
+    "document-null"(descriptorId) {
+      if (descriptorAt(descriptorId) !== documentDescriptor)
+        reject("invalid-typed-operation", "document descriptor required");
+      return admitDocument(["null"]);
+    },
+    "document-bool"(descriptorId, item) {
+      if (descriptorAt(descriptorId) !== documentDescriptor || typeof item !== "boolean")
+        reject("invalid-typed-operation", "document bool requires its descriptor and boolean");
+      return admitDocument(["bool", item]);
+    },
+    "document-i64"(descriptorId, item) {
+      if (descriptorAt(descriptorId) !== documentDescriptor)
+        reject("invalid-typed-operation", "document descriptor required");
+      return admitDocument(["i64", i64(item)]);
+    },
+    "document-f64"(descriptorId, item) {
+      if (descriptorAt(descriptorId) !== documentDescriptor || !Number.isFinite(item))
+        reject("invalid-typed-operation", "document f64 must be finite");
+      return admitDocument(["f64", item]);
+    },
+    "document-string"(descriptorId, item) {
+      if (descriptorAt(descriptorId) !== documentDescriptor)
+        reject("invalid-typed-operation", "document descriptor required");
+      return admitDocument(["string", item]);
+    },
+    "document-keyword"(descriptorId, item) {
+      if (descriptorAt(descriptorId) !== documentDescriptor)
+        reject("invalid-typed-operation", "document descriptor required");
+      return admitDocument(["keyword", item]);
+    },
+    "document-contains"(descriptorId, value, key) {
+      if (descriptorAt(descriptorId) !== documentDescriptor)
+        reject("invalid-typed-operation", "document descriptor required");
+      return documentPosition(value, key)[2] < 0 ? 0 : 1;
+    },
+    "document-get"(descriptorId, value, key) {
+      if (descriptorAt(descriptorId) !== documentDescriptor)
+        reject("invalid-typed-operation", "document descriptor required");
+      const [entries,, index] = documentPosition(value, key);
+      return documentOption(documentDescriptor, index >= 0, index >= 0 ? entries[index][1] : undefined);
+    },
+    "document-assoc"(descriptorId, value, key, item) {
+      if (descriptorAt(descriptorId) !== documentDescriptor)
+        reject("invalid-typed-operation", "document descriptor required");
+      const [entries, checkedKey, index] = documentPosition(value, key);
+      item = assertDocument(item);
+      if (index < 0 && entries.length >= 32)
+        reject("invalid-typed-value", "document map item budget exceeded");
+      const output = entries.map(entry => [entry[0], entry[1]]);
+      if (index < 0) output.push([checkedKey, item]); else output[index] = [checkedKey, item];
+      output.sort((left, right) => left[0] < right[0] ? -1 : left[0] > right[0] ? 1 : 0);
+      return admitDocument(["map", output]);
+    },
+    "document-dissoc"(descriptorId, value, key) {
+      if (descriptorAt(descriptorId) !== documentDescriptor)
+        reject("invalid-typed-operation", "document descriptor required");
+      const [entries,, index] = documentPosition(value, key);
+      if (index < 0) return assertDocument(value);
+      return admitDocument(["map", entries.filter((_, itemIndex) => itemIndex !== index)
+        .map(entry => [entry[0], entry[1]])]);
+    },
+    "document-merge"(descriptorId, left, right) {
+      if (descriptorAt(descriptorId) !== documentDescriptor)
+        reject("invalid-typed-operation", "document descriptor required");
+      const merged = new Map(documentEntries(left).map(entry => [entry[0], entry[1]]));
+      for (const entry of documentEntries(right)) merged.set(entry[0], entry[1]);
+      if (merged.size > 32) reject("invalid-typed-value", "document map item budget exceeded");
+      return admitDocument(["map", [...merged].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)]);
+    },
+    "document-string-value"(descriptorId, value) {
+      if (descriptorAt(descriptorId) !== documentDescriptor)
+        reject("invalid-typed-operation", "document descriptor required");
+      value = assertDocument(value); return documentOption("string", value[0] === "string", value[1]);
+    },
+    "document-bool-value"(descriptorId, value) {
+      if (descriptorAt(descriptorId) !== documentDescriptor)
+        reject("invalid-typed-operation", "document descriptor required");
+      value = assertDocument(value); return documentOption("bool", value[0] === "bool", value[1]);
+    },
+    "document-i64-value"(descriptorId, value) {
+      if (descriptorAt(descriptorId) !== documentDescriptor)
+        reject("invalid-typed-operation", "document descriptor required");
+      value = assertDocument(value); return documentOption("i64", value[0] === "i64", value[1]);
+    },
+    "document-f64-value"(descriptorId, value) {
+      if (descriptorAt(descriptorId) !== documentDescriptor)
+        reject("invalid-typed-operation", "document descriptor required");
+      value = assertDocument(value); return documentOption("f64", value[0] === "f64", value[1]);
     },
     "xml-path-count"(xml, path) {
       const wanted = xmlPath(path);
@@ -1229,11 +1470,17 @@ function createTypedRuntime(abi, typedCapCall, allow) {
     return admitValue(disjointSetDescriptor,
       Object.freeze([disjointSetDescriptor, parents, ranks]));
   };
+  const hostDocument = value => {
+    if (documentDescriptor === undefined)
+      reject("invalid-typed-value", "module does not admit document values");
+    return admitDocument(value);
+  };
   const values = Object.freeze({
     vectorI64: hostVector,
     vectorF64: hostVectorF64,
     stringIndex: hostStringIndex,
     disjointSetI64: hostDisjointSet,
+    document: hostDocument,
     bytes(items) {
       if (!(Array.isArray(items) || ArrayBuffer.isView(items)) || items.length > 16384)
         reject("invalid-typed-value", "host byte input is invalid or oversized");

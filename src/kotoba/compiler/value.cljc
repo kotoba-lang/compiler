@@ -16,6 +16,10 @@
 (def record-field-limit 32)
 (def compact-graph-item-limit 128)
 (def string-index-key-byte-limit 65536)
+(def document-depth-limit 8)
+(def document-node-limit 256)
+(def document-container-item-limit 32)
+(def document-utf8-byte-limit 65536)
 
 (defn f64-value? [value]
   #?(:clj (instance? Double value)
@@ -355,9 +359,81 @@
             (recur parent (dec remaining))))))
     [parents ranks]))
 
+(defn bounded-document!
+  "Validate and rebuild the canonical tagged document tree. Document maps use
+  keyword keys sorted by their full textual representation; document values
+  never contain host objects or ambient references."
+  [value]
+  (let [nodes (volatile! 0)
+        bytes (volatile! 0)
+        charge-text! (fn [text]
+                       (vswap! bytes + (utf8-byte-count! text))
+                       (when (> @bytes document-utf8-byte-limit)
+                         (throw (ex-info "document exceeds aggregate UTF-8 limit"
+                                         {:phase :value :limit document-utf8-byte-limit}))))]
+    (letfn [(walk [node depth]
+              (when (> depth document-depth-limit)
+                (throw (ex-info "document exceeds depth limit"
+                                {:phase :value :limit document-depth-limit})))
+              (vswap! nodes inc)
+              (when (> @nodes document-node-limit)
+                (throw (ex-info "document exceeds node limit"
+                                {:phase :value :limit document-node-limit})))
+              (when-not (and (vector? node) (string? (first node)))
+                (throw (ex-info "value is not a tagged document node" {:phase :value})))
+              (let [[tag payload & extra] node]
+                (when (seq extra)
+                  (throw (ex-info "document node has excess fields" {:phase :value :tag tag})))
+                (case tag
+                  "null" (do (when-not (= 1 (count node))
+                               (throw (ex-info "invalid document null" {:phase :value})))
+                             ["null"])
+                  "bool" [tag (do (when-not (boolean? payload)
+                                     (throw (ex-info "invalid document bool" {:phase :value})))
+                                   payload)]
+                  "i64" [tag (do (when-not #?(:clj (and (integer? payload)
+                                                          (<= Long/MIN_VALUE payload Long/MAX_VALUE))
+                                               :cljs (and (i64/bigint-value? payload)
+                                                          (i64/in-i64-range? payload)))
+                                    (throw (ex-info "invalid document i64" {:phase :value})))
+                                  payload)]
+                  "f64" [tag (do (when-not (and (f64-value? payload)
+                                                 #?(:clj (Double/isFinite ^double payload)
+                                                    :cljs (js/Number.isFinite payload)))
+                                    (throw (ex-info "invalid document f64" {:phase :value})))
+                                  payload)]
+                  "string" [tag (do (bounded-string! payload string-value-byte-limit)
+                                     (charge-text! payload) payload)]
+                  "keyword" [tag (do (bounded-keyword! payload keyword-value-byte-limit)
+                                      (charge-text! (str payload)) payload)]
+                  "vector"
+                  (do (when-not (and (vector? payload)
+                                     (<= (count payload) document-container-item-limit))
+                        (throw (ex-info "invalid document vector"
+                                        {:phase :value :limit document-container-item-limit})))
+                      [tag (mapv #(walk % (inc depth)) payload)])
+                  "map"
+                  (do (when-not (and (vector? payload)
+                                     (<= (count payload) document-container-item-limit)
+                                     (every? #(and (vector? %) (= 2 (count %))) payload))
+                        (throw (ex-info "invalid document map"
+                                        {:phase :value :limit document-container-item-limit})))
+                      (let [keys (mapv first payload)
+                            _ (doseq [key keys]
+                                (bounded-keyword! key keyword-value-byte-limit)
+                                (charge-text! (str key)))
+                            canonical (vec (sort-by (comp str first) payload))]
+                        (when-not (and (= payload canonical)
+                                       (= (count keys) (count (distinct keys))))
+                          (throw (ex-info "document map keys are duplicate or noncanonical"
+                                          {:phase :value})))
+                        [tag (mapv (fn [[key item]] [key (walk item (inc depth))]) payload)]))
+                  (throw (ex-info "unknown document tag" {:phase :value :tag tag})))))]
+      (walk value 0))))
+
 (def ^:private leaf-value-types
   #{:i64 :f32 :f64 :string :keyword :map :bool :option-i64 :result-i64
-    :vector-i64 :vector-f64 :string-index :disjoint-set-i64})
+    :vector-i64 :vector-f64 :string-index :disjoint-set-i64 :document})
 
 (defn validate-value-type!
   ([type] (validate-value-type! type 0 (volatile! 0)))
@@ -557,6 +633,7 @@
      :vector-f64 (bounded-vector-f64! value)
      :string-index (bounded-string-index! value)
      :disjoint-set-i64 (bounded-disjoint-set-i64! value)
+     :document (bounded-document! value)
      (cond
        (= :result (first type))
        (do
