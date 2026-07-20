@@ -642,19 +642,19 @@
 (deftest bounded-xml-queries-run-through-compiler-and-kotoba-script
   (let [source "(ns pilot.xml (:export [count-links count-elements element-text link-text link-name]))
                 (defn count-links [xml :string] :i64
-                  (xml-path-count xml \"robot/link\"))
+                  (xml-path-count xml \"html/robot/link\"))
                 (defn count-elements [xml :string name :string] :i64
                   (xml-name-count xml name))
                 (defn element-text [xml :string name :string index :i64] [:option :string]
                   (xml-name-text xml name index))
                 (defn link-text [xml :string index :i64] [:option :string]
-                  (xml-path-text xml \"robot/link\" index))
+                  (xml-path-text xml \"html/robot/link\" index))
                 (defn link-name [xml :string index :i64] [:option :string]
-                  (xml-path-attr xml \"robot/link\" index \"name\"))"
+                  (xml-path-attr xml \"html/robot/link\" index \"name\"))"
         compiled (compiler/compile-source source :js-kotoba-v1)
         encoded (.encodeToString (java.util.Base64/getEncoder)
                                  (.getBytes ^String (:source compiled) "UTF-8"))
-        xml "<?xml version=\"1.0\" encoding=\"utf-8\"?><robot><link name=\"base\"> Hello <span>bounded</span> XML </link><link name=\"tip\"/></robot>"
+        xml "<?xml version=\"1.0\" encoding=\"utf-8\"?><!DOCTYPE html><html><robot><link name=\"base\"> Hello <span>bounded</span> XML </link><link name=\"tip\"/></robot></html>"
         probe (str "import('data:text/javascript;base64," encoded
                    "').then(m=>{const x=m.instantiateKotoba({}),xml=" (pr-str xml) ";"
                    "const tip=x['link-name'](xml,1n),missing=x['link-name'](xml,2n),text=x['link-text'](xml,0n),named=x['element-text'](xml,'link',0n);"
@@ -670,6 +670,12 @@
     (is (= 2 (ir/execute (:kir compiled) 'count-elements [xml "link"])))
     (is (= [[:option :string] true "Hello bounded XML"]
            (ir/execute (:kir compiled) 'element-text [xml "link" 0])))
+    (doseq [invalid ["<!DOCTYPE svg><svg/>"
+                     "<!DOCTYPE html PUBLIC \"external\"><html/>"
+                     "<!DOCTYPE html SYSTEM \"external\"><html/>"
+                     "<!DOCTYPE html [<!ENTITY x \"unsafe\">]><html/>"]]
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (ir/execute (:kir compiled) 'count-elements [invalid "html"]))))
     (is (= [:option :string]
            (get-in compiled [:hir :functions 4 :result])))
     (is (str/includes? (:source compiled)
