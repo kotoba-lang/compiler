@@ -5,13 +5,18 @@
  :backends
   {:wasmtime {:manifest-gate :required
              :execution-status :pending
-             :gaps [:canonical-request-result-abi
-                    :provider-component-composition
-                    :component-runtime-semantic-vectors]
+             :gaps [:nested-canonical-request-result-abi
+                    :recursive-schema-component-representation
+                    :production-provider-components
+                    :component-runtime-semantic-vectors
+                    :bounded-wasi-0.3-async
+                    :minimum-wasmtime-43]
              :evidence {}}
   :native {:manifest-gate :required
            :execution-status :pending
-           :gaps [:typed-provider-syscall-abi :request-result-host-codec]
+           :gaps [:typed-provider-syscall-abi
+                  :nested-request-result-host-codec
+                  :native-provider-semantic-vectors]
            :evidence {}}
   :cljs {:manifest-gate :required
          :execution-status :qualified

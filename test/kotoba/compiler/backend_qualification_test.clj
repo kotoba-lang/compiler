@@ -67,6 +67,19 @@
         (do (is (= :pending (:execution-status receipt)))
             (is (seq (:gaps receipt))))))))
 
+(deftest pending-backends-name-the-post-wiring-gaps
+  (is (= #{:nested-canonical-request-result-abi
+           :recursive-schema-component-representation
+           :production-provider-components
+           :component-runtime-semantic-vectors
+           :bounded-wasi-0.3-async
+           :minimum-wasmtime-43}
+         (set (get-in claims [:backends :wasmtime :gaps]))))
+  (is (= #{:typed-provider-syscall-abi
+           :nested-request-result-host-codec
+           :native-provider-semantic-vectors}
+         (set (get-in claims [:backends :native :gaps])))))
+
 (deftest stale-manifest-and-false-qualification-claims-fail-closed
   (is (thrown-with-msg?
        clojure.lang.ExceptionInfo #"not bound to this provider manifest"
