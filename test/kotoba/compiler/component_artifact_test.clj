@@ -22,16 +22,22 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"capability imports"
                           (component/assert-scalar-slice! cap-kir (wit/emit cap-kir))))))
 
-(deftest bounded-string-identity-is-the-only-admitted-string-body
+(deftest bounded-string-expression-slice-is-explicit
   (let [identity-kir
         {:format :kotoba.kir/v4 :exports ['echo] :schemas {} :effects #{}
          :functions [{:name 'echo :params ['value] :param-types [:string]
                       :result :string :body 'value}]}]
     (is (true? (component/assert-scalar-slice! identity-kir (wit/emit identity-kir))))
+    (let [concat-kir (-> identity-kir
+                         (assoc-in [:functions 0 :params] ['left 'right])
+                         (assoc-in [:functions 0 :param-types] [:string :string])
+                         (assoc-in [:functions 0 :body]
+                                   '(string-concat left (string-concat " / " right))))]
+      (is (true? (component/assert-scalar-slice! concat-kir (wit/emit concat-kir)))))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
                           (component/assert-scalar-slice!
                            (assoc-in identity-kir [:functions 0 :body]
-                                     '(string-concat value value))
+                                     '(string-replace-all value "a" "b"))
                            (wit/emit identity-kir))))))
 
 (defn- binary-text [bytes]
