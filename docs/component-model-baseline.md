@@ -66,6 +66,9 @@ Direct field projection from those records to a scalar result is executable
 Direct scalar-parameter construction and one-field scalar `record-assoc` are
 executable through a shared field-source/result-area plan (ADR 0045). Computed
 and nested record expressions remain closed.
+Direct typed capability calls with scalar request/result now lower to a
+standard32 application component import (ADR 0046). Provider composition and
+all structured capability payloads remain closed.
 
 ## Official sources
 
