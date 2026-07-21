@@ -69,6 +69,29 @@
                                      (list 'record-get schema 'value :missing))
                            (wit/emit kir))))))
 
+(deftest scalar-record-construction-and-update-are-admitted
+  (let [schema [:record :demo/point [[:x :i64] [:weight :f64] [:visible :bool]]]
+        base {:format :kotoba.kir/v4 :exports ['make] :effects #{}
+              :schemas {:demo/point schema}}
+        construction
+        (assoc base :functions
+               [{:name 'make :params ['x 'weight 'visible]
+                 :param-types [:i64 :f64 :bool] :result schema
+                 :body (list 'record-new schema 'x 'weight 'visible)}])
+        update
+        (assoc base :exports ['set-weight]
+               :functions
+               [{:name 'set-weight :params ['point 'weight]
+                 :param-types [schema :f64] :result schema
+                 :body (list 'record-assoc schema 'point :weight 'weight)}])]
+    (is (true? (component/assert-scalar-slice! construction (wit/emit construction))))
+    (is (true? (component/assert-scalar-slice! update (wit/emit update))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
+                          (component/assert-scalar-slice!
+                           (assoc-in update [:functions 0 :body]
+                                     (list 'record-assoc schema 'point :weight 1))
+                           (wit/emit update))))))
+
 (defn- binary-text [bytes]
   (String. ^bytes bytes java.nio.charset.StandardCharsets/ISO_8859_1))
 
