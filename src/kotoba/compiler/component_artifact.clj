@@ -18,7 +18,8 @@
 
 (defn assert-qualified-slice! [kir wit]
   (let [lowering (component-core/assert-supported! kir)]
-    (when (and (seq (:imports wit)) (not= :scalar-capability-call lowering))
+    (when (and (seq (:imports wit))
+               (not (contains? #{:scalar-capability-call :record-capability-call} lowering)))
       (reject "component capability imports require Canonical provider lowering"
               {:imports (:imports wit)}))
     lowering))
