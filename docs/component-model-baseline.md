@@ -58,6 +58,9 @@ now executable through linear memory (ADR 0041); records, variants, lists, and
 capability request/results remain fail-closed.
 String parameters, UTF-8 literals, and nested concatenation are lowered with a
 single bounded allocation (ADR 0042); other string operations remain closed.
+Named non-empty records containing only scalar fields have checked layout and
+an executable identity slice (ADR 0043). Record operations, nested aggregates,
+and provider request/results remain closed.
 
 ## Official sources
 
