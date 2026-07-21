@@ -54,8 +54,10 @@ stages. The scalar component core uses standard32 `cm32p2` names and passes
 the pinned toolchain's `--reject-legacy-names` qualification (ADR 0039).
 Canonical layout planning for bounded UTF-8 strings is implemented separately
 from admission (ADR 0040). A byte-preserving bounded string identity export is
-now executable through linear memory (ADR 0041); general string expressions,
-records, variants, lists, and capability request/results remain fail-closed.
+now executable through linear memory (ADR 0041); records, variants, lists, and
+capability request/results remain fail-closed.
+String parameters, UTF-8 literals, and nested concatenation are lowered with a
+single bounded allocation (ADR 0042); other string operations remain closed.
 
 ## Official sources
 
