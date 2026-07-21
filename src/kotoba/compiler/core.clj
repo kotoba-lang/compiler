@@ -10,6 +10,7 @@
             [kotoba.compiler.backend.wasm-typed :as typed]
             [kotoba.compiler.component-wit :as component-wit]
             [kotoba.compiler.component-artifact :as component-artifact]
+            [kotoba.compiler.component-core :as component-core]
             [kotoba.compiler.backend.cljs :as cljs]
             [kotoba.script :as script]
             [kotoba.compiler.backend.x86-64 :as x86-64]
@@ -72,8 +73,8 @@
   ([source policy]
    (let [core (compile-source source :wasm32-wasi-kotoba-v1 policy)
          wit (component-wit/emit (:kir core))
-         component-core (wasm/emit-component-core (:kir core) :wasm32-wasi-kotoba-v1)]
-     (assoc (component-artifact/package component-core (:kir core) wit)
+         component-bytes (component-core/emit (:kir core) :wasm32-wasi-kotoba-v1)]
+     (assoc (component-artifact/package component-bytes (:kir core) wit)
             :wit wit :admission (:admission core)))))
 
 (defn- compile-source*
