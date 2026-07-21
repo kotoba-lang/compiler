@@ -40,6 +40,20 @@
                                      '(string-replace-all value "a" "b"))
                            (wit/emit identity-kir))))))
 
+(deftest named-scalar-record-identity-is-admitted
+  (let [descriptor [:ref :demo/point]
+        kir {:format :kotoba.kir/v4 :exports ['echo] :effects #{}
+             :schemas {:demo/point
+                       [:record :demo/point
+                        [[:x :i64] [:weight :f64] [:visible :bool]]]}
+             :functions [{:name 'echo :params ['value] :param-types [descriptor]
+                          :result descriptor :body 'value}]}]
+    (is (true? (component/assert-scalar-slice! kir (wit/emit kir))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
+                          (component/assert-scalar-slice!
+                           (assoc-in kir [:schemas :demo/point 2 0 1] :string)
+                           (wit/emit kir))))))
+
 (defn- binary-text [bytes]
   (String. ^bytes bytes java.nio.charset.StandardCharsets/ISO_8859_1))
 

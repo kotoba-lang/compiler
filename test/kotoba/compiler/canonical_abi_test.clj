@@ -29,3 +29,21 @@
           :post-return-params [:i32]}
          (canonical/export-plan
           {:name 'echo :params ['value] :param-types [:string] :result :string}))))
+
+(deftest named-scalar-record-layout-preserves-identity-offsets-and-flattening
+  (let [descriptor [:ref :demo/point]
+        schemas {:demo/point
+                 [:record :demo/point [[:x :i64] [:weight :f64] [:visible :bool]]]}
+        value (canonical/layout descriptor schemas)]
+    (is (= 24 (:size value)))
+    (is (= 8 (:alignment value)))
+    (is (= [:i64 :f64 :i32] (:flat value)))
+    (is (= [0 8 16] (mapv :offset (:fields value))))
+    (is (= [:i32]
+           (:core-results
+            (canonical/export-plan
+             {:name 'echo :params ['value] :param-types [descriptor] :result descriptor}
+             schemas))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"matching schema identity"
+                          (canonical/layout descriptor
+                                            {:demo/point [:record :demo/other [[:x :i64]]]})))))
