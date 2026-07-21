@@ -144,12 +144,33 @@
                capability)
       capability)))
 
+(defn- record-capability-call [function schemas]
+  (let [{:keys [params param-types result body]} function
+        request-type (first param-types)
+        [_ id body-request-type body-result-type request] (when (seq? body) body)
+        capability (some #(when (= id (:id %)) %) (:capabilities component-wit/contract))
+        request-schema (sealed-scalar-record request-type schemas)
+        result-schema (sealed-scalar-record result schemas)]
+    (when (and (= 1 (count params))
+               (= 1 (count param-types))
+               (seq? body)
+               (= 'typed-cap-call (first body))
+               (= request (first params))
+               (= body-request-type request-type)
+               (= body-result-type result)
+               (= request-type result)
+               request-schema result-schema capability)
+      {:capability capability :request request-type :result result})))
+
 (defn assert-supported! [kir]
   (let [exports (exported-functions kir)]
     (cond
       (and (= 1 (count (:functions kir)))
            (= 1 (count exports))
            (scalar-capability-call (first exports))) :scalar-capability-call
+      (and (= 1 (count (:functions kir)))
+           (= 1 (count exports))
+           (record-capability-call (first exports) (:schemas kir))) :record-capability-call
       (every? scalar-function? exports) :scalar
       (and (= 1 (count (:functions kir)))
            (= 1 (count exports))
@@ -495,6 +516,54 @@
      "    i32.const 0)\n"
      "  (func (export \"cm32p2_initialize\")))\n")))
 
+(defn- record-capability-wat [function schemas plan]
+  (let [export (wit-name (:name function))
+        capability (:capability plan)
+        request-layout (canonical/layout (:request plan) schemas)
+        result-layout (canonical/layout (:result plan) schemas)
+        fields (:fields request-layout)
+        params (apply str
+                      (map-indexed
+                       (fn [index {:keys [layout]}]
+                         (str " (param $f" index " "
+                              (wasm-value-type (:descriptor layout)) ")"))
+                       fields))
+        import-params (apply str
+                             (map (fn [{:keys [layout]}]
+                                    (str " (param " (wasm-value-type (:descriptor layout)) ")"))
+                                  fields))
+        bool-validation
+        (apply str
+               (keep-indexed
+                (fn [index {:keys [layout]}]
+                  (when (= :bool (:descriptor layout))
+                    (str "    local.get $f" index
+                         " i32.const 1 i32.gt_u if unreachable end\n")))
+                fields))
+        arguments (apply str (map #(str "    local.get $f" % "\n") (range (count fields))))]
+    (str
+     "(module\n"
+     "  (import \"cm32p2|kotoba:application/" (:interface capability) "@1\" \""
+     (:function capability) "\" (func $provider" import-params " (param i32)))\n"
+     "  (memory (export \"cm32p2_memory\") 1 1)\n"
+     "  (global $next (mut i32) (i32.const 8))\n"
+     "  (func $realloc (export \"cm32p2_realloc\")\n"
+     "    (param i32 i32) (param $align i32) (param $size i32) (result i32)\n"
+     "    (local $ptr i32)\n"
+     "    global.get $next local.get $align i32.const 1 i32.sub i32.add\n"
+     "    i32.const 0 local.get $align i32.sub i32.and local.tee $ptr\n"
+     "    local.get $size i32.add global.set $next local.get $ptr)\n"
+     "  (func (export \"cm32p2||" export "\")" params " (result i32)\n"
+     "    (local $ret i32)\n"
+     bool-validation
+     "    i32.const 0 i32.const 0 i32.const " (:alignment result-layout)
+     " i32.const " (:size result-layout) " call $realloc local.set $ret\n"
+     arguments
+     "    local.get $ret call $provider local.get $ret)\n"
+     "  (func (export \"cm32p2||" export "_post\") (param i32)\n"
+     "    i32.const 8 global.set $next)\n"
+     "  (func (export \"cm32p2_initialize\") i32.const 8 global.set $next))\n")))
+
 (defn emit [kir target]
   (case (assert-supported! kir)
     :scalar (wasm/emit-component-core kir target)
@@ -519,4 +588,9 @@
     :scalar-capability-call
     (let [function (first (exported-functions kir))]
       (wasm-tools/parse-wat
-       (scalar-capability-wat function (scalar-capability-call function))))))
+       (scalar-capability-wat function (scalar-capability-call function))))
+    :record-capability-call
+    (let [function (first (exported-functions kir))]
+      (wasm-tools/parse-wat
+       (record-capability-wat function (:schemas kir)
+                              (record-capability-call function (:schemas kir)))))))

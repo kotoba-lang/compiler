@@ -73,6 +73,9 @@ Compiler-owned scalar provider artifacts can now close that import through the
 current `wac plug` path plus official `wasm-tools` validation (ADR 0047). The identity
 provider proves wiring only; kit semantics and structured payloads remain
 unqualified.
+One sealed nominal record containing only scalar fields can now cross a direct
+capability call and an identity provider through Canonical ABI result areas
+(ADR 0048). Nested aggregates and production provider semantics remain closed.
 
 ## Official sources
 

@@ -32,3 +32,36 @@
                      capability-kir world)]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"do not exactly close"
                           (composition/compose-closed application [])))))
+
+(deftest sealed-scalar-record-provider-closes-the-application-world
+  (let [descriptor [:ref :demo/point]
+        schema [:record :demo/point [[:x :i64] [:weight :f64] [:visible :bool]]]
+        schemas {:demo/point schema}
+        kir {:format :kotoba.kir/v4 :exports ['invoke] :schemas schemas
+             :functions [{:name 'invoke :params ['request]
+                          :param-types [descriptor] :result descriptor
+                          :body (list 'typed-cap-call 4 descriptor descriptor 'request)}]}
+        world (wit/emit kir)
+        application (artifact/package
+                     (component-core/emit kir :wasm32-wasi-kotoba-v1) kir world)
+        provider (composition/package-record-identity-provider
+                  :http/post descriptor schemas)
+        closed (composition/compose-closed application [provider])]
+    (is (= :record-capability-call (:canonical-lowering application)))
+    (is (= :wasm-component-closed/v1 (:format closed)))
+    (is (= [{:capability :http/post :descriptor descriptor}]
+           (:providers closed)))))
+
+(deftest structured-capability-boundary-remains-sealed-and-scalar
+  (let [descriptor [:ref :demo/point]
+        schema [:record :demo/point [[:x :i64] [:label :string]]]
+        kir {:format :kotoba.kir/v4 :exports ['invoke]
+             :schemas {:demo/point schema}
+             :functions [{:name 'invoke :params ['request]
+                          :param-types [descriptor] :result descriptor
+                          :body (list 'typed-cap-call 4 descriptor descriptor 'request)}]}]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
+                          (component-core/emit kir :wasm32-wasi-kotoba-v1)))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"sealed scalar schema"
+                          (composition/package-record-identity-provider
+                           :http/post descriptor (:schemas kir))))))
