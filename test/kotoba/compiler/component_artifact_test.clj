@@ -13,7 +13,7 @@
 
 (deftest scalar-slice-and-unsupported-boundaries-are-explicit
   (is (true? (component/assert-scalar-slice! scalar-kir (wit/emit scalar-kir))))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"structured component signatures"
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
                         (component/assert-scalar-slice!
                          (assoc-in scalar-kir [:functions 0 :result] :string)
                          (wit/emit (assoc-in scalar-kir [:functions 0 :result] :string)))))
@@ -21,6 +21,18 @@
                           '(typed-cap-call 4 :i64 :i64 left))]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"capability imports"
                           (component/assert-scalar-slice! cap-kir (wit/emit cap-kir))))))
+
+(deftest bounded-string-identity-is-the-only-admitted-string-body
+  (let [identity-kir
+        {:format :kotoba.kir/v4 :exports ['echo] :schemas {} :effects #{}
+         :functions [{:name 'echo :params ['value] :param-types [:string]
+                      :result :string :body 'value}]}]
+    (is (true? (component/assert-scalar-slice! identity-kir (wit/emit identity-kir))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
+                          (component/assert-scalar-slice!
+                           (assoc-in identity-kir [:functions 0 :body]
+                                     '(string-concat value value))
+                           (wit/emit identity-kir))))))
 
 (defn- binary-text [bytes]
   (String. ^bytes bytes java.nio.charset.StandardCharsets/ISO_8859_1))
