@@ -1,5 +1,7 @@
 (ns kotoba.compiler.component-artifact-test
   (:require [clojure.test :refer [deftest is]]
+            [clojure.string :as str]
+            [kotoba.compiler.backend.wasm :as wasm]
             [kotoba.compiler.component-artifact :as component]
             [kotoba.compiler.component-wit :as wit]))
 
@@ -19,3 +21,16 @@
                           '(typed-cap-call 4 :i64 :i64 left))]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"capability imports"
                           (component/assert-scalar-slice! cap-kir (wit/emit cap-kir))))))
+
+(defn- binary-text [bytes]
+  (String. ^bytes bytes java.nio.charset.StandardCharsets/ISO_8859_1))
+
+(deftest standard32-core-names-are-explicit-and-target-local
+  (let [standard32 (binary-text
+                    (wasm/emit-component-core scalar-kir :wasm32-wasi-kotoba-v1))
+        ordinary (binary-text (wasm/emit scalar-kir :wasm32-wasi-kotoba-v1))]
+    (doseq [name ["cm32p2||add" "cm32p2||add_post" "cm32p2_memory"
+                  "cm32p2_realloc" "cm32p2_initialize"]]
+      (is (str/includes? standard32 name)))
+    (is (str/includes? ordinary "add"))
+    (is (not (str/includes? ordinary "cm32p2||add")))))

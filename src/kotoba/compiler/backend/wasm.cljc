@@ -1166,7 +1166,9 @@
                  (tree-seq coll? seq (:body function))))
          functions)))
 
-(defn emit [kir target]
+(defn emit
+  ([kir target] (emit kir target {}))
+  ([kir target {:keys [component-standard32?]}]
   (let [functions (:functions kir)
         typed? (= :kotoba.kir/v4 (:format kir))
         exported-names (set (or (:exports kir) (map :name functions)))
@@ -1321,37 +1323,82 @@
         shift (count imports)
         intrinsic-indices (into {} (map-indexed (fn [index [op]] [op index]) imports))
         indices (into {} (map-indexed (fn [i f] [(:name f) (+ i shift)]) functions))
-        types (concat (uleb (+ (count functions) shift))
+        component-type-count (if component-standard32?
+                               (+ (count exported-functions) 2)
+                               0)
+        component-type-base (+ (count functions) shift)
+        post-type-indices (range component-type-base
+                                 (+ component-type-base (count exported-functions)))
+        realloc-type-index (+ component-type-base (count exported-functions))
+        initialize-type-index (inc realloc-type-index)
+        component-types (when component-standard32?
+                          (concat
+                           (mapcat (fn [{:keys [result]}]
+                                     [0x60 1 (typed/wasm-type result) 0])
+                                   exported-functions)
+                           [0x60 4 0x7f 0x7f 0x7f 0x7f 1 0x7f]
+                           [0x60 0 0]))
+        types (concat (uleb (+ (count functions) shift component-type-count))
                       (mapcat #(nth % 3) imports)
-                      (mapcat (if typed? typed-function-type function-type) functions))
+                      (mapcat (if typed? typed-function-type function-type) functions)
+                      component-types)
         import-sec (when (seq imports)
                      (concat (uleb shift)
                              (mapcat (fn [[_ module field _] index]
                                        (concat (name-bytes module) (name-bytes field)
                                                [0] (uleb index)))
                                      imports (range))))
-        function-sec (concat (uleb (count functions))
-                             (mapcat uleb (range shift (+ shift (count functions)))))
+        component-function-count (if component-standard32?
+                                   (+ (count exported-functions) 2)
+                                   0)
+        function-sec (concat
+                      (uleb (+ (count functions) component-function-count))
+                      (mapcat uleb (range shift (+ shift (count functions))))
+                      (when component-standard32?
+                        (mapcat uleb (concat post-type-indices
+                                             [realloc-type-index initialize-type-index]))))
         ;; (global (mut i64) (i64.const 512)); fixed and low enough to trap before the
         ;; host call stack becomes the limiting resource.
         global-sec [1 0x7e 1 0x42 0x80 0x04 0x0b]
         ;; Pure functions are exported with their source names. This makes
         ;; runtime parameters observable and testable without host authority.
-        export-sec (concat (uleb (count exported-functions))
-                           (mapcat (fn [function]
-                                     (concat (name-bytes (name (:name function))) [0]
-                                             (uleb (get indices (:name function)))))
-                                   exported-functions))
+        component-function-base (+ shift (count functions))
+        realloc-function-index (+ component-function-base (count exported-functions))
+        initialize-function-index (inc realloc-function-index)
+        export-sec (if component-standard32?
+                     (concat
+                      (uleb (+ (* 2 (count exported-functions)) 3))
+                      (mapcat (fn [function post-index]
+                                (concat
+                                 (name-bytes (str "cm32p2||" (name (:name function))))
+                                 [0] (uleb (get indices (:name function)))
+                                 (name-bytes (str "cm32p2||" (name (:name function)) "_post"))
+                                 [0] (uleb post-index)))
+                              exported-functions
+                              (range component-function-base realloc-function-index))
+                      (name-bytes "cm32p2_memory") [2] (uleb 0)
+                      (name-bytes "cm32p2_realloc") [0] (uleb realloc-function-index)
+                      (name-bytes "cm32p2_initialize") [0] (uleb initialize-function-index))
+                     (concat (uleb (count exported-functions))
+                             (mapcat (fn [function]
+                                       (concat (name-bytes (name (:name function))) [0]
+                                               (uleb (get indices (:name function)))))
+                                     exported-functions)))
         descriptor-indices (when typed? (typed/descriptor-indices kir))
         literal-indices (when typed? (typed/literal-indices kir))
         signatures (when typed? (typed-function-signatures functions))
         code-sec (concat
-                  (uleb (count functions))
+                  (uleb (+ (count functions) component-function-count))
                   (mapcat #(if typed?
                              (emit-typed-function-body % indices intrinsic-indices
                                                        descriptor-indices literal-indices signatures)
                              (function-body % indices intrinsic-indices))
-                          functions))
+                          functions)
+                  (when component-standard32?
+                    (concat
+                     (mapcat (fn [_] [2 0 0x0b]) exported-functions)
+                     [4 0 0x41 0 0x0b]
+                     [2 0 0x0b])))
         target-sec (concat (name-bytes "kotoba.target")
                            (utf8 (name target)))
         typed-sec (when (= :kotoba.kir/v4 (:format kir))
@@ -1363,7 +1410,14 @@
                         (section 0 compatibility-sec)
                         (when typed-sec (section 0 typed-sec))
                         (section 1 types) (when (seq imports) (section 2 import-sec))
-                        (section 3 function-sec) (section 6 global-sec)
+                        (section 3 function-sec)
+                        (when component-standard32? (section 5 [1 0 0]))
+                        (section 6 global-sec)
                         (section 7 export-sec) (section 10 code-sec))]
       #?(:clj (byte-array (map unchecked-byte bytes))
-         :cljs (js/Uint8Array.from (clj->js (map #(bit-and % 0xff) bytes)))))))
+         :cljs (js/Uint8Array.from (clj->js (map #(bit-and % 0xff) bytes))))))))
+
+(defn emit-component-core
+  "Emit a standard32-named core module for Component Model Canonical lifting."
+  [kir target]
+  (emit kir target {:component-standard32? true}))
