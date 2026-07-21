@@ -71,8 +71,9 @@
   ([source] (compile-component source {}))
   ([source policy]
    (let [core (compile-source source :wasm32-wasi-kotoba-v1 policy)
-         wit (component-wit/emit (:kir core))]
-     (assoc (component-artifact/package (:bytes core) (:kir core) wit)
+         wit (component-wit/emit (:kir core))
+         component-core (wasm/emit-component-core (:kir core) :wasm32-wasi-kotoba-v1)]
+     (assoc (component-artifact/package component-core (:kir core) wit)
             :wit wit :admission (:admission core)))))
 
 (defn- compile-source*
