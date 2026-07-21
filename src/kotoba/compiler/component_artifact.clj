@@ -17,10 +17,11 @@
     (apply str (map #(format "%02x" (bit-and (int %) 0xff)) digest))))
 
 (defn assert-qualified-slice! [kir wit]
-  (when (seq (:imports wit))
-    (reject "component capability imports require Canonical provider lowering"
-            {:imports (:imports wit)}))
-  (component-core/assert-supported! kir))
+  (let [lowering (component-core/assert-supported! kir)]
+    (when (and (seq (:imports wit)) (not= :scalar-capability-call lowering))
+      (reject "component capability imports require Canonical provider lowering"
+              {:imports (:imports wit)}))
+    lowering))
 
 (defn assert-scalar-slice!
   "Compatibility entry point retained for callers of the first artifact slice."

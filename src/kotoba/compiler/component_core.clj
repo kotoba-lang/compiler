@@ -3,6 +3,7 @@
   (:require [clojure.string :as str]
             [kotoba.compiler.backend.wasm :as wasm]
             [kotoba.compiler.canonical-abi :as canonical]
+            [kotoba.compiler.component-wit :as component-wit]
             [kotoba.compiler.wasm-tools :as wasm-tools]))
 
 (defn- reject [message data]
@@ -127,9 +128,28 @@
        :field-sources (assoc (vec (range (count fields)))
                              field-index (count fields))})))
 
+(defn- scalar-capability-call [function]
+  (let [{:keys [params param-types result body]} function
+        [_ id request-type result-type request] (when (seq? body) body)
+        capability (some #(when (= id (:id %)) %) (:capabilities component-wit/contract))]
+    (when (and (= 1 (count params))
+               (= 1 (count param-types))
+               (seq? body)
+               (= 'typed-cap-call (first body))
+               (= request (first params))
+               (= request-type (first param-types))
+               (= result-type result)
+               (contains? #{:i64 :f32 :f64} request-type)
+               (contains? #{:i64 :f32 :f64} result-type)
+               capability)
+      capability)))
+
 (defn assert-supported! [kir]
   (let [exports (exported-functions kir)]
     (cond
+      (and (= 1 (count (:functions kir)))
+           (= 1 (count exports))
+           (scalar-capability-call (first exports))) :scalar-capability-call
       (every? scalar-function? exports) :scalar
       (and (= 1 (count (:functions kir)))
            (= 1 (count exports))
@@ -454,6 +474,27 @@
      "    i32.const 8 global.set $next)\n"
      "  (func (export \"cm32p2_initialize\") i32.const 8 global.set $next))\n")))
 
+(defn- scalar-capability-wat [function capability]
+  (let [export (wit-name (:name function))
+        request-type (first (:param-types function))
+        result-type (:result function)
+        interface (name (:interface capability))
+        operation (:function capability)]
+    (str
+     "(module\n"
+     "  (import \"cm32p2|kotoba:application/" interface "@1\" \"" operation
+     "\" (func $provider (param " (wasm-value-type request-type)") (result "
+     (wasm-value-type result-type) ")))\n"
+     "  (memory (export \"cm32p2_memory\") 1 1)\n"
+     "  (func (export \"cm32p2||" export "\") (param $request "
+     (wasm-value-type request-type) ") (result " (wasm-value-type result-type) ")\n"
+     "    local.get $request call $provider)\n"
+     "  (func (export \"cm32p2||" export "_post\") (param "
+     (wasm-value-type result-type) "))\n"
+     "  (func (export \"cm32p2_realloc\") (param i32 i32 i32 i32) (result i32)\n"
+     "    i32.const 0)\n"
+     "  (func (export \"cm32p2_initialize\")))\n")))
+
 (defn emit [kir target]
   (case (assert-supported! kir)
     :scalar (wasm/emit-component-core kir target)
@@ -474,4 +515,8 @@
     (let [function (first (exported-functions kir))]
       (wasm-tools/parse-wat
        (scalar-record-write-wat function (:schemas kir)
-                                (scalar-record-update function (:schemas kir)))))))
+                                (scalar-record-update function (:schemas kir)))))
+    :scalar-capability-call
+    (let [function (first (exported-functions kir))]
+      (wasm-tools/parse-wat
+       (scalar-capability-wat function (scalar-capability-call function))))))

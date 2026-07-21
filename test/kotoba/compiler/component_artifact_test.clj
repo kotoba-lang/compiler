@@ -3,6 +3,7 @@
             [clojure.string :as str]
             [kotoba.compiler.backend.wasm :as wasm]
             [kotoba.compiler.component-artifact :as component]
+            [kotoba.compiler.component-core :as component-core]
             [kotoba.compiler.component-wit :as wit]))
 
 (def scalar-kir
@@ -17,10 +18,18 @@
                         (component/assert-scalar-slice!
                          (assoc-in scalar-kir [:functions 0 :result] :string)
                          (wit/emit (assoc-in scalar-kir [:functions 0 :result] :string)))))
-  (let [cap-kir (assoc-in scalar-kir [:functions 0 :body]
-                          '(typed-cap-call 4 :i64 :i64 left))]
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"capability imports"
-                          (component/assert-scalar-slice! cap-kir (wit/emit cap-kir))))))
+  (let [cap-kir (assoc scalar-kir
+                       :exports ['invoke]
+                       :functions [{:name 'invoke :params ['request]
+                                    :param-types [:i64] :result :i64
+                                    :body '(typed-cap-call 4 :i64 :i64 request)}])]
+    (is (true? (component/assert-scalar-slice! cap-kir (wit/emit cap-kir))))
+    (let [artifact (component/package
+                    (component-core/emit cap-kir :wasm32-wasi-kotoba-v1)
+                    cap-kir (wit/emit cap-kir))]
+      (is (= :scalar-capability-call (:canonical-lowering artifact)))
+      (is (= [:http/post] (:imports artifact)))
+      (is (= :wasm-component/v1 (:format artifact))))))
 
 (deftest bounded-string-expression-slice-is-explicit
   (let [identity-kir
