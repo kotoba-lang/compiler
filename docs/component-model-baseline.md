@@ -77,6 +77,12 @@ One sealed nominal record containing only scalar fields can now cross a direct
 capability call and an identity provider through Canonical ABI result areas
 (ADR 0048). Nested aggregates and production provider semantics remain closed.
 
+ADR 0049 is the authoritative closing gap ledger for this implementation
+session. In particular, identity providers and successful composition are
+wiring evidence only. Wasmtime and native remain pending until nested Canonical
+codecs, production providers, shared semantic vectors, and their respective
+runtime gates are complete.
+
 ## Official sources
 
 - https://github.com/WebAssembly/component-model
