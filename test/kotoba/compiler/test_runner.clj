@@ -23,6 +23,7 @@
             [kotoba.compiler.backend-qualification-test]
             [kotoba.compiler.component-wit-test]
             [kotoba.compiler.component-artifact-test]
+            [kotoba.compiler.canonical-abi-test]
             [kotoba.compiler.ios-aot-test]
             [kotoba.compiler.interface-test]
             [kotoba.compiler.native-executor-test]
@@ -74,6 +75,7 @@
                                           'kotoba.compiler.backend-qualification-test
                                           'kotoba.compiler.component-wit-test
                                           'kotoba.compiler.component-artifact-test
+                                          'kotoba.compiler.canonical-abi-test
                                           'kotoba.compiler.ios-aot-test
                                           'kotoba.compiler.interface-test
                                           'kotoba.compiler.admission-test
