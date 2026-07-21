@@ -41,6 +41,7 @@
     (= descriptor :vector-i64) "list<s64>"
     (= descriptor :vector-f64) "list<f64>"
     (and (vector? descriptor) (= :ref (first descriptor))) (wit-name (second descriptor))
+    (and (vector? descriptor) (= :record (first descriptor))) (wit-name (second descriptor))
     (and (vector? descriptor) (= :option (first descriptor)))
     (str "option<" (type-text (second descriptor)) ">")
     (and (vector? descriptor) (= :result (first descriptor)))
@@ -81,6 +82,7 @@
 (defn- referenced-schema-names [descriptor]
   (cond
     (and (vector? descriptor) (= :ref (first descriptor))) #{(second descriptor)}
+    (and (vector? descriptor) (= :record (first descriptor))) #{(second descriptor)}
     (coll? descriptor) (reduce into #{} (map referenced-schema-names descriptor))
     :else #{}))
 
@@ -144,6 +146,12 @@
                        (filter (comp (set (:exports kir)) :name))
                        (sort-by (comp str :name)))
           export-types (mapcat (fn [f] (conj (vec (:param-types f)) (:result f))) exports)
+          _ (doseq [descriptor (mapcat #(tree-seq coll? seq %) export-types)
+                    :when (and (vector? descriptor) (= :record (first descriptor)))]
+              (let [identity (second descriptor)]
+                (when-not (= descriptor (get schemas identity))
+                  (reject "inline record differs from sealed schema identity"
+                          {:descriptor descriptor :schema (get schemas identity)}))))
           text (str "package kotoba:application@1.0.0;\n\n"
                     (when (seq schemas)
                       (str "interface types {\n"

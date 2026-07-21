@@ -35,8 +35,10 @@
 (defn- scalar-record-identity-function? [function schemas]
   (let [{:keys [params param-types result body]} function
         descriptor (first param-types)
-        schema (when (and (vector? descriptor) (= :ref (first descriptor)))
-                 (get schemas (second descriptor)))]
+        schema (cond
+                 (and (vector? descriptor) (= :ref (first descriptor)))
+                 (get schemas (second descriptor))
+                 (and (vector? descriptor) (= :record (first descriptor))) descriptor)]
     (and (= 1 (count params))
          (= 1 (count param-types))
          (= descriptor result)
@@ -45,6 +47,31 @@
          (seq (nth schema 2))
          (every? (comp #{:i64 :f32 :f64 :bool} second) (nth schema 2))
          (canonical/layout descriptor schemas))))
+
+(defn- scalar-record-projection [function schemas]
+  (let [{:keys [params param-types result body]} function
+        descriptor (first param-types)
+        schema (cond
+                 (and (vector? descriptor) (= :ref (first descriptor)))
+                 (get schemas (second descriptor))
+                 (and (vector? descriptor) (= :record (first descriptor))) descriptor)
+        [_ body-type value field] (when (seq? body) body)
+        fields (when (and (vector? schema) (= :record (first schema))) (nth schema 2))
+        field-index (first (keep-indexed (fn [index [name _]]
+                                          (when (= name field) index))
+                                        fields))
+        field-type (when (some? field-index) (second (nth fields field-index)))]
+    (when (and (= 1 (count params))
+               (= 1 (count param-types))
+               (seq? body)
+               (= 'record-get (first body))
+               (or (= body-type descriptor) (= body-type schema))
+               (= value (first params))
+               (some? field-index)
+               (= field-type result)
+               (contains? #{:i64 :f32 :f64 :bool} result)
+               (every? (comp #{:i64 :f32 :f64 :bool} second) fields))
+      {:descriptor descriptor :schema schema :field-index field-index})))
 
 (defn assert-supported! [kir]
   (let [exports (exported-functions kir)]
@@ -58,6 +85,10 @@
            (= 1 (count exports))
            (scalar-record-identity-function? (first exports) (:schemas kir))
            (empty? (:effects kir))) :scalar-record-identity
+      (and (= 1 (count (:functions kir)))
+           (= 1 (count exports))
+           (scalar-record-projection (first exports) (:schemas kir))
+           (empty? (:effects kir))) :scalar-record-projection
       :else
       (reject "component function body has no qualified Canonical lowering"
               {:exports (mapv #(select-keys % [:name :param-types :result :body]) exports)}))))
@@ -252,6 +283,58 @@
      "    i32.const 8 global.set $next)\n"
      "  (func (export \"cm32p2_initialize\") i32.const 8 global.set $next))\n")))
 
+(defn- scalar-record-projection-wat [function schemas]
+  (let [export (wit-name (:name function))
+        {:keys [descriptor field-index]} (scalar-record-projection function schemas)
+        record-layout (canonical/layout descriptor schemas)
+        fields (:fields record-layout)
+        result (:result function)
+        params (apply str
+                      (map-indexed
+                       (fn [index {:keys [layout]}]
+                         (str " (param $f" index " "
+                              (wasm-value-type (:descriptor layout)) ")"))
+                       fields))
+        bool-validation
+        (apply str
+               (keep-indexed
+                (fn [index {:keys [layout]}]
+                  (when (= :bool (:descriptor layout))
+                    (str "    local.get $f" index
+                         " i32.const 1 i32.gt_u if unreachable end\n")))
+                fields))]
+    (str
+     "(module\n"
+     "  (memory (export \"cm32p2_memory\") 1 1)\n"
+     "  (global $next (mut i32) (i32.const 8))\n"
+     "  (func $realloc (export \"cm32p2_realloc\")\n"
+     "    (param $old-ptr i32) (param $old-size i32)\n"
+     "    (param $align i32) (param $new-size i32) (result i32)\n"
+     "    (local $ptr i32) (local $end i32) (local $copy-size i32)\n"
+     "    local.get $new-size i32.eqz if i32.const 0 return end\n"
+     "    local.get $align i32.eqz if unreachable end\n"
+     "    local.get $align i32.const 8 i32.gt_u if unreachable end\n"
+     "    local.get $align local.get $align i32.const 1 i32.sub i32.and if unreachable end\n"
+     "    global.get $next local.get $align i32.const 1 i32.sub i32.add\n"
+     "    i32.const 0 local.get $align i32.sub i32.and local.tee $ptr\n"
+     "    local.get $new-size i32.add local.tee $end local.get $ptr i32.lt_u\n"
+     "    if unreachable end\n"
+     "    local.get $end i32.const 65536 i32.gt_u if unreachable end\n"
+     "    local.get $end global.set $next\n"
+     "    local.get $old-ptr i32.eqz if else\n"
+     "      local.get $old-size local.get $new-size i32.lt_u\n"
+     "      if (result i32) local.get $old-size else local.get $new-size end\n"
+     "      local.set $copy-size\n"
+     "      local.get $ptr local.get $old-ptr local.get $copy-size memory.copy\n"
+     "    end local.get $ptr)\n"
+     "  (func (export \"cm32p2||" export "\")" params
+     " (result " (wasm-value-type result) ")\n"
+     bool-validation
+     "    local.get $f" field-index ")\n"
+     "  (func (export \"cm32p2||" export "_post\") (param "
+     (wasm-value-type result) "))\n"
+     "  (func (export \"cm32p2_initialize\") i32.const 8 global.set $next))\n")))
+
 (defn emit [kir target]
   (case (assert-supported! kir)
     :scalar (wasm/emit-component-core kir target)
@@ -259,4 +342,7 @@
                         (string-expression-wat (first (exported-functions kir))))
     :scalar-record-identity
     (wasm-tools/parse-wat
-     (scalar-record-wat (first (exported-functions kir)) (:schemas kir)))))
+     (scalar-record-wat (first (exported-functions kir)) (:schemas kir)))
+    :scalar-record-projection
+    (wasm-tools/parse-wat
+     (scalar-record-projection-wat (first (exported-functions kir)) (:schemas kir)))))
