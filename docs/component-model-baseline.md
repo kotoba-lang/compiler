@@ -61,6 +61,8 @@ single bounded allocation (ADR 0042); other string operations remain closed.
 Named non-empty records containing only scalar fields have checked layout and
 an executable identity slice (ADR 0043). Record operations, nested aggregates,
 and provider request/results remain closed.
+Direct field projection from those records to a scalar result is executable
+(ADR 0044); construction, update, and nested record expressions remain closed.
 
 ## Official sources
 

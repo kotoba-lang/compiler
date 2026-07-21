@@ -57,6 +57,12 @@
                             :validation [:checked-pointer-range :valid-utf8]}
     (and (vector? descriptor) (= :ref (first descriptor)))
     (record-layout descriptor schemas visited)
+    (and (vector? descriptor) (= :record (first descriptor)))
+    (let [identity (second descriptor)]
+      (when-not (= descriptor (get schemas identity))
+        (reject "inline record differs from sealed schema identity"
+                {:descriptor descriptor :schema (get schemas identity)}))
+      (assoc (record-layout [:ref identity] schemas visited) :descriptor descriptor))
     :else
     (reject "descriptor has no qualified Canonical ABI layout"
             {:descriptor descriptor})))

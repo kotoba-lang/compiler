@@ -39,6 +39,18 @@
         (is (re-find #"component-type" (:out result))))
       (finally (Files/deleteIfExists path)))))
 
+(deftest sealed-inline-record-exports-use-their-nominal-wit-type
+  (let [record-type [:record :app/point [[:x :i64] [:visible :bool]]]
+        value {:format :kotoba.kir/v4 :exports ['echo]
+               :schemas {:app/point record-type}
+               :functions [{:name 'echo :params ['point] :param-types [record-type]
+                            :result record-type :body 'point}]}
+        source (:source (wit/emit value))]
+    (is (re-find #"export echo: func\(point: app-point\) -> app-point" source))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"differs from sealed schema identity"
+                          (wit/emit (assoc-in value [:functions 0 :result]
+                                              [:record :app/point [[:x :f64]]]))))))
+
 (deftest rejects-unregistered-capabilities-and-name-collisions
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no WIT contract"
                         (wit/emit (assoc-in kir [:functions 0 :body]

@@ -54,6 +54,21 @@
                            (assoc-in kir [:schemas :demo/point 2 0 1] :string)
                            (wit/emit kir))))))
 
+(deftest named-scalar-record-field-projection-is-admitted
+  (let [schema [:record :demo/point
+                [[:x :i64] [:weight :f64] [:visible :bool]]]
+        descriptor [:ref :demo/point]
+        kir {:format :kotoba.kir/v4 :exports ['weight] :effects #{}
+             :schemas {:demo/point schema}
+             :functions [{:name 'weight :params ['value] :param-types [descriptor]
+                          :result :f64 :body (list 'record-get schema 'value :weight)}]}]
+    (is (true? (component/assert-scalar-slice! kir (wit/emit kir))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
+                          (component/assert-scalar-slice!
+                           (assoc-in kir [:functions 0 :body]
+                                     (list 'record-get schema 'value :missing))
+                           (wit/emit kir))))))
+
 (defn- binary-text [bytes]
   (String. ^bytes bytes java.nio.charset.StandardCharsets/ISO_8859_1))
 
