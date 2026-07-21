@@ -63,6 +63,9 @@ an executable identity slice (ADR 0043). Record operations, nested aggregates,
 and provider request/results remain closed.
 Direct field projection from those records to a scalar result is executable
 (ADR 0044); construction, update, and nested record expressions remain closed.
+Direct scalar-parameter construction and one-field scalar `record-assoc` are
+executable through a shared field-source/result-area plan (ADR 0045). Computed
+and nested record expressions remain closed.
 
 ## Official sources
 
