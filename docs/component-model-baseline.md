@@ -69,6 +69,10 @@ and nested record expressions remain closed.
 Direct typed capability calls with scalar request/result now lower to a
 standard32 application component import (ADR 0046). Provider composition and
 all structured capability payloads remain closed.
+Compiler-owned scalar provider artifacts can now close that import through the
+current `wac plug` path plus official `wasm-tools` validation (ADR 0047). The identity
+provider proves wiring only; kit semantics and structured payloads remain
+unqualified.
 
 ## Official sources
 

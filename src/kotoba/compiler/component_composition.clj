@@ -1,0 +1,113 @@
+(ns kotoba.compiler.component-composition
+  "Closed-world composition support for compiler-qualified Component artifacts."
+  (:require [kotoba.compiler.component-wit :as component-wit]
+            [kotoba.compiler.wasm-tools :as wasm-tools])
+  (:import [java.nio.file Files]
+           [java.nio.file.attribute FileAttribute]))
+
+(defn- reject [message data]
+  (throw (ex-info message (assoc data :phase :component-composition))))
+
+(def wac-version "0.9.0")
+
+(defn- assert-wac-version! []
+  (let [actual (.trim ^String (wasm-tools/run-command! ["wac" "--version"]))]
+    (when-not (= (str "wac-cli " wac-version) actual)
+      (reject "wac version is not pinned"
+              {:expected wac-version :actual actual}))))
+
+(defn- scalar-wasm-type [descriptor]
+  (or ({:i64 "i64" :f32 "f32" :f64 "f64"} descriptor)
+      (reject "provider identity requires a Canonical scalar" {:descriptor descriptor})))
+
+(defn- capability [name]
+  (or (some #(when (= name (:name %)) %) (:capabilities component-wit/contract))
+      (reject "provider capability is not present in the pinned contract" {:capability name})))
+
+(defn- provider-wit [entry descriptor]
+  (let [type-name (or ({:i64 "s64" :f32 "f32" :f64 "f64"} descriptor)
+                      (reject "provider identity requires a Canonical scalar"
+                              {:descriptor descriptor}))
+        interface (:interface entry)
+        function (:function entry)]
+    (str "package kotoba:application@1.0.0;\n\n"
+         "interface " interface " {\n"
+         "  " function ": func(request: " type-name ") -> " type-name ";\n"
+         "}\n\n"
+         "world " interface "-provider {\n"
+         "  export " interface ";\n"
+         "}\n")))
+
+(defn- provider-wat [entry descriptor]
+  (let [wasm-type (scalar-wasm-type descriptor)
+        export (str "cm32p2|kotoba:application/" (:interface entry) "@1|" (:function entry))]
+    (str "(module\n"
+         "  (memory (export \"cm32p2_memory\") 1 1)\n"
+         "  (func (export \"" export "\") (param $request " wasm-type ") (result " wasm-type ")\n"
+         "    local.get $request)\n"
+         "  (func (export \"" export "_post\") (param " wasm-type "))\n"
+         "  (func (export \"cm32p2_realloc\") (param i32 i32 i32 i32) (result i32) i32.const 0)\n"
+         "  (func (export \"cm32p2_initialize\")))\n")))
+
+(defn package-scalar-identity-provider
+  "Build a validation-only provider that preserves one scalar value. This
+  proves interface wiring; it is not semantic evidence for a production kit."
+  [capability-name descriptor]
+  (let [entry (capability capability-name)
+        wit (provider-wit entry descriptor)
+        dir (Files/createTempDirectory "kotoba-provider-" (make-array FileAttribute 0))
+        world (.resolve dir "provider.wit")
+        core (.resolve dir "provider.wasm")
+        embedded (.resolve dir "embedded.wasm")
+        component (.resolve dir "provider.component.wasm")]
+    (try
+      (Files/writeString world wit (make-array java.nio.file.OpenOption 0))
+      (Files/write core (wasm-tools/parse-wat (provider-wat entry descriptor))
+                   (make-array java.nio.file.OpenOption 0))
+      (wasm-tools/run-command! ["wasm-tools" "component" "embed" (str world) (str core)
+                                "--encoding" "utf8" "-o" (str embedded)])
+      (wasm-tools/run-command! ["wasm-tools" "component" "new" (str embedded)
+                                "--reject-legacy-names" "-o" (str component)])
+      {:format :wasm-component-provider/v1
+       :capability capability-name
+       :descriptor descriptor
+       :bytes (Files/readAllBytes component)}
+      (finally
+        (doseq [path [component embedded core world]] (Files/deleteIfExists path))
+        (Files/deleteIfExists dir)))))
+
+(defn compose-closed
+  "Compose one application with provider definitions and reject any remaining
+  instance import. `wasm-tools compose --no-imports` is the closure gate."
+  [application providers]
+  (when-not (= :wasm-component/v1 (:format application))
+    (reject "composition requires a compiler component artifact"
+            {:format (:format application)}))
+  (let [required (frequencies (:imports application))
+        supplied (frequencies (map :capability providers))]
+    (when-not (= required supplied)
+      (reject "provider definitions do not exactly close application imports"
+              {:required required :supplied supplied})))
+  (assert-wac-version!)
+  (let [dir (Files/createTempDirectory "kotoba-compose-" (make-array FileAttribute 0))
+        app (.resolve dir "application.wasm")
+        output (.resolve dir "closed.wasm")
+        definitions (mapv #(.resolve dir (str "provider-" % ".wasm"))
+                          (range (count providers)))]
+    (try
+      (Files/write app ^bytes (:bytes application) (make-array java.nio.file.OpenOption 0))
+      (doseq [[path provider] (map vector definitions providers)]
+        (when-not (= :wasm-component-provider/v1 (:format provider))
+          (reject "definition is not a compiler provider artifact" {:format (:format provider)}))
+        (Files/write path ^bytes (:bytes provider) (make-array java.nio.file.OpenOption 0)))
+      (wasm-tools/run-command!
+       (into ["wac" "plug" (str app) "-o" (str output)]
+             (mapcat #(vector "--plug" (str %)) definitions)))
+      (wasm-tools/run-command! ["wasm-tools" "validate" (str output)])
+      {:format :wasm-component-closed/v1
+       :bytes (Files/readAllBytes output)
+       :application-imports (:imports application)
+       :providers (mapv #(select-keys % [:capability :descriptor]) providers)}
+      (finally
+        (doseq [path (concat [output app] definitions)] (Files/deleteIfExists path))
+        (Files/deleteIfExists dir)))))

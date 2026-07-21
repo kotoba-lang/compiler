@@ -22,7 +22,9 @@
          :compatibility [{:version "0.2.11"
                           :revision "ed73919426173babd88ae145e31deca3d484bbd0"
                           :status :legacy-explicit}]
-         :minimum-wasmtime-major 43}}
+         :minimum-wasmtime-major 43
+         :toolchain {:wasm-tools "1.243.0"
+                     :wac-cli "0.9.0"}}}
  :types
  {:i64 {:wit :s64}
   :f32 {:wit :f32}
