@@ -13,10 +13,13 @@
   (is (= 20 (oracle "(defn choose [x] (case x 1 10 2 20 30))
                      (defn main [] (choose 2))")))
   (is (= 7 (oracle "(defn main [] (case :ready :hold 3 :ready 7 9))")))
-  (is (= 0 (oracle "(defn main [] (case 8 1 10 2 20))")))
+  (is (= 23 (oracle "(defn main [] (case :ready (:hold :ready) 23 9))")))
+  (is (thrown? ArithmeticException
+               (oracle "(defn main [] (case 8 1 10 2 20))")))
   (doseq [bad ["(defn main [] (case))"
                "(defn main [] (case 1 (+ 0 1) 2))"
-               "(defn main [] (case 1 1 2 1 3))"]]
+               "(defn main [] (case 1 1 2 1 3))"
+               "(defn main [] (case 1 (1 2) 3 2 4))"]]
     (is (thrown? clojure.lang.ExceptionInfo (compiler/check-source bad)))))
 
 (deftest binding-conditionals-evaluate-once

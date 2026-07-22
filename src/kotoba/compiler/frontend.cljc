@@ -645,18 +645,25 @@
   (when (empty? args) (reject! "case requires a dispatch expression" form))
   (let [[dispatch & clauses] args
         default? (odd? (count clauses))
-        default (if default? (last clauses) 0)
+        default (if default? (last clauses) '(quot 1 0))
         pairs (partition 2 (if default? (butlast clauses) clauses))
-        constants (map first pairs)]
-    (when-not (every? #(or (kotoba-integer? %) (keyword? %) (boolean? %)) constants)
-      (reject! "case constants must be bounded integer, keyword, or boolean literals" form))
+        groups (map first pairs)
+        constants (mapcat #(if (seq? %) % [%]) groups)
+        literal? #(or (kotoba-integer? %) (keyword? %) (boolean? %) (string? %))]
+    (when-not (every? literal? constants)
+      (reject! "case constants must be bounded integer, keyword, boolean, or string literals" form))
     (when-not (= (count constants) (count (distinct constants)))
       (reject! "case constants must be unique" form))
     (let [tmp (gensym "case__")]
       (list 'let [tmp (desugar-expr dispatch)]
-            (reduce (fn [fallback [constant result]]
-                      (list 'if (list '= tmp (desugar-expr constant))
-                            (desugar-expr result) fallback))
+            (reduce (fn [fallback [group result]]
+                      (let [members (if (seq? group) group [group])
+                            test (if (= 1 (count members))
+                                   (list '= tmp (desugar-expr (first members)))
+                                   (desugar-or
+                                    (map #(list '= tmp (desugar-expr %)) members)))]
+                        (list 'if test
+                              (desugar-expr result) fallback)))
                     (desugar-expr default)
                     (reverse pairs))))))
 
