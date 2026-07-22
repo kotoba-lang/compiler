@@ -82,6 +82,14 @@ session. In particular, identity providers and successful composition are
 wiring evidence only. Wasmtime and native remain pending until nested Canonical
 codecs, production providers, shared semantic vectors, and their respective
 runtime gates are complete.
+A sealed record whose fields are scalar or exactly one level of nested sealed
+all-scalar record now has a checked layout, a Canonical-flattened leaf plan,
+and an executable identity slice (ADR 0051), with a manual Wasmtime 42.0.1
+round trip on a two-level record shape. Two or more levels of nesting,
+strings inside records, lists/tuples/options/results/variants (including a
+variant case wrapping a record), nested aggregates crossing a capability
+request/result boundary, and every production provider's semantics remain
+closed; no capability kit's `:wasm-aot` qualification changed.
 
 ## Official sources
 

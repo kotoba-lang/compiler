@@ -47,3 +47,35 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"matching schema identity"
                           (canonical/layout descriptor
                                             {:demo/point [:record :demo/other [[:x :i64]]]})))))
+
+(deftest one-level-nested-record-layout-flattens-recursively-with-absolute-offsets
+  (let [descriptor [:ref :demo/outer]
+        schemas {:demo/inner [:record :demo/inner [[:code :i64] [:ratio :f64]]]
+                 :demo/outer [:record :demo/outer
+                              [[:id :i64] [:inner [:ref :demo/inner]] [:active :bool]]]}
+        outer-layout (canonical/layout descriptor schemas)
+        inner-layout (canonical/layout [:ref :demo/inner] schemas)]
+    (is (= 32 (:size outer-layout)))
+    (is (= 8 (:alignment outer-layout)))
+    (is (= [:i64 :i64 :f64 :i32] (:flat outer-layout)))
+    (is (= [0 8 24] (mapv :offset (:fields outer-layout))))
+    (is (= inner-layout (get-in outer-layout [:fields 1 :layout])))
+    (is (= [{:offset 0 :descriptor :i64}
+            {:offset 8 :descriptor :i64}
+            {:offset 16 :descriptor :f64}
+            {:offset 24 :descriptor :bool}]
+           (canonical/layout-leaves outer-layout)))
+    (is (= [:i32]
+           (:core-results
+            (canonical/export-plan
+             {:name 'echo :params ['value] :param-types [descriptor] :result descriptor}
+             schemas))))
+    (is (= [:i64 :i64 :f64 :i32]
+           (:core-params
+            (canonical/export-plan
+             {:name 'echo :params ['value] :param-types [descriptor] :result descriptor}
+             schemas))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"recursive schema has no bounded"
+                          (canonical/layout [:ref :demo/self]
+                                            {:demo/self [:record :demo/self
+                                                         [[:child [:ref :demo/self]]]]})))))

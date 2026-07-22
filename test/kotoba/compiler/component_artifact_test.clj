@@ -63,6 +63,53 @@
                            (assoc-in kir [:schemas :demo/point 2 0 1] :string)
                            (wit/emit kir))))))
 
+(deftest one-level-nested-scalar-record-identity-is-admitted
+  (let [descriptor [:ref :demo/outer]
+        schemas {:demo/inner [:record :demo/inner [[:code :i64] [:ratio :f64]]]
+                 :demo/outer [:record :demo/outer
+                              [[:id :i64] [:inner [:ref :demo/inner]] [:active :bool]]]}
+        kir {:format :kotoba.kir/v4 :exports ['echo] :effects #{}
+             :schemas schemas
+             :functions [{:name 'echo :params ['value] :param-types [descriptor]
+                          :result descriptor :body 'value}]}]
+    (is (true? (component/assert-scalar-slice! kir (wit/emit kir))))
+    (let [artifact (component/package
+                    (component-core/emit kir :wasm32-wasi-kotoba-v1)
+                    kir (wit/emit kir))]
+      (is (= :nested-record-identity (:canonical-lowering artifact)))
+      (is (= :wasm-component/v1 (:format artifact)))
+      (is (= [0 97 115 109 13 0 1 0]
+             (mapv #(bit-and (int %) 0xff) (take 8 (:bytes artifact))))))
+    ;; Two levels of nesting remain fail-closed: a nested field's own field
+    ;; may not itself be a nested record.
+    (let [two-level-schemas
+          (assoc schemas
+                 :demo/middle [:record :demo/middle [[:leaf [:ref :demo/inner]]]]
+                 :demo/deep [:record :demo/deep [[:mid [:ref :demo/middle]]]])
+          deep-kir (-> kir
+                      (assoc :schemas two-level-schemas)
+                      (assoc-in [:functions 0 :param-types] [[:ref :demo/deep]])
+                      (assoc-in [:functions 0 :result] [:ref :demo/deep]))]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
+                            (component/assert-scalar-slice! deep-kir (wit/emit deep-kir)))))
+    ;; A nested field with a non-scalar (string) leaf remains fail-closed.
+    (let [string-leaf-schemas
+          {:demo/inner-str [:record :demo/inner-str [[:label :string]]]
+           :demo/outer-str [:record :demo/outer-str
+                            [[:id :i64] [:inner [:ref :demo/inner-str]]]]}
+          string-kir (-> kir
+                        (assoc :schemas string-leaf-schemas)
+                        (assoc-in [:functions 0 :param-types] [[:ref :demo/outer-str]])
+                        (assoc-in [:functions 0 :result] [:ref :demo/outer-str]))]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
+                            (component/assert-scalar-slice! string-kir (wit/emit string-kir)))))
+    ;; A nested field descriptor whose sealed schema identity has drifted
+    ;; remains fail-closed.
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
+                          (component/assert-scalar-slice!
+                           (assoc-in kir [:schemas :demo/inner 1] :demo/renamed)
+                           (wit/emit kir))))))
+
 (deftest named-scalar-record-field-projection-is-admitted
   (let [schema [:record :demo/point
                 [[:x :i64] [:weight :f64] [:visible :bool]]]
