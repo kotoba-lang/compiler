@@ -162,6 +162,44 @@
     (is (= 8 (:size value)))
     (is (= 4 (:alignment value)))))
 
+(deftest variant-with-string-keyword-record-case-flattens-payload-fields-generically
+  ;; `layout*`/`variant-layout`/`variant-flatten-payload` needed no code
+  ;; changes for ADR 0054: a case's own `layout*` call already resolves a
+  ;; record-with-string/keyword-fields payload the same way a top-level
+  ;; string-field record already does (ADR 0053), so its own `:flat`
+  ;; already carries the correct `[:i32 :i32]` pointer+length pair per
+  ;; string-like field before this test is even written -- this test exists
+  ;; to make that generic behavior explicit and pinned, not to exercise new
+  ;; canonical-abi.cljc logic. `demo/entry` mirrors `state-v1`'s own `entry`
+  ;; shape exactly (`key: keyword, value: string, version: i64`).
+  (let [descriptor [:ref :demo/state-result]
+        schemas {:demo/entry [:record :demo/entry
+                              [[:key :keyword] [:value :string] [:version :i64]]]
+                 :demo/state-result [:variant :demo/state-result
+                                     [[:found [:ref :demo/entry]] [:missing :bool]]]}
+        value (canonical/layout descriptor schemas)]
+    (is (= :variant (:kind value)))
+    (is (= [:found :missing] (mapv :tag (:cases value))))
+    ;; found's own flat is [i32 i32 i32 i32 i64] (key ptr/len, value
+    ;; ptr/len, version); missing's own flat is [i32] and only ever touches
+    ;; position 0, joining i32/i32 -> i32 there and leaving positions 1-4
+    ;; exactly as found's own record layout already produced them. The
+    ;; leading discriminant i32 is prepended on top of this joined sequence.
+    (is (= [:i32 :i32 :i32 :i32 :i32 :i64] (:flat value)))
+    (is (= 1 (:discriminant-size value)))
+    (is (= 8 (:payload-offset value)))
+    (is (= 8 (:alignment value)))
+    (is (= 32 (:size value)))
+    (is (= [{:offset 0 :descriptor :keyword :max-bytes 512}
+            {:offset 8 :descriptor :string :max-bytes 65536}
+            {:offset 16 :descriptor :i64}]
+           (canonical/layout-leaves (:layout (first (:cases value))))))
+    (is (= [:i32 :i32 :i32 :i32 :i32 :i64]
+           (:core-params
+            (canonical/export-plan
+             {:name 'echo :params ['value] :param-types [descriptor] :result descriptor}
+             schemas))))))
+
 (deftest variant-reference-requires-matching-sealed-schema-identity
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"variant reference has no matching schema identity"
                         (canonical/layout [:ref :demo/outcome]

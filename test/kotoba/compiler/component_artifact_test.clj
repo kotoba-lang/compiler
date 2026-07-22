@@ -139,18 +139,36 @@
       (is (= :wasm-component/v1 (:format artifact)))
       (is (= [0 97 115 109 13 0 1 0]
              (mapv #(bit-and (int %) 0xff) (take 8 (:bytes artifact))))))
-    ;; A case wrapping a record with a non-scalar (string) field remains
-    ;; fail-closed, exactly like a record identity's non-scalar leaf.
-    (let [string-case-schemas
-          {:demo/label [:record :demo/label [[:text :string]]]
+    ;; A case wrapping a record with a field outside the admitted set
+    ;; entirely remains fail-closed. Before ADR 0054, this assertion used a
+    ;; case wrapping a record with a `:string` field; as of ADR 0054 that
+    ;; shape is admitted (via the dedicated `:variant-identity` path with a
+    ;; string/keyword-bearing case -- see
+    ;; `variant-with-string-keyword-record-and-scalar-cases-identity-is-
+    ;; admitted`), so a genuinely still-unsupported field type
+    ;; (`[:vector :i64]`) is needed to keep testing "an out-of-set case
+    ;; payload shape is rejected", mirroring ADR 0053's own regression-test
+    ;; update to `named-scalar-record-identity-is-admitted`.
+    (let [vector-case-schemas
+          {:demo/label [:record :demo/label [[:tags [:vector :i64]]]]
            :demo/status [:variant :demo/status
                          [[:ready :bool] [:labeled [:ref :demo/label]]]]}
-          string-kir (-> kir
-                        (assoc :schemas string-case-schemas)
+          vector-kir (-> kir
+                        (assoc :schemas vector-case-schemas)
                         (assoc-in [:functions 0 :param-types] [[:ref :demo/status]])
                         (assoc-in [:functions 0 :result] [:ref :demo/status]))]
+      ;; `wit/emit` is called on the original, still-valid `kir` here (not
+      ;; `vector-kir`) because `component-wit/type-text` has no rendering
+      ;; for a bare `[:vector :i64]` field type at all (it only recognizes
+      ;; `[:vector [<types>...]]` as a WIT tuple) and would throw its own,
+      ;; unrelated exception before `assert-scalar-slice!` ever runs;
+      ;; `assert-qualified-slice!` only consults `wit` for its
+      ;; already-empty `:imports`, so the stale WIT does not affect what
+      ;; this assertion actually checks. Mirrors the identical `(wit/emit
+      ;; kir)` substitution in `named-scalar-record-identity-is-admitted`'s
+      ;; own `[:vector :i64]` regression case.
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
-                            (component/assert-scalar-slice! string-kir (wit/emit string-kir)))))
+                            (component/assert-scalar-slice! vector-kir (wit/emit kir)))))
     ;; A case wrapping a record that is itself one level nested (the ADR
     ;; 0051 shape) remains fail-closed: a variant case payload is bounded to
     ;; the flat ADR 0043 record shape only in this slice.
@@ -200,6 +218,76 @@
   (let [descriptor [:ref :demo/flag-or-ratio]
         schemas {:demo/flag-or-ratio [:variant :demo/flag-or-ratio
                                       [[:urgent :bool] [:weight :f32]]]}
+        kir {:format :kotoba.kir/v4 :exports ['echo] :effects #{}
+             :schemas schemas
+             :functions [{:name 'echo :params ['value] :param-types [descriptor]
+                          :result descriptor :body 'value}]}]
+    (is (true? (component/assert-scalar-slice! kir (wit/emit kir))))
+    (let [artifact (component/package
+                    (component-core/emit kir :wasm32-wasi-kotoba-v1)
+                    kir (wit/emit kir))]
+      (is (= :variant-identity (:canonical-lowering artifact)))
+      (is (= :wasm-component/v1 (:format artifact))))))
+
+(deftest variant-with-string-keyword-record-and-scalar-cases-identity-is-admitted
+  ;; `demo/state-result` is structurally a slice of `state-v1.edn`'s actual
+  ;; `:result` type: `demo/entry` is exactly `state-v1`'s own `entry` record
+  ;; (`key: keyword, value: string, version: i64`), and `:found`/`:missing`
+  ;; are two of `state-v1`'s own five cases. ADR 0052 admitted a variant case
+  ;; wrapping a sealed all-scalar record; ADR 0053 admitted a record with
+  ;; string/keyword fields, but only as a *top-level* export, never as a
+  ;; variant case payload. ADR 0054 is the first slice to admit a variant
+  ;; case wrapping a string/keyword-bearing record, which this test exercises
+  ;; concretely for the first time.
+  (let [entry-schema [:record :demo/entry [[:key :keyword] [:value :string] [:version :i64]]]
+        descriptor [:ref :demo/state-result]
+        schemas {:demo/entry entry-schema
+                 :demo/state-result [:variant :demo/state-result
+                                     [[:found [:ref :demo/entry]] [:missing :bool]]]}
+        kir {:format :kotoba.kir/v4 :exports ['echo] :effects #{}
+             :schemas schemas
+             :functions [{:name 'echo :params ['value] :param-types [descriptor]
+                          :result descriptor :body 'value}]}]
+    (is (true? (component/assert-scalar-slice! kir (wit/emit kir))))
+    (let [artifact (component/package
+                    (component-core/emit kir :wasm32-wasi-kotoba-v1)
+                    kir (wit/emit kir))]
+      (is (= :variant-identity (:canonical-lowering artifact)))
+      (is (= :wasm-component/v1 (:format artifact)))
+      (is (= [0 97 115 109 13 0 1 0]
+             (mapv #(bit-and (int %) 0xff) (take 8 (:bytes artifact))))))
+    ;; A case whose own string/keyword field exceeds its bound remains a
+    ;; schema-admission concern only at the layout level, not here -- the
+    ;; runtime trap is exercised manually under Wasmtime (see ADR 0054); at
+    ;; the admission level, a case record with a field outside the whole
+    ;; admitted set (i64/f32/f64/bool/string/keyword) still fails closed.
+    (let [out-of-set-schemas
+          {:demo/entry [:record :demo/entry [[:key :keyword] [:tags [:vector :i64]]]]
+           :demo/state-result [:variant :demo/state-result
+                               [[:found [:ref :demo/entry]] [:missing :bool]]]}
+          out-of-set-kir (-> kir (assoc :schemas out-of-set-schemas))]
+      ;; `wit/emit` uses the original `kir` here, not `out-of-set-kir`, for
+      ;; the same `[:vector :i64]`-has-no-WIT-rendering reason documented in
+      ;; `variant-with-record-and-scalar-cases-identity-is-admitted`.
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
+                            (component/assert-scalar-slice! out-of-set-kir
+                                                            (wit/emit kir)))))))
+
+(deftest variant-with-scalar-and-both-record-kinds-mixed-in-one-case-set-is-admitted
+  ;; Beyond the state-v1 slice above: a single variant may freely mix all
+  ;; three admitted case-payload kinds -- a bare scalar, a sealed all-scalar
+  ;; record (ADR 0052), and a sealed string/keyword-bearing record (ADR
+  ;; 0054) -- with no requirement that every record case be the same kind.
+  (let [entry-schema [:record :demo/mixed-entry
+                      [[:key :keyword] [:value :string] [:version :i64]]]
+        tally-schema [:record :demo/mixed-tally [[:count :i64] [:ok :bool]]]
+        descriptor [:ref :demo/mixed-outcome]
+        schemas {:demo/mixed-entry entry-schema
+                 :demo/mixed-tally tally-schema
+                 :demo/mixed-outcome [:variant :demo/mixed-outcome
+                                      [[:found [:ref :demo/mixed-entry]]
+                                       [:tally [:ref :demo/mixed-tally]]
+                                       [:missing :bool]]]}
         kir {:format :kotoba.kir/v4 :exports ['echo] :effects #{}
              :schemas schemas
              :functions [{:name 'echo :params ['value] :param-types [descriptor]

@@ -119,6 +119,28 @@ field, string/keyword fields crossing a `typed-cap-call` request/result
 boundary, lists/tuples/options/results, and every production provider's
 semantics all remain closed; no capability kit's `:wasm-aot` qualification
 changed.
+A sealed variant whose every case's payload is independently a Canonical
+scalar, a sealed all-scalar record (ADR 0052), or a sealed flat
+string/keyword-bearing record (ADR 0053) -- cases may freely mix all three
+kinds within one variant -- now has an executable identity slice (ADR 0054),
+closing exactly the combination both ADR 0052's and ADR 0053's own remaining
+gaps named next. `canonical-abi.cljc` needed no code changes at all (its
+existing recursive layout/flatten already handled this shape generically);
+the admission predicate and WAT emitter in `component-core.clj` did, with
+manual Wasmtime 42.0.1 round trips on a concrete structural slice of
+`state-v1`'s own `result` type (`found: entry`/`missing: bool`, `entry`
+being `state-v1`'s real `key: keyword, value: string, version: i64` shape)
+covering full i64 range and multi-byte UTF-8, a second three-case shape
+proving all three case kinds can mix freely in one variant, and both byte
+bounds exercised as real Wasmtime traps inside a variant case for the first
+time. `state-v1`'s actual five-case `result` type is not closed end to end
+(two representative cases proven, not all five; the request side, a real
+`typed-cap-call` crossing, and a real production state provider remain
+separately gapped), string/keyword leaves inside an ADR 0051 nested-record
+field, a variant used as a record field or nested inside another variant's
+case, lists/tuples/options/results, and every production provider's
+semantics all remain closed; no capability kit's `:wasm-aot` qualification
+changed.
 
 ## Official sources
 

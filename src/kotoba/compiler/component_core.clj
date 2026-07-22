@@ -68,31 +68,6 @@
                        (nth schema 2)))
       schema)))
 
-(defn- sealed-scalar-variant-schema
-  "Schema of `descriptor` when it is a sealed variant whose every case's
-  payload is a Canonical scalar or a sealed all-scalar record (the same
-  shape `sealed-scalar-record` itself admits: top-level scalar fields only,
-  not `nested-scalar-record-schema`'s one-level nesting). A case payload
-  that is itself a nested-of-nested record, a record with a non-scalar
-  field, or another variant fails `sealed-scalar-record` and so is rejected
-  here too, before component encoding is attempted -- this bounds the
-  variant slice to exactly the same 'record depth' ADR 0048 proved, applied
-  per case instead of at the top level."
-  [descriptor schemas]
-  (let [schema (cond
-                 (and (vector? descriptor) (= :ref (first descriptor)))
-                 (get schemas (second descriptor))
-                 (and (vector? descriptor) (= :variant (first descriptor))) descriptor)]
-    (when (and (vector? schema)
-               (= :variant (first schema))
-               (seq (nth schema 2))
-               (= schema (get schemas (second schema)))
-               (every? (fn [[_ payload-type]]
-                         (or (contains? #{:i64 :f32 :f64 :bool} payload-type)
-                             (sealed-scalar-record payload-type schemas)))
-                       (nth schema 2)))
-      schema)))
-
 (defn- string-keyword-scalar-field? [field-type]
   (contains? #{:i64 :f32 :f64 :bool :string :keyword} field-type))
 
@@ -105,16 +80,20 @@
   payload, so `state-v1`'s actual `entry`/`error` records remain closed'):
   `state-v1`'s `entry` record (`key: keyword, value: string, version: i64`)
   is this shape exactly. It deliberately does not add `:string`/`:keyword`
-  to `sealed-scalar-record` itself -- projection, construction, update,
-  scalar-capability-call's request/result admission, and
-  `sealed-scalar-variant-schema`'s case-payload admission all key off
-  `sealed-scalar-record`, and their WAT emitters
+  to `sealed-scalar-record` itself -- projection, construction, update, and
+  scalar-capability-call's request/result admission all key off
+  `sealed-scalar-record` alone, and their WAT emitters
   (`scalar-record-projection-wat`/`scalar-record-write-wat`/
-  `record-capability-wat`/`variant-case-body`) only know `wasm-value-type`/
-  `wasm-store`, neither of which has a `:string`/`:keyword` case; widening
-  `sealed-scalar-record` itself would make those predicates silently admit a
-  shape their own emitters cannot correctly generate. This function and its
-  own dedicated identity path are the only consumers of the wider field set."
+  `record-capability-wat`) only know `wasm-value-type`/`wasm-store`, neither
+  of which has a `:string`/`:keyword` case; widening `sealed-scalar-record`
+  itself would make those predicates silently admit a shape their own
+  emitters cannot correctly generate. This function and its own dedicated
+  identity path were the only consumers of the wider field set as of ADR
+  0053; ADR 0054 added a second, explicit consumer --
+  `record-or-scalar-variant-case?`/`variant-case-schema`, whose matching
+  `variant-case-body` emitter was extended in the same change to actually
+  handle a string/keyword leaf, so that second consumer does not repeat the
+  silent-admission hazard this docstring warns against."
   [descriptor schemas]
   (let [schema (cond
                  (and (vector? descriptor) (= :ref (first descriptor)))
@@ -125,6 +104,47 @@
                (seq (nth schema 2))
                (= schema (get schemas (second schema)))
                (every? (comp string-keyword-scalar-field? second) (nth schema 2)))
+      schema)))
+
+(defn- record-or-scalar-variant-case?
+  "True when `payload-type` is a shape ADR 0054 admits as one variant case's
+  payload: a Canonical scalar, a sealed all-scalar record (the ADR 0052
+  shape), or a sealed flat string/keyword-bearing record (the ADR 0053
+  shape). A case payload that is itself an ADR 0051 one-level-nested record,
+  or another variant, fails both `sealed-scalar-record` and
+  `string-field-record-schema` and so is rejected here too -- this bounds
+  every case to exactly the same 'flat record, no nesting, no variant
+  payload' depth ADR 0052/0053 each proved on their own, now admitted
+  per case in any mix within one variant."
+  [payload-type schemas]
+  (or (contains? #{:i64 :f32 :f64 :bool} payload-type)
+      (boolean (sealed-scalar-record payload-type schemas))
+      (boolean (string-field-record-schema payload-type schemas))))
+
+(defn- variant-case-schema
+  "Schema of `descriptor` when it is a sealed variant whose every case's
+  payload independently satisfies `record-or-scalar-variant-case?`. This
+  directly widens ADR 0052's `sealed-scalar-variant-schema` in place (the
+  only caller was `variant-identity-function?`, and the codegen side --
+  `variant-case-leaves`/`variant-case-body`/`variant-wat` -- is extended in
+  the same change to actually emit correct WAT for the newly admitted
+  string/keyword-bearing record case shape, so there is no window where this
+  predicate admits a case shape its own emitter cannot yet correctly
+  generate). Cases may freely mix all three kinds (scalar, all-scalar
+  record, string/keyword-bearing record) within one variant -- there is no
+  per-variant restriction that every record case be the same kind."
+  [descriptor schemas]
+  (let [schema (cond
+                 (and (vector? descriptor) (= :ref (first descriptor)))
+                 (get schemas (second descriptor))
+                 (and (vector? descriptor) (= :variant (first descriptor))) descriptor)]
+    (when (and (vector? schema)
+               (= :variant (first schema))
+               (seq (nth schema 2))
+               (= schema (get schemas (second schema)))
+               (every? (fn [[_ payload-type]]
+                         (record-or-scalar-variant-case? payload-type schemas))
+                       (nth schema 2)))
       schema)))
 
 (defn- string-field-record-identity-function? [function schemas]
@@ -178,7 +198,7 @@
 (defn- variant-identity-function? [function schemas]
   (let [{:keys [params param-types result body]} function
         descriptor (first param-types)
-        schema (sealed-scalar-variant-schema descriptor schemas)]
+        schema (variant-case-schema descriptor schemas)]
     (and (= 1 (count params))
          (= 1 (count param-types))
          (= descriptor result)
@@ -501,48 +521,108 @@
     :else (reject "variant flat join has no defined coercion" {:have have :want want})))
 
 (defn- variant-case-leaves
-  "The ordered `{:relative-offset :descriptor :flat-index}` leaves of one
-  variant case's own payload layout: a scalar payload is its own single
-  leaf at relative offset 0 and flat-index 0; a sealed all-scalar record
-  payload (the only aggregate case shape this slice admits -- see
-  `sealed-scalar-variant-schema`) contributes one leaf per top-level field,
-  in the same order as the record's own `:fields`/`:flat`, so `flat-index`
-  always lines up with position `flat-index` of *this case's own*
-  `flatten_type` sequence -- the same sequence `variant-flatten-payload`
-  folds every case's flat types into, position by position, starting at
-  index 0 for every case alike. This does not recurse into nested `:fields`
-  (unlike `canonical-abi/layout-leaves`): a variant case payload is bounded
-  to the ADR 0043 flat-record shape in this slice, never the ADR 0051
-  one-level-nested shape, so no leaf here is itself a nested record."
+  "The ordered `{:relative-offset :descriptor :flat-index}` (plus
+  `:max-bytes` on a string/keyword leaf) leaves of one variant case's own
+  payload layout: a scalar payload is its own single leaf at relative
+  offset 0 and flat-index 0; a sealed all-scalar record payload (ADR 0052)
+  or a sealed flat string/keyword-bearing record payload (ADR 0053, ADR
+  0054) contributes one leaf per top-level field, in the same order as the
+  record's own `:fields`/`:flat`. `flat-index` is now a running sum of each
+  preceding field's own flat *width* (1 for a scalar, 2 for a string/keyword
+  pointer+length leaf) rather than a plain field index, because a
+  string/keyword field's own `:flat` is two core positions
+  (`[:i32 :i32]`) -- `flat-index` must still line up with position
+  `flat-index` of *this case's own* `flatten_type` sequence, the same
+  sequence `variant-flatten-payload` folds every case's flat types into
+  position by position starting at index 0 for every case alike; a
+  string/keyword leaf's second (`length`) core value sits at `flat-index`+1
+  by construction (never re-derived from a separate counter -- see
+  `variant-string-leaf-value-exprs`). This does not recurse into nested
+  `:fields` (unlike `canonical-abi/layout-leaves`): a variant case payload
+  is bounded to the ADR 0043/0053 flat-record shape in this slice, never
+  the ADR 0051 one-level-nested shape, so no leaf here is itself a nested
+  record."
   [layout]
   (if (contains? layout :fields)
-    (vec (map-indexed (fn [index {:keys [offset layout]}]
-                        {:relative-offset offset :descriptor (:descriptor layout) :flat-index index})
-                      (:fields layout)))
+    (loop [remaining (:fields layout) flat-index 0 acc []]
+      (if-let [{:keys [offset layout]} (first remaining)]
+        (let [descriptor (:descriptor layout)
+              max-bytes (:max-bytes layout)
+              width (if max-bytes 2 1)
+              leaf (cond-> {:relative-offset offset :descriptor descriptor :flat-index flat-index}
+                     max-bytes (assoc :max-bytes max-bytes))]
+          (recur (next remaining) (+ flat-index width) (conj acc leaf)))
+        acc))
     [{:relative-offset 0 :descriptor (:descriptor layout) :flat-index 0}]))
 
-(defn- variant-payload-value-expr [joined-types leaf]
-  (let [{:keys [descriptor flat-index]} leaf
-        have (nth joined-types flat-index)
-        want (core-type-of descriptor)]
+(defn- variant-flat-value-expr
+  "The WAT expression that turns the joined-flat param at `flat-index`
+  (core type `(nth joined-types flat-index)`) back into a value of core
+  type `want`, via `variant-coerce-ops` -- the same un-join step
+  `variant-payload-value-expr` already did for a scalar leaf's single
+  position, factored out so a string/keyword leaf can call it twice (once
+  for its pointer position, once for its length position, both always
+  wanting `:i32`)."
+  [joined-types flat-index want]
+  (let [have (nth joined-types flat-index)]
     (apply str "local.get $p" flat-index
            (map #(str " " %) (variant-coerce-ops have want)))))
 
-(defn- variant-case-body [payload-offset joined-types leaves]
+(defn- variant-payload-value-expr [joined-types leaf]
+  (variant-flat-value-expr joined-types (:flat-index leaf) (core-type-of (:descriptor leaf))))
+
+(defn- variant-string-leaf-value-exprs
+  "The `[pointer-expr length-expr]` pair for one string/keyword leaf: its
+  pointer sits at `flat-index`, its length at `flat-index`+1, both always
+  joined as (or coerced back to) `:i32` -- the identical pointer+length
+  linear-memory shape ADR 0040/0041/0053 already gave a bare string
+  parameter and a string-field record leaf."
+  [joined-types leaf]
+  [(variant-flat-value-expr joined-types (:flat-index leaf) :i32)
+   (variant-flat-value-expr joined-types (inc (:flat-index leaf)) :i32)])
+
+(defn- variant-case-body
+  "The validation and result-area stores for one active variant case,
+  covering three leaf shapes now: a plain scalar leaf (unchanged from ADR
+  0052 -- range-checked if `:bool`, then stored via `wasm-store`), and a
+  string/keyword leaf (new in ADR 0054 -- length checked against its own
+  `:max-bytes` and pointer range checked against the module's own `capacity`
+  exactly like `string-field-record-wat`'s `validate-parameters`, then
+  stored as the pointer+length pair). Both validations are scoped inside
+  this case's own branch only, matching the existing bool-validation
+  precedent: validating a shared joined position unconditionally, before
+  knowing which case is active, would wrongly reject a legitimate payload
+  belonging to a different case occupying the same position."
+  [payload-offset joined-types capacity leaves]
   (let [validation
         (apply str
                (keep (fn [leaf]
-                       (when (= :bool (:descriptor leaf))
+                       (cond
+                         (:max-bytes leaf)
+                         (let [[pointer length] (variant-string-leaf-value-exprs joined-types leaf)]
+                           (str
+                            "      " length " i32.const " (:max-bytes leaf)
+                            " i32.gt_u if unreachable end\n"
+                            "      " pointer " " length " i32.add\n"
+                            "      local.tee $end " pointer " i32.lt_u if unreachable end\n"
+                            "      local.get $end i32.const " capacity " i32.gt_u if unreachable end\n"))
+                         (= :bool (:descriptor leaf))
                          (str "      " (variant-payload-value-expr joined-types leaf)
-                              " i32.const 1 i32.gt_u if unreachable end\n")))
+                              " i32.const 1 i32.gt_u if unreachable end\n")
+                         :else nil))
                      leaves))
         stores
         (apply str
                (map (fn [leaf]
-                      (str "      local.get $ret "
-                           (variant-payload-value-expr joined-types leaf)
-                           " " (wasm-store (:descriptor leaf))
-                           " offset=" (+ payload-offset (:relative-offset leaf)) "\n"))
+                      (if (:max-bytes leaf)
+                        (let [[pointer length] (variant-string-leaf-value-exprs joined-types leaf)
+                              offset (+ payload-offset (:relative-offset leaf))]
+                          (str "      local.get $ret " pointer " i32.store offset=" offset "\n"
+                               "      local.get $ret " length " i32.store offset=" (+ offset 4) "\n"))
+                        (str "      local.get $ret "
+                             (variant-payload-value-expr joined-types leaf)
+                             " " (wasm-store (:descriptor leaf))
+                             " offset=" (+ payload-offset (:relative-offset leaf)) "\n")))
                     leaves))]
     (str validation stores)))
 
@@ -553,9 +633,9 @@
   because the discriminant is already range-checked (`i32.ge_u` against the
   case count) before this chain runs, so falling through every prior `else`
   leaves exactly the last case."
-  [cases payload-offset joined-types]
+  [cases payload-offset joined-types capacity]
   (letfn [(build [remaining index]
-            (let [body (variant-case-body payload-offset joined-types
+            (let [body (variant-case-body payload-offset joined-types capacity
                                           (variant-case-leaves (:layout (first remaining))))]
               (if (= 1 (count remaining))
                 body
@@ -569,23 +649,46 @@
 
 (defn- variant-wat
   "Identity export for a sealed variant whose every case's payload is a
-  Canonical scalar or a sealed all-scalar record. The core function
-  receives the variant already flattened by the caller's own `canon
-  lower` -- an `i32` discriminant plus one core value per joined payload
-  position (`canonical/layout`'s `:flat` on a variant descriptor, computed
-  by `variant-flatten-payload`) -- range-checks the discriminant, allocates
-  the variant's in-memory union result area (discriminant byte plus the
-  widest case's payload, from the same layout's `:size`/`:alignment`),
-  stores the discriminant, and then, in exactly the branch selected by the
-  discriminant, un-joins and stores that case's own leaves
-  (`variant-case-chain`/`variant-coerce-ops`). This is the same
-  realloc/result-area shape as `scalar-record-wat`/`nested-record-wat`;
-  the only new work is the join/coercion table a variant's shared flat
-  positions require and a record's concatenated ones never did."
+  Canonical scalar, a sealed all-scalar record (ADR 0052), or a sealed flat
+  string/keyword-bearing record (ADR 0053, admitted as a case payload for
+  the first time here in ADR 0054). The core function receives the variant
+  already flattened by the caller's own `canon lower` -- an `i32`
+  discriminant plus one core value per joined payload position
+  (`canonical/layout`'s `:flat` on a variant descriptor, computed by
+  `variant-flatten-payload`, which already folds a string/keyword field's
+  own two-position `[:i32 :i32]` flat sequence into the join exactly like
+  any other field's flat sequence -- no change was needed there) --
+  range-checks the discriminant, allocates the variant's in-memory union
+  result area (discriminant byte plus the widest case's payload, from the
+  same layout's `:size`/`:alignment`), stores the discriminant, and then,
+  in exactly the branch selected by the discriminant, un-joins and stores
+  that case's own leaves (`variant-case-chain`/`variant-coerce-ops`,
+  `variant-case-body`). This is the same realloc/result-area shape as
+  `scalar-record-wat`/`nested-record-wat`/`string-field-record-wat`; the
+  new work is the join/coercion table a variant's shared flat positions
+  require (ADR 0052, unchanged) plus threading a string/keyword leaf's
+  pointer+length pair and its own bounds validation through that same
+  per-case branch (ADR 0054). Memory sizing follows
+  `string-field-record-wat`'s generous-not-tight precedent, but keyed off
+  the *widest single case* (`max-string-leaves-per-case`), not a sum across
+  every case -- only one case's own payload is ever validated or stored per
+  call, so only one case's own string-like leaf count needs headroom, and a
+  variant with no string-like leaf in any case keeps the exact original
+  one-page/65536-byte memory this function produced before ADR 0054 (no
+  page-count regression for the ADR 0052 shapes already proven)."
   [function schemas]
   (let [export (wit-name (:name function))
         variant-layout (canonical/layout (first (:param-types function)) schemas)
         joined-types (vec (rest (:flat variant-layout)))
+        case-leaves (mapv (fn [case] (variant-case-leaves (:layout case))) (:cases variant-layout))
+        max-string-leaves-per-case (reduce max 0 (map #(count (filter :max-bytes %)) case-leaves))
+        needs-string-headroom? (pos? max-string-leaves-per-case)
+        pages (if needs-string-headroom?
+                (max 1 (quot (+ 8 (* (inc max-string-leaves-per-case) 65536)
+                                (:size variant-layout) 65535)
+                             65536))
+                1)
+        capacity (* pages 65536)
         params (apply str
                       (map-indexed
                        (fn [index core-type]
@@ -593,10 +696,10 @@
                        joined-types))
         case-chain (variant-case-chain (:cases variant-layout)
                                        (:payload-offset variant-layout)
-                                       joined-types)]
+                                       joined-types capacity)]
     (str
      "(module\n"
-     "  (memory (export \"cm32p2_memory\") 1 1)\n"
+     "  (memory (export \"cm32p2_memory\") " pages " " pages ")\n"
      "  (global $next (mut i32) (i32.const 8))\n"
      "  (func $realloc (export \"cm32p2_realloc\")\n"
      "    (param $old-ptr i32) (param $old-size i32)\n"
@@ -610,7 +713,7 @@
      "    i32.const 0 local.get $align i32.sub i32.and local.tee $ptr\n"
      "    local.get $new-size i32.add local.tee $end local.get $ptr i32.lt_u\n"
      "    if unreachable end\n"
-     "    local.get $end i32.const 65536 i32.gt_u if unreachable end\n"
+     "    local.get $end i32.const " capacity " i32.gt_u if unreachable end\n"
      "    local.get $end global.set $next\n"
      "    local.get $old-ptr i32.eqz if else\n"
      "      local.get $old-size local.get $new-size i32.lt_u\n"
@@ -619,7 +722,7 @@
      "      local.get $ptr local.get $old-ptr local.get $copy-size memory.copy\n"
      "    end local.get $ptr)\n"
      "  (func (export \"cm32p2||" export "\") (param $disc i32)" params " (result i32)\n"
-     "    (local $ret i32)\n"
+     "    (local $ret i32)" (when needs-string-headroom? " (local $end i32)") "\n"
      "    local.get $disc i32.const " (count (:cases variant-layout)) " i32.ge_u if unreachable end\n"
      "    i32.const 0 i32.const 0 i32.const " (:alignment variant-layout)
      " i32.const " (:size variant-layout) " call $realloc local.set $ret\n"
