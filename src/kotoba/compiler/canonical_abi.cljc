@@ -145,6 +145,13 @@
                             :encoding string-encoding
                             :max-bytes value/string-value-byte-limit
                             :validation [:checked-pointer-range :valid-utf8]}
+    (= descriptor :keyword) {:descriptor :keyword
+                             :size 8
+                             :alignment 4
+                             :flat [:i32 :i32]
+                             :encoding string-encoding
+                             :max-bytes value/keyword-value-byte-limit
+                             :validation [:checked-pointer-range :valid-utf8]}
     (and (vector? descriptor) (= :ref (first descriptor)))
     (let [schema (get schemas (second descriptor))]
       (if (and (vector? schema) (= :variant (first schema)))
@@ -175,21 +182,34 @@
 
 (defn layout-leaves
   "Flatten one record layout (as returned by `layout`) into an ordered list
-  of `{:offset absolute-byte-offset :descriptor scalar-descriptor}` leaves, in
-  the same left-to-right depth-first order as the layout's own `:flat`
-  vector. A field whose own layout is itself a nested record layout (that is,
-  it carries a `:fields` key) is recursed into so every nested scalar leaf
+  of leaves, in the same left-to-right depth-first order as the layout's own
+  `:flat` vector. A field whose own layout is itself a nested record layout
+  (that is, it carries a `:fields` key) is recursed into so every nested leaf
   gets its own absolute store/load offset; this is how one level of nested
   aggregate lowering reuses the same flat-scalar codegen as a plain record.
-  Every consumer must still bound nesting depth before calling this (`layout`
-  itself only rejects unbounded recursive schemas, not depth generally)."
+  A field whose own layout is a bounded `string`/`keyword` (carries a
+  `:max-bytes` key, the same pointer+length linear-memory shape ADR 0040/0041
+  already gave bare string parameters/results) is exposed as
+  `{:offset :descriptor :max-bytes}` instead of the plain scalar leaf's
+  `{:offset :descriptor}`, so callers can tell a two-core-value pointer+length
+  leaf from a one-core-value scalar leaf without re-deriving it from the
+  descriptor. Every consumer must still bound nesting depth before calling
+  this (`layout` itself only rejects unbounded recursive schemas, not depth
+  generally)."
   ([record-layout] (layout-leaves record-layout 0))
   ([record-layout base-offset]
    (vec
     (mapcat (fn [{:keys [offset layout]}]
               (let [absolute (+ base-offset offset)]
-                (if (contains? layout :fields)
+                (cond
+                  (contains? layout :fields)
                   (layout-leaves layout absolute)
+
+                  (contains? layout :max-bytes)
+                  [{:offset absolute :descriptor (:descriptor layout)
+                    :max-bytes (:max-bytes layout)}]
+
+                  :else
                   [{:offset absolute :descriptor (:descriptor layout)}])))
             (:fields record-layout)))))
 
