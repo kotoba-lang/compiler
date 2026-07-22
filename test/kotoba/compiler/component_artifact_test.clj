@@ -110,6 +110,100 @@
                            (assoc-in kir [:schemas :demo/inner 1] :demo/renamed)
                            (wit/emit kir))))))
 
+(deftest variant-with-record-and-scalar-cases-identity-is-admitted
+  (let [descriptor [:ref :demo/outcome]
+        schemas {:demo/entry [:record :demo/entry
+                              [[:code :i64] [:ratio :f64] [:present :bool]]]
+                 :demo/short [:record :demo/short [[:code :i64] [:flag :bool]]]
+                 :demo/outcome [:variant :demo/outcome
+                                [[:found [:ref :demo/entry]]
+                                 [:missing :bool]
+                                 [:failed :f32]
+                                 [:short [:ref :demo/short]]]]}
+        kir {:format :kotoba.kir/v4 :exports ['echo] :effects #{}
+             :schemas schemas
+             :functions [{:name 'echo :params ['value] :param-types [descriptor]
+                          :result descriptor :body 'value}]}]
+    (is (true? (component/assert-scalar-slice! kir (wit/emit kir))))
+    (let [artifact (component/package
+                    (component-core/emit kir :wasm32-wasi-kotoba-v1)
+                    kir (wit/emit kir))]
+      (is (= :variant-identity (:canonical-lowering artifact)))
+      (is (= :wasm-component/v1 (:format artifact)))
+      (is (= [0 97 115 109 13 0 1 0]
+             (mapv #(bit-and (int %) 0xff) (take 8 (:bytes artifact))))))
+    ;; A case wrapping a record with a non-scalar (string) field remains
+    ;; fail-closed, exactly like a record identity's non-scalar leaf.
+    (let [string-case-schemas
+          {:demo/label [:record :demo/label [[:text :string]]]
+           :demo/status [:variant :demo/status
+                         [[:ready :bool] [:labeled [:ref :demo/label]]]]}
+          string-kir (-> kir
+                        (assoc :schemas string-case-schemas)
+                        (assoc-in [:functions 0 :param-types] [[:ref :demo/status]])
+                        (assoc-in [:functions 0 :result] [:ref :demo/status]))]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
+                            (component/assert-scalar-slice! string-kir (wit/emit string-kir)))))
+    ;; A case wrapping a record that is itself one level nested (the ADR
+    ;; 0051 shape) remains fail-closed: a variant case payload is bounded to
+    ;; the flat ADR 0043 record shape only in this slice.
+    (let [nested-case-schemas
+          {:demo/inner [:record :demo/inner [[:code :i64]]]
+           :demo/wrapper [:record :demo/wrapper [[:inner [:ref :demo/inner]]]]
+           :demo/status [:variant :demo/status
+                         [[:ready :bool] [:wrapped [:ref :demo/wrapper]]]]}
+          nested-kir (-> kir
+                        (assoc :schemas nested-case-schemas)
+                        (assoc-in [:functions 0 :param-types] [[:ref :demo/status]])
+                        (assoc-in [:functions 0 :result] [:ref :demo/status]))]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
+                            (component/assert-scalar-slice! nested-kir (wit/emit nested-kir)))))
+    ;; A case wrapping another variant remains fail-closed: only scalars and
+    ;; sealed all-scalar records are admitted case payloads in this slice.
+    (let [variant-case-schemas
+          {:demo/inner-variant [:variant :demo/inner-variant [[:a :bool]]]
+           :demo/status [:variant :demo/status
+                         [[:ready :bool] [:nested [:ref :demo/inner-variant]]]]}
+          variant-case-kir (-> kir
+                               (assoc :schemas variant-case-schemas)
+                               (assoc-in [:functions 0 :param-types] [[:ref :demo/status]])
+                               (assoc-in [:functions 0 :result] [:ref :demo/status]))]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
+                            (component/assert-scalar-slice! variant-case-kir
+                                                            (wit/emit variant-case-kir)))))
+    ;; A case schema whose sealed identity has drifted remains fail-closed.
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
+                          (component/assert-scalar-slice!
+                           (assoc-in kir [:schemas :demo/entry 1] :demo/renamed)
+                           (wit/emit kir))))
+    ;; A computed variant body (anything other than a bare parameter
+    ;; passthrough) remains fail-closed.
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
+                          (component/assert-scalar-slice!
+                           (assoc-in kir [:functions 0 :body] '(record-get schemas value :found))
+                           (wit/emit kir))))))
+
+(deftest variant-with-only-bool-and-f32-cases-identity-is-admitted
+  ;; Dedicated to the Component Model spec's other join outcome (the
+  ;; i32/f32 special case): neither case ever touches i64/f64, so the
+  ;; shared payload position stays i32 instead of widening to i64, and the
+  ;; f32 case needs the single-instruction `f32.reinterpret_i32` coercion
+  ;; that the record-and-scalar-cases test above never exercises (every
+  ;; payload position there is i64-dominated).
+  (let [descriptor [:ref :demo/flag-or-ratio]
+        schemas {:demo/flag-or-ratio [:variant :demo/flag-or-ratio
+                                      [[:urgent :bool] [:weight :f32]]]}
+        kir {:format :kotoba.kir/v4 :exports ['echo] :effects #{}
+             :schemas schemas
+             :functions [{:name 'echo :params ['value] :param-types [descriptor]
+                          :result descriptor :body 'value}]}]
+    (is (true? (component/assert-scalar-slice! kir (wit/emit kir))))
+    (let [artifact (component/package
+                    (component-core/emit kir :wasm32-wasi-kotoba-v1)
+                    kir (wit/emit kir))]
+      (is (= :variant-identity (:canonical-lowering artifact)))
+      (is (= :wasm-component/v1 (:format artifact))))))
+
 (deftest named-scalar-record-field-projection-is-admitted
   (let [schema [:record :demo/point
                 [[:x :i64] [:weight :f64] [:visible :bool]]]
