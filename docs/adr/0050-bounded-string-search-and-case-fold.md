@@ -113,11 +113,18 @@ Evidence:
   `3598e5bd3e6758f7d88523a8f2b03ce8e64ceaf0`: 47 tests / 160 assertions
   locally (`clojure -M:test`), 0 failures -- that repo has no CI configured.
 - `kotoba-lang/compiler`, this change: `clojure -M:test` 396 tests / 4280
-  assertions, 0 failures. (4 pre-existing errors in
-  `component-artifact-test` are an unrelated local `wasm-tools` version
-  mismatch -- 1.250.0 installed vs. this repo's pinned 1.243.0 -- reproduced
-  identically on a clean checkout with no changes from this ADR; CI pins
-  the correct version via `bytecodealliance/actions/wasm-tools/setup`.)
+  assertions locally, 0 failures, 4 pre-existing errors (`component-artifact-
+  test`/`component-composition-test`, all `wasm-tools version is not
+  pinned`). This is a genuine, unrelated, already-present repository CI
+  health gap, not introduced or fixed by this change: confirmed identical
+  on `main` HEAD (`b2f9443`, the commit this branch was cut from, GitHub
+  Actions run 29798299234, 2026-07-21) across `test (ubuntu-latest)`,
+  `test (ubuntu-24.04-arm)`, and `test (macos-14)` -- `bytecodealliance/
+  actions/wasm-tools/setup@...#main` installs whatever `wasm-tools` release
+  is current (1.250.0-1.254.0 observed across local and CI runs), which has
+  drifted past this repo's `kotoba.compiler.wasm-tools` pin of 1.243.0.
+  Fixing that pin drift is a separate, repo-wide maintenance concern
+  unrelated to string primitives and is out of this change's scope.
   `npm run test-nbb-wasm32` (26 cases, 0 failed), `npm run test-browser-host`,
   and `npm run test-wasmtime` (independent Wasmtime instantiation, separate
   from Node's V8 `WebAssembly`) all pass with no regression.
@@ -150,3 +157,7 @@ Evidence:
 - This ADR does not migrate `mineralplant.governor` or touch any
   `kotoba/app` capability-profile work -- both are explicitly separate,
   independently gated efforts.
+- **Pre-existing `wasm-tools` version-pin drift** (`test (ubuntu-latest)`,
+  `test (ubuntu-24.04-arm)`, `test (macos-14)` CI jobs): also not fixed
+  here. It predates and is unrelated to this change (see Evidence); fixing
+  it is a separate repo-wide CI maintenance concern.
