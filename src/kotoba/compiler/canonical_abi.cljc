@@ -74,6 +74,26 @@
   ([descriptor] (layout descriptor {}))
   ([descriptor schemas] (layout* descriptor schemas #{})))
 
+(defn layout-leaves
+  "Flatten one record layout (as returned by `layout`) into an ordered list
+  of `{:offset absolute-byte-offset :descriptor scalar-descriptor}` leaves, in
+  the same left-to-right depth-first order as the layout's own `:flat`
+  vector. A field whose own layout is itself a nested record layout (that is,
+  it carries a `:fields` key) is recursed into so every nested scalar leaf
+  gets its own absolute store/load offset; this is how one level of nested
+  aggregate lowering reuses the same flat-scalar codegen as a plain record.
+  Every consumer must still bound nesting depth before calling this (`layout`
+  itself only rejects unbounded recursive schemas, not depth generally)."
+  ([record-layout] (layout-leaves record-layout 0))
+  ([record-layout base-offset]
+   (vec
+    (mapcat (fn [{:keys [offset layout]}]
+              (let [absolute (+ base-offset offset)]
+                (if (contains? layout :fields)
+                  (layout-leaves layout absolute)
+                  [{:offset absolute :descriptor (:descriptor layout)}])))
+            (:fields record-layout)))))
+
 (defn export-plan
   "Plan the standard32 core signature and result-area contract for one KIR
   export. Multi-flat results use the Canonical ABI indirect-result convention."

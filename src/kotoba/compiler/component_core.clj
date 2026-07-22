@@ -33,6 +33,41 @@
        (= :string result)
        (seq (string-leaves body (set params)))))
 
+(defn- sealed-scalar-record [descriptor schemas]
+  (let [schema (cond
+                 (and (vector? descriptor) (= :ref (first descriptor)))
+                 (get schemas (second descriptor))
+                 (and (vector? descriptor) (= :record (first descriptor))) descriptor)]
+    (when (and (vector? schema)
+               (= :record (first schema))
+               (seq (nth schema 2))
+               (= schema (get schemas (second schema)))
+               (every? (comp #{:i64 :f32 :f64 :bool} second) (nth schema 2)))
+      schema)))
+
+(defn- nested-scalar-record-schema
+  "Schema of `descriptor` when it is a sealed record whose fields are each
+  either a Canonical scalar or exactly one level of nested sealed all-scalar
+  record (a field type for which `sealed-scalar-record` itself succeeds, so a
+  nested field's own fields must all be scalar). This admits at most one
+  level of nesting: a field that is itself a nested-of-nested record fails
+  `sealed-scalar-record` (its fields are not all scalar) and so is rejected
+  here too, before component encoding is attempted."
+  [descriptor schemas]
+  (let [schema (cond
+                 (and (vector? descriptor) (= :ref (first descriptor)))
+                 (get schemas (second descriptor))
+                 (and (vector? descriptor) (= :record (first descriptor))) descriptor)]
+    (when (and (vector? schema)
+               (= :record (first schema))
+               (seq (nth schema 2))
+               (= schema (get schemas (second schema)))
+               (every? (fn [[_ field-type]]
+                         (or (contains? #{:i64 :f32 :f64 :bool} field-type)
+                             (sealed-scalar-record field-type schemas)))
+                       (nth schema 2)))
+      schema)))
+
 (defn- scalar-record-identity-function? [function schemas]
   (let [{:keys [params param-types result body]} function
         descriptor (first param-types)
@@ -47,6 +82,22 @@
          (and (vector? schema) (= :record (first schema)))
          (seq (nth schema 2))
          (every? (comp #{:i64 :f32 :f64 :bool} second) (nth schema 2))
+         (canonical/layout descriptor schemas))))
+
+(defn- nested-record-identity-function? [function schemas]
+  (let [{:keys [params param-types result body]} function
+        descriptor (first param-types)
+        schema (nested-scalar-record-schema descriptor schemas)]
+    (and (= 1 (count params))
+         (= 1 (count param-types))
+         (= descriptor result)
+         (= (first params) body)
+         schema
+         ;; Distinct from `scalar-record-identity-function?`: admitted only
+         ;; when at least one field is itself a nested sealed scalar record,
+         ;; so the two predicates (and their dispatch cases) never overlap.
+         (some (fn [[_ field-type]] (sealed-scalar-record field-type schemas))
+               (nth schema 2))
          (canonical/layout descriptor schemas))))
 
 (defn- scalar-record-projection [function schemas]
@@ -73,18 +124,6 @@
                (contains? #{:i64 :f32 :f64 :bool} result)
                (every? (comp #{:i64 :f32 :f64 :bool} second) fields))
       {:descriptor descriptor :schema schema :field-index field-index})))
-
-(defn- sealed-scalar-record [descriptor schemas]
-  (let [schema (cond
-                 (and (vector? descriptor) (= :ref (first descriptor)))
-                 (get schemas (second descriptor))
-                 (and (vector? descriptor) (= :record (first descriptor))) descriptor)]
-    (when (and (vector? schema)
-               (= :record (first schema))
-               (seq (nth schema 2))
-               (= schema (get schemas (second schema)))
-               (every? (comp #{:i64 :f32 :f64 :bool} second) (nth schema 2)))
-      schema)))
 
 (defn- scalar-record-construction [function schemas]
   (let [{:keys [params param-types result body]} function
@@ -180,6 +219,10 @@
            (= 1 (count exports))
            (scalar-record-identity-function? (first exports) (:schemas kir))
            (empty? (:effects kir))) :scalar-record-identity
+      (and (= 1 (count (:functions kir)))
+           (= 1 (count exports))
+           (nested-record-identity-function? (first exports) (:schemas kir))
+           (empty? (:effects kir))) :nested-record-identity
       (and (= 1 (count (:functions kir)))
            (= 1 (count exports))
            (scalar-record-projection (first exports) (:schemas kir))
@@ -351,6 +394,72 @@
                   (str "    local.get $ret local.get $f" index " "
                        (wasm-store (:descriptor layout)) " offset=" offset "\n"))
                 fields))]
+    (str
+     "(module\n"
+     "  (memory (export \"cm32p2_memory\") 1 1)\n"
+     "  (global $next (mut i32) (i32.const 8))\n"
+     "  (func $realloc (export \"cm32p2_realloc\")\n"
+     "    (param $old-ptr i32) (param $old-size i32)\n"
+     "    (param $align i32) (param $new-size i32) (result i32)\n"
+     "    (local $ptr i32) (local $end i32) (local $copy-size i32)\n"
+     "    local.get $new-size i32.eqz if i32.const 0 return end\n"
+     "    local.get $align i32.eqz if unreachable end\n"
+     "    local.get $align i32.const 8 i32.gt_u if unreachable end\n"
+     "    local.get $align local.get $align i32.const 1 i32.sub i32.and if unreachable end\n"
+     "    global.get $next local.get $align i32.const 1 i32.sub i32.add\n"
+     "    i32.const 0 local.get $align i32.sub i32.and local.tee $ptr\n"
+     "    local.get $new-size i32.add local.tee $end local.get $ptr i32.lt_u\n"
+     "    if unreachable end\n"
+     "    local.get $end i32.const 65536 i32.gt_u if unreachable end\n"
+     "    local.get $end global.set $next\n"
+     "    local.get $old-ptr i32.eqz if else\n"
+     "      local.get $old-size local.get $new-size i32.lt_u\n"
+     "      if (result i32) local.get $old-size else local.get $new-size end\n"
+     "      local.set $copy-size\n"
+     "      local.get $ptr local.get $old-ptr local.get $copy-size memory.copy\n"
+     "    end local.get $ptr)\n"
+     "  (func (export \"cm32p2||" export "\")" params " (result i32)\n"
+     "    (local $ret i32)\n"
+     bool-validation
+     "    i32.const 0 i32.const 0 i32.const " (:alignment record-layout)
+     " i32.const " (:size record-layout) " call $realloc local.set $ret\n"
+     stores
+     "    local.get $ret)\n"
+     "  (func (export \"cm32p2||" export "_post\") (param i32)\n"
+     "    i32.const 8 global.set $next)\n"
+     "  (func (export \"cm32p2_initialize\") i32.const 8 global.set $next))\n")))
+
+(defn- nested-record-wat
+  "Identity export for a sealed record with exactly one level of nested
+  record fields. Every core parameter and result-area store is planned from
+  `canonical/layout-leaves`, which walks nested field layouts to absolute
+  offsets in the same depth-first order as the Canonical ABI's own `:flat`
+  vector; this is the only difference from `scalar-record-wat` (which is the
+  degenerate zero-nesting case of the same flattening)."
+  [function schemas]
+  (let [export (wit-name (:name function))
+        record-layout (canonical/layout (first (:param-types function)) schemas)
+        leaves (canonical/layout-leaves record-layout)
+        params (apply str
+                      (map-indexed
+                       (fn [index {:keys [descriptor]}]
+                         (str " (param $f" index " " (wasm-value-type descriptor) ")"))
+                       leaves))
+        bool-validation
+        (apply str
+               (keep-indexed
+                (fn [index {:keys [descriptor]}]
+                  (when (= :bool descriptor)
+                    (str "    local.get $f" index
+                         " i32.const 1 i32.gt_u if unreachable end\n")))
+                leaves))
+        stores
+        (apply str
+               (map-indexed
+                (fn [index {:keys [offset descriptor]}]
+                  (str "    local.get $ret local.get $f" index " "
+                       (wasm-store descriptor) " offset=" offset "\n"))
+                leaves))]
     (str
      "(module\n"
      "  (memory (export \"cm32p2_memory\") 1 1)\n"
@@ -572,6 +681,9 @@
     :scalar-record-identity
     (wasm-tools/parse-wat
      (scalar-record-wat (first (exported-functions kir)) (:schemas kir)))
+    :nested-record-identity
+    (wasm-tools/parse-wat
+     (nested-record-wat (first (exported-functions kir)) (:schemas kir)))
     :scalar-record-projection
     (wasm-tools/parse-wat
      (scalar-record-projection-wat (first (exported-functions kir)) (:schemas kir)))
