@@ -58,9 +58,16 @@
              :functions [{:name 'echo :params ['value] :param-types [descriptor]
                           :result descriptor :body 'value}]}]
     (is (true? (component/assert-scalar-slice! kir (wit/emit kir))))
+    ;; A field outside the admitted flat-leaf type set (i64/f32/f64/bool/
+    ;; string/keyword) remains fail-closed. Before ADR 0053, this assertion
+    ;; used `:string` here; as of ADR 0053 a `:string` field is admitted (via
+    ;; the dedicated `:string-field-record-identity` path, not this scalar
+    ;; path -- see `string-and-keyword-field-record-identity-is-admitted`),
+    ;; so a genuinely still-unadmitted field type (`[:vector :i64]`) is
+    ;; needed to keep testing "an out-of-set field type is rejected".
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
                           (component/assert-scalar-slice!
-                           (assoc-in kir [:schemas :demo/point 2 0 1] :string)
+                           (assoc-in kir [:schemas :demo/point 2 0 1] [:vector :i64])
                            (wit/emit kir))))))
 
 (deftest one-level-nested-scalar-record-identity-is-admitted
@@ -203,6 +210,65 @@
                     kir (wit/emit kir))]
       (is (= :variant-identity (:canonical-lowering artifact)))
       (is (= :wasm-component/v1 (:format artifact))))))
+
+(deftest string-and-keyword-field-record-identity-is-admitted
+  ;; `demo/state-entry` mirrors `state-v1.edn`'s actual `entry` record
+  ;; shape (`key: keyword, value: string, version: i64`) -- the concrete
+  ;; motivating target ADR 0051's own remaining gaps named.
+  (let [descriptor [:ref :demo/state-entry]
+        schema [:record :demo/state-entry
+                [[:key :keyword] [:value :string] [:version :i64]]]
+        schemas {:demo/state-entry schema}
+        kir {:format :kotoba.kir/v4 :exports ['echo] :effects #{}
+             :schemas schemas
+             :functions [{:name 'echo :params ['value] :param-types [descriptor]
+                          :result descriptor :body 'value}]}]
+    (is (true? (component/assert-scalar-slice! kir (wit/emit kir))))
+    (let [artifact (component/package
+                    (component-core/emit kir :wasm32-wasi-kotoba-v1)
+                    kir (wit/emit kir))]
+      (is (= :string-field-record-identity (:canonical-lowering artifact)))
+      (is (= :wasm-component/v1 (:format artifact)))
+      (is (= [0 97 115 109 13 0 1 0]
+             (mapv #(bit-and (int %) 0xff) (take 8 (:bytes artifact))))))
+    ;; A record with a bare string field but no scalar field at all remains
+    ;; admitted too -- the identity path does not require a scalar leaf,
+    ;; only "no field outside i64/f32/f64/bool/string/keyword".
+    (let [label-schema [:record :demo/label [[:text :string]]]
+          label-kir (-> kir
+                       (assoc :schemas {:demo/label label-schema})
+                       (assoc-in [:functions 0 :param-types] [[:ref :demo/label]])
+                       (assoc-in [:functions 0 :result] [:ref :demo/label]))]
+      (is (true? (component/assert-scalar-slice! label-kir (wit/emit label-kir))))
+      (let [artifact (component/package
+                      (component-core/emit label-kir :wasm32-wasi-kotoba-v1)
+                      label-kir (wit/emit label-kir))]
+        (is (= :string-field-record-identity (:canonical-lowering artifact)))))
+    ;; A field that is itself a nested record (the ADR 0051 shape) remains
+    ;; fail-closed: string/keyword leaves are only admitted at the top
+    ;; level in this slice, never inside a nested field.
+    (let [nested-schemas
+          {:demo/inner [:record :demo/inner [[:text :string]]]
+           :demo/wrapper [:record :demo/wrapper
+                          [[:key :keyword] [:inner [:ref :demo/inner]]]]}
+          nested-kir (-> kir
+                        (assoc :schemas nested-schemas)
+                        (assoc-in [:functions 0 :param-types] [[:ref :demo/wrapper]])
+                        (assoc-in [:functions 0 :result] [:ref :demo/wrapper]))]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
+                            (component/assert-scalar-slice! nested-kir (wit/emit nested-kir)))))
+    ;; A record schema whose sealed identity has drifted remains fail-closed.
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
+                          (component/assert-scalar-slice!
+                           (assoc-in kir [:schemas :demo/state-entry 1] :demo/renamed)
+                           (wit/emit kir))))
+    ;; A computed body (anything other than a bare parameter passthrough)
+    ;; remains fail-closed.
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
+                          (component/assert-scalar-slice!
+                           (assoc-in kir [:functions 0 :body]
+                                     (list 'record-get schema 'value :key))
+                           (wit/emit kir))))))
 
 (deftest named-scalar-record-field-projection-is-admitted
   (let [schema [:record :demo/point

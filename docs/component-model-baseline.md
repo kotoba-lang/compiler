@@ -102,6 +102,23 @@ another variant, strings or keywords inside a case's record payload (so
 record field or crossing a `typed-cap-call` request/result boundary,
 lists/tuples/options/results, and every production provider's semantics all
 remain closed; no capability kit's `:wasm-aot` qualification changed.
+`:keyword` now has a Canonical ABI layout for the first time (treated
+identically to a bounded `string` -- pointer+length in linear memory, the
+same ADR 0040/0041 machinery -- but bounded by `value/keyword-value-byte-limit`
+instead of `value/string-value-byte-limit`), and a sealed flat nominal record
+whose fields are each a Canonical scalar or a bounded `string`/`keyword` leaf
+now has an executable identity slice (ADR 0053), with manual Wasmtime 42.0.1
+round trips on `state-v1`'s own `entry` shape (`key: keyword, value: string,
+version: i64`) covering full i64 range and multi-byte UTF-8 in both a string
+and a keyword leaf in the same call, plus both byte bounds exercised as real
+Wasmtime traps (not only implemented defensively). A variant case wrapping a
+record with string/keyword fields (so `state-v1`'s actual result type, a
+variant over `entry`/`error`, remains unqualified end to end), string/keyword
+leaves inside an ADR 0051 nested-record field, a variant used as a record
+field, string/keyword fields crossing a `typed-cap-call` request/result
+boundary, lists/tuples/options/results, and every production provider's
+semantics all remain closed; no capability kit's `:wasm-aot` qualification
+changed.
 
 ## Official sources
 

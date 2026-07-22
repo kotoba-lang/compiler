@@ -30,6 +30,37 @@
          (canonical/export-plan
           {:name 'echo :params ['value] :param-types [:string] :result :string}))))
 
+(deftest bounded-keyword-layout-is-closed
+  (is (= {:descriptor :keyword :size 8 :alignment 4 :flat [:i32 :i32]
+          :encoding :utf8 :max-bytes 512
+          :validation [:checked-pointer-range :valid-utf8]}
+         (canonical/layout :keyword))))
+
+(deftest string-and-keyword-record-fields-flatten-to-pointer-length-leaves
+  (let [descriptor [:ref :demo/state-entry]
+        schemas {:demo/state-entry
+                 [:record :demo/state-entry
+                  [[:key :keyword] [:value :string] [:version :i64]]]}
+        value (canonical/layout descriptor schemas)]
+    (is (= 24 (:size value)))
+    (is (= 8 (:alignment value)))
+    (is (= [:i32 :i32 :i32 :i32 :i64] (:flat value)))
+    (is (= [0 8 16] (mapv :offset (:fields value))))
+    (is (= [{:offset 0 :descriptor :keyword :max-bytes 512}
+            {:offset 8 :descriptor :string :max-bytes 65536}
+            {:offset 16 :descriptor :i64}]
+           (canonical/layout-leaves value)))
+    (is (= [:i32]
+           (:core-results
+            (canonical/export-plan
+             {:name 'echo :params ['value] :param-types [descriptor] :result descriptor}
+             schemas))))
+    (is (= [:i32 :i32 :i32 :i32 :i64]
+           (:core-params
+            (canonical/export-plan
+             {:name 'echo :params ['value] :param-types [descriptor] :result descriptor}
+             schemas))))))
+
 (deftest named-scalar-record-layout-preserves-identity-offsets-and-flattening
   (let [descriptor [:ref :demo/point]
         schemas {:demo/point

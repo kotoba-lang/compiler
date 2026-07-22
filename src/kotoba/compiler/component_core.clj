@@ -93,6 +93,56 @@
                        (nth schema 2)))
       schema)))
 
+(defn- string-keyword-scalar-field? [field-type]
+  (contains? #{:i64 :f32 :f64 :bool :string :keyword} field-type))
+
+(defn- string-field-record-schema
+  "Schema of `descriptor` when it is a sealed record whose fields are each a
+  Canonical scalar (`i64`/`f32`/`f64`/`bool`) or a bounded `string`/`keyword`
+  leaf -- flat only, no nesting, no variant payloads. This is
+  `sealed-scalar-record` widened by exactly the two leaf types ADR 0051's own
+  'Remaining gaps' named ('strings or keywords inside a case's record
+  payload, so `state-v1`'s actual `entry`/`error` records remain closed'):
+  `state-v1`'s `entry` record (`key: keyword, value: string, version: i64`)
+  is this shape exactly. It deliberately does not add `:string`/`:keyword`
+  to `sealed-scalar-record` itself -- projection, construction, update,
+  scalar-capability-call's request/result admission, and
+  `sealed-scalar-variant-schema`'s case-payload admission all key off
+  `sealed-scalar-record`, and their WAT emitters
+  (`scalar-record-projection-wat`/`scalar-record-write-wat`/
+  `record-capability-wat`/`variant-case-body`) only know `wasm-value-type`/
+  `wasm-store`, neither of which has a `:string`/`:keyword` case; widening
+  `sealed-scalar-record` itself would make those predicates silently admit a
+  shape their own emitters cannot correctly generate. This function and its
+  own dedicated identity path are the only consumers of the wider field set."
+  [descriptor schemas]
+  (let [schema (cond
+                 (and (vector? descriptor) (= :ref (first descriptor)))
+                 (get schemas (second descriptor))
+                 (and (vector? descriptor) (= :record (first descriptor))) descriptor)]
+    (when (and (vector? schema)
+               (= :record (first schema))
+               (seq (nth schema 2))
+               (= schema (get schemas (second schema)))
+               (every? (comp string-keyword-scalar-field? second) (nth schema 2)))
+      schema)))
+
+(defn- string-field-record-identity-function? [function schemas]
+  (let [{:keys [params param-types result body]} function
+        descriptor (first param-types)
+        schema (string-field-record-schema descriptor schemas)]
+    (and (= 1 (count params))
+         (= 1 (count param-types))
+         (= descriptor result)
+         (= (first params) body)
+         schema
+         ;; Distinct from `scalar-record-identity-function?`: admitted only
+         ;; when at least one field is a string or keyword leaf, so the two
+         ;; predicates (and their dispatch cases) never overlap.
+         (some (fn [[_ field-type]] (contains? #{:string :keyword} field-type))
+               (nth schema 2))
+         (canonical/layout descriptor schemas))))
+
 (defn- scalar-record-identity-function? [function schemas]
   (let [{:keys [params param-types result body]} function
         descriptor (first param-types)
@@ -263,6 +313,10 @@
            (= 1 (count exports))
            (variant-identity-function? (first exports) (:schemas kir))
            (empty? (:effects kir))) :variant-identity
+      (and (= 1 (count (:functions kir)))
+           (= 1 (count exports))
+           (string-field-record-identity-function? (first exports) (:schemas kir))
+           (empty? (:effects kir))) :string-field-record-identity
       (and (= 1 (count (:functions kir)))
            (= 1 (count exports))
            (scalar-record-projection (first exports) (:schemas kir))
@@ -703,6 +757,105 @@
      "    i32.const 8 global.set $next)\n"
      "  (func (export \"cm32p2_initialize\") i32.const 8 global.set $next))\n")))
 
+(defn- string-field-record-wat
+  "Identity export for a sealed flat record admitting bounded `string`/
+  `keyword` leaves alongside Canonical scalars (`string-field-record-schema`
+  -- no nesting, no variant payloads). Every leaf is planned from
+  `canonical/layout-leaves`, exactly as `nested-record-wat` already does;
+  the only new work is that a leaf carrying `:max-bytes` (a string or
+  keyword field) takes two core wasm parameters (`$fN-ptr`/`$fN-len`)
+  instead of one and is stored as that same pointer+length pair at its
+  field offset -- the identical pointer+length linear-memory shape ADR
+  0040/0041 already gave a bare string parameter/result, reused here
+  unchanged rather than re-derived: the received pointer already refers to
+  guest memory the caller populated (via this module's own `$realloc`)
+  before invoking this export, so passthrough needs no byte copy, only the
+  same bounds check `string-expression-wat`'s own `validate-parameters`
+  already performs (length within the field's own bound, pointer range
+  within the module's linear memory) before the pointer is trusted enough
+  to store into the result record."
+  [function schemas]
+  (let [export (wit-name (:name function))
+        record-layout (canonical/layout (first (:param-types function)) schemas)
+        leaves (canonical/layout-leaves record-layout)
+        string-like-count (count (filter :max-bytes leaves))
+        required-bytes (+ 8 (* (inc string-like-count) 65536) (:size record-layout))
+        pages (max 1 (quot (+ required-bytes 65535) 65536))
+        capacity (* pages 65536)
+        params (apply str
+                      (map-indexed
+                       (fn [index {:keys [descriptor max-bytes]}]
+                         (if max-bytes
+                           (str " (param $f" index "-ptr i32) (param $f" index "-len i32)")
+                           (str " (param $f" index " " (wasm-value-type descriptor) ")")))
+                       leaves))
+        bool-validation
+        (apply str
+               (keep-indexed
+                (fn [index {:keys [descriptor max-bytes]}]
+                  (when (and (not max-bytes) (= :bool descriptor))
+                    (str "    local.get $f" index
+                         " i32.const 1 i32.gt_u if unreachable end\n")))
+                leaves))
+        string-validation
+        (apply str
+               (keep-indexed
+                (fn [index {:keys [max-bytes]}]
+                  (when max-bytes
+                    (str
+                     "    local.get $f" index "-len i32.const " max-bytes
+                     " i32.gt_u if unreachable end\n"
+                     "    local.get $f" index "-ptr local.get $f" index "-len i32.add\n"
+                     "    local.tee $end local.get $f" index "-ptr i32.lt_u if unreachable end\n"
+                     "    local.get $end i32.const " capacity " i32.gt_u if unreachable end\n")))
+                leaves))
+        stores
+        (apply str
+               (map-indexed
+                (fn [index {:keys [offset descriptor max-bytes]}]
+                  (if max-bytes
+                    (str "    local.get $ret local.get $f" index "-ptr i32.store offset=" offset "\n"
+                         "    local.get $ret local.get $f" index "-len i32.store offset="
+                         (+ offset 4) "\n")
+                    (str "    local.get $ret local.get $f" index " "
+                         (wasm-store descriptor) " offset=" offset "\n")))
+                leaves))]
+    (str
+     "(module\n"
+     "  (memory (export \"cm32p2_memory\") " pages " " pages ")\n"
+     "  (global $next (mut i32) (i32.const 8))\n"
+     "  (func $realloc (export \"cm32p2_realloc\")\n"
+     "    (param $old-ptr i32) (param $old-size i32)\n"
+     "    (param $align i32) (param $new-size i32) (result i32)\n"
+     "    (local $ptr i32) (local $end i32) (local $copy-size i32)\n"
+     "    local.get $new-size i32.eqz if i32.const 0 return end\n"
+     "    local.get $align i32.eqz if unreachable end\n"
+     "    local.get $align i32.const 8 i32.gt_u if unreachable end\n"
+     "    local.get $align local.get $align i32.const 1 i32.sub i32.and if unreachable end\n"
+     "    global.get $next local.get $align i32.const 1 i32.sub i32.add\n"
+     "    i32.const 0 local.get $align i32.sub i32.and local.tee $ptr\n"
+     "    local.get $new-size i32.add local.tee $end local.get $ptr i32.lt_u\n"
+     "    if unreachable end\n"
+     "    local.get $end i32.const " capacity " i32.gt_u if unreachable end\n"
+     "    local.get $end global.set $next\n"
+     "    local.get $old-ptr i32.eqz if else\n"
+     "      local.get $old-size local.get $new-size i32.lt_u\n"
+     "      if (result i32) local.get $old-size else local.get $new-size end\n"
+     "      local.set $copy-size\n"
+     "      local.get $ptr local.get $old-ptr local.get $copy-size memory.copy\n"
+     "    end local.get $ptr)\n"
+     "  (func (export \"cm32p2||" export "\")" params " (result i32)\n"
+     "    (local $ret i32) (local $end i32)\n"
+     bool-validation
+     string-validation
+     "    i32.const 0 i32.const 0 i32.const " (:alignment record-layout)
+     " i32.const " (:size record-layout) " call $realloc local.set $ret\n"
+     stores
+     "    local.get $ret)\n"
+     "  (func (export \"cm32p2||" export "_post\") (param i32)\n"
+     "    i32.const 8 global.set $next)\n"
+     "  (func (export \"cm32p2_initialize\") i32.const 8 global.set $next))\n")))
+
 (defn- scalar-record-projection-wat [function schemas]
   (let [export (wit-name (:name function))
         {:keys [descriptor field-index]} (scalar-record-projection function schemas)
@@ -895,6 +1048,9 @@
     :variant-identity
     (wasm-tools/parse-wat
      (variant-wat (first (exported-functions kir)) (:schemas kir)))
+    :string-field-record-identity
+    (wasm-tools/parse-wat
+     (string-field-record-wat (first (exported-functions kir)) (:schemas kir)))
     :scalar-record-projection
     (wasm-tools/parse-wat
      (scalar-record-projection-wat (first (exported-functions kir)) (:schemas kir)))
