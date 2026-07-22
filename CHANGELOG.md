@@ -55,6 +55,11 @@ production-strength VM sandbox remain absent.
   executor-attested run receipts, reproducible platform coverage snapshots)
   and a supervised W^X loader on native targets (Linux seccomp sandboxing,
   macOS sandboxing, Windows restricted-token supervision).
+- **Bounded substring search and case fold** (`string-contains?`,
+  `string-fold-case`, ADR 0050): compose for case-insensitive substring
+  search across the reference evaluator, restricted JavaScript, and typed
+  Wasm. Not extended to the native (`aarch64`/`x86_64`) or `cljs-kotoba-v1`
+  backends, matching `string-replace-all`'s existing scope.
 
 ## History (summarized from `git log`, not entry-by-entry)
 

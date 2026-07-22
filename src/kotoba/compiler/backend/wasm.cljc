@@ -748,6 +748,13 @@
                             (emit* (first args) env) (emit* (second args) env)
                             (emit* (nth args 2) env)
                             [0x10 (get intrinsic-indices 'typed-string-replace-all)])
+                    (= op 'string-contains?)
+                    (concat (i32-const (descriptor-id :string))
+                            (emit* (first args) env) (emit* (second args) env)
+                            [0x10 (get intrinsic-indices 'typed-string-contains) 0xad])
+                    (= op 'string-fold-case)
+                    (concat (i32-const (descriptor-id :string)) (emit* (first args) env)
+                            [0x10 (get intrinsic-indices 'typed-string-fold-case)])
                     (= op 'keyword-name)
                     (concat (i32-const (descriptor-id :keyword)) (emit* (first args) env)
                             [0x10 (get intrinsic-indices 'typed-keyword-name)])
@@ -1197,6 +1204,8 @@
                                                string-index-assoc})
         has-string-concat? (uses-operation? functions '#{string-concat})
         has-string-replace? (uses-operation? functions '#{string-replace-all})
+        has-string-contains? (uses-operation? functions '#{string-contains?})
+        has-string-fold-case? (uses-operation? functions '#{string-fold-case})
         has-keyword-name? (uses-operation? functions '#{keyword-name})
         has-disjoint-set? (uses-operation? functions
                                             '#{disjoint-set-i64-new disjoint-set-i64-count
@@ -1235,6 +1244,12 @@
                          (when has-string-replace?
                            [['typed-string-replace-all "kotoba:typed" "string-replace-all"
                              [0x60 4 0x7f 0x6f 0x6f 0x6f 1 0x6f]]])
+                         (when has-string-contains?
+                           [['typed-string-contains "kotoba:typed" "string-contains"
+                             [0x60 3 0x7f 0x6f 0x6f 1 0x7f]]])
+                         (when has-string-fold-case?
+                           [['typed-string-fold-case "kotoba:typed" "string-fold-case"
+                             [0x60 2 0x7f 0x6f 1 0x6f]]])
                          (when has-keyword-name?
                            [['typed-keyword-name "kotoba:typed" "keyword-name"
                              [0x60 2 0x7f 0x6f 1 0x6f]]])

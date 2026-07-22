@@ -301,11 +301,12 @@
         (contains? '#{= < > <= >= hetero-vector-equal typed-set-equal
                       typed-map-equal record-equal} op) :i64
         (= op 'string=?) :i64
+        (= op 'string-contains?) :i64
         (contains? '#{bool-not option-some? result-ok?
                       result-ok?-of option-some?-of typed-set-contains
                       typed-map-contains string-index-contains} op) :bool
         (contains? '#{document-contains document-equal?} op) :bool
-        (contains? '#{string-concat string-replace-all keyword-name} op) :string
+        (contains? '#{string-concat string-replace-all string-fold-case keyword-name} op) :string
         (contains? '#{keyword-from-string document-kind} op) :keyword
         (contains? '#{xml-name-text xml-path-text xml-path-attr} op) [:option :string]
         (= op 'decimal-f64-parse) [:option :f64]
