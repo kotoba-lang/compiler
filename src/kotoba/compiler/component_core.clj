@@ -68,6 +68,31 @@
                        (nth schema 2)))
       schema)))
 
+(defn- sealed-scalar-variant-schema
+  "Schema of `descriptor` when it is a sealed variant whose every case's
+  payload is a Canonical scalar or a sealed all-scalar record (the same
+  shape `sealed-scalar-record` itself admits: top-level scalar fields only,
+  not `nested-scalar-record-schema`'s one-level nesting). A case payload
+  that is itself a nested-of-nested record, a record with a non-scalar
+  field, or another variant fails `sealed-scalar-record` and so is rejected
+  here too, before component encoding is attempted -- this bounds the
+  variant slice to exactly the same 'record depth' ADR 0048 proved, applied
+  per case instead of at the top level."
+  [descriptor schemas]
+  (let [schema (cond
+                 (and (vector? descriptor) (= :ref (first descriptor)))
+                 (get schemas (second descriptor))
+                 (and (vector? descriptor) (= :variant (first descriptor))) descriptor)]
+    (when (and (vector? schema)
+               (= :variant (first schema))
+               (seq (nth schema 2))
+               (= schema (get schemas (second schema)))
+               (every? (fn [[_ payload-type]]
+                         (or (contains? #{:i64 :f32 :f64 :bool} payload-type)
+                             (sealed-scalar-record payload-type schemas)))
+                       (nth schema 2)))
+      schema)))
+
 (defn- scalar-record-identity-function? [function schemas]
   (let [{:keys [params param-types result body]} function
         descriptor (first param-types)
@@ -98,6 +123,17 @@
          ;; so the two predicates (and their dispatch cases) never overlap.
          (some (fn [[_ field-type]] (sealed-scalar-record field-type schemas))
                (nth schema 2))
+         (canonical/layout descriptor schemas))))
+
+(defn- variant-identity-function? [function schemas]
+  (let [{:keys [params param-types result body]} function
+        descriptor (first param-types)
+        schema (sealed-scalar-variant-schema descriptor schemas)]
+    (and (= 1 (count params))
+         (= 1 (count param-types))
+         (= descriptor result)
+         (= (first params) body)
+         schema
          (canonical/layout descriptor schemas))))
 
 (defn- scalar-record-projection [function schemas]
@@ -223,6 +259,10 @@
            (= 1 (count exports))
            (nested-record-identity-function? (first exports) (:schemas kir))
            (empty? (:effects kir))) :nested-record-identity
+      (and (= 1 (count (:functions kir)))
+           (= 1 (count exports))
+           (variant-identity-function? (first exports) (:schemas kir))
+           (empty? (:effects kir))) :variant-identity
       (and (= 1 (count (:functions kir)))
            (= 1 (count exports))
            (scalar-record-projection (first exports) (:schemas kir))
@@ -368,6 +408,174 @@
 (defn- wasm-store [descriptor]
   ({:i64 "i64.store" :f32 "f32.store" :f64 "f64.store" :bool "i32.store8"}
    descriptor))
+
+(defn- core-type-of
+  "The joined component-flat core wasm type (`:i64`/`:f32`/`:f64`/`:i32`)
+  that a leaf's own Canonical scalar `descriptor` flattens to -- the same
+  mapping `canonical-abi/layout*` bakes into every leaf's own `:flat`, kept
+  here too because variant codegen needs it both to build case payload
+  values (`wasm-value-type`/`wasm-store`, keyed by `descriptor`) and to
+  compare against the joined param's core type (keyed by core type)."
+  [descriptor]
+  ({:i64 :i64 :f32 :f32 :f64 :f64 :bool :i32} descriptor))
+
+(defn- core-type-name [core-type]
+  ({:i64 "i64" :f32 "f32" :f64 "f64" :i32 "i32"} core-type))
+
+(defn- variant-disc-store [byte-size]
+  ({1 "i32.store8" 2 "i32.store16" 4 "i32.store"} byte-size))
+
+(defn- variant-coerce-ops
+  "The WAT instruction(s) that turn a received joined-flat param value
+  (core type `have`) back into the value a specific case's own leaf (core
+  type `want`) needs to store, mirroring the Component Model spec's
+  `lift_flat_variant` `CoerceValueIter` table exactly: identical types need
+  nothing; `i32`-holding-a-bool next to an `f32` case at the same position
+  reinterprets; anything joined up to `i64` either wraps down to `i32`,
+  reinterprets down to `f64`, or does both to reach `f32`. No other
+  `(have, want)` pair is reachable -- `join-core-type` only ever produces
+  `i32` (self-join or the i32/f32 pair) or `i64` (every other mismatch), so
+  this table is exhaustive over what this codebase's own join can produce,
+  not a hand-picked subset of the spec's."
+  [have want]
+  (cond
+    (= have want) []
+    (and (= have :i32) (= want :f32)) ["f32.reinterpret_i32"]
+    (and (= have :i64) (= want :i32)) ["i32.wrap_i64"]
+    (and (= have :i64) (= want :f32)) ["i32.wrap_i64" "f32.reinterpret_i32"]
+    (and (= have :i64) (= want :f64)) ["f64.reinterpret_i64"]
+    :else (reject "variant flat join has no defined coercion" {:have have :want want})))
+
+(defn- variant-case-leaves
+  "The ordered `{:relative-offset :descriptor :flat-index}` leaves of one
+  variant case's own payload layout: a scalar payload is its own single
+  leaf at relative offset 0 and flat-index 0; a sealed all-scalar record
+  payload (the only aggregate case shape this slice admits -- see
+  `sealed-scalar-variant-schema`) contributes one leaf per top-level field,
+  in the same order as the record's own `:fields`/`:flat`, so `flat-index`
+  always lines up with position `flat-index` of *this case's own*
+  `flatten_type` sequence -- the same sequence `variant-flatten-payload`
+  folds every case's flat types into, position by position, starting at
+  index 0 for every case alike. This does not recurse into nested `:fields`
+  (unlike `canonical-abi/layout-leaves`): a variant case payload is bounded
+  to the ADR 0043 flat-record shape in this slice, never the ADR 0051
+  one-level-nested shape, so no leaf here is itself a nested record."
+  [layout]
+  (if (contains? layout :fields)
+    (vec (map-indexed (fn [index {:keys [offset layout]}]
+                        {:relative-offset offset :descriptor (:descriptor layout) :flat-index index})
+                      (:fields layout)))
+    [{:relative-offset 0 :descriptor (:descriptor layout) :flat-index 0}]))
+
+(defn- variant-payload-value-expr [joined-types leaf]
+  (let [{:keys [descriptor flat-index]} leaf
+        have (nth joined-types flat-index)
+        want (core-type-of descriptor)]
+    (apply str "local.get $p" flat-index
+           (map #(str " " %) (variant-coerce-ops have want)))))
+
+(defn- variant-case-body [payload-offset joined-types leaves]
+  (let [validation
+        (apply str
+               (keep (fn [leaf]
+                       (when (= :bool (:descriptor leaf))
+                         (str "      " (variant-payload-value-expr joined-types leaf)
+                              " i32.const 1 i32.gt_u if unreachable end\n")))
+                     leaves))
+        stores
+        (apply str
+               (map (fn [leaf]
+                      (str "      local.get $ret "
+                           (variant-payload-value-expr joined-types leaf)
+                           " " (wasm-store (:descriptor leaf))
+                           " offset=" (+ payload-offset (:relative-offset leaf)) "\n"))
+                    leaves))]
+    (str validation stores)))
+
+(defn- variant-case-chain
+  "The nested `if`/`else` chain that stores the active case's payload into
+  the result area. Every case but the last is guarded by an explicit
+  `local.get $disc i32.const <index> i32.eq`; the final case needs no guard
+  because the discriminant is already range-checked (`i32.ge_u` against the
+  case count) before this chain runs, so falling through every prior `else`
+  leaves exactly the last case."
+  [cases payload-offset joined-types]
+  (letfn [(build [remaining index]
+            (let [body (variant-case-body payload-offset joined-types
+                                          (variant-case-leaves (:layout (first remaining))))]
+              (if (= 1 (count remaining))
+                body
+                (str "    local.get $disc i32.const " index " i32.eq\n"
+                     "    if\n"
+                     body
+                     "    else\n"
+                     (build (rest remaining) (inc index))
+                     "    end\n"))))]
+    (build cases 0)))
+
+(defn- variant-wat
+  "Identity export for a sealed variant whose every case's payload is a
+  Canonical scalar or a sealed all-scalar record. The core function
+  receives the variant already flattened by the caller's own `canon
+  lower` -- an `i32` discriminant plus one core value per joined payload
+  position (`canonical/layout`'s `:flat` on a variant descriptor, computed
+  by `variant-flatten-payload`) -- range-checks the discriminant, allocates
+  the variant's in-memory union result area (discriminant byte plus the
+  widest case's payload, from the same layout's `:size`/`:alignment`),
+  stores the discriminant, and then, in exactly the branch selected by the
+  discriminant, un-joins and stores that case's own leaves
+  (`variant-case-chain`/`variant-coerce-ops`). This is the same
+  realloc/result-area shape as `scalar-record-wat`/`nested-record-wat`;
+  the only new work is the join/coercion table a variant's shared flat
+  positions require and a record's concatenated ones never did."
+  [function schemas]
+  (let [export (wit-name (:name function))
+        variant-layout (canonical/layout (first (:param-types function)) schemas)
+        joined-types (vec (rest (:flat variant-layout)))
+        params (apply str
+                      (map-indexed
+                       (fn [index core-type]
+                         (str " (param $p" index " " (core-type-name core-type) ")"))
+                       joined-types))
+        case-chain (variant-case-chain (:cases variant-layout)
+                                       (:payload-offset variant-layout)
+                                       joined-types)]
+    (str
+     "(module\n"
+     "  (memory (export \"cm32p2_memory\") 1 1)\n"
+     "  (global $next (mut i32) (i32.const 8))\n"
+     "  (func $realloc (export \"cm32p2_realloc\")\n"
+     "    (param $old-ptr i32) (param $old-size i32)\n"
+     "    (param $align i32) (param $new-size i32) (result i32)\n"
+     "    (local $ptr i32) (local $end i32) (local $copy-size i32)\n"
+     "    local.get $new-size i32.eqz if i32.const 0 return end\n"
+     "    local.get $align i32.eqz if unreachable end\n"
+     "    local.get $align i32.const 8 i32.gt_u if unreachable end\n"
+     "    local.get $align local.get $align i32.const 1 i32.sub i32.and if unreachable end\n"
+     "    global.get $next local.get $align i32.const 1 i32.sub i32.add\n"
+     "    i32.const 0 local.get $align i32.sub i32.and local.tee $ptr\n"
+     "    local.get $new-size i32.add local.tee $end local.get $ptr i32.lt_u\n"
+     "    if unreachable end\n"
+     "    local.get $end i32.const 65536 i32.gt_u if unreachable end\n"
+     "    local.get $end global.set $next\n"
+     "    local.get $old-ptr i32.eqz if else\n"
+     "      local.get $old-size local.get $new-size i32.lt_u\n"
+     "      if (result i32) local.get $old-size else local.get $new-size end\n"
+     "      local.set $copy-size\n"
+     "      local.get $ptr local.get $old-ptr local.get $copy-size memory.copy\n"
+     "    end local.get $ptr)\n"
+     "  (func (export \"cm32p2||" export "\") (param $disc i32)" params " (result i32)\n"
+     "    (local $ret i32)\n"
+     "    local.get $disc i32.const " (count (:cases variant-layout)) " i32.ge_u if unreachable end\n"
+     "    i32.const 0 i32.const 0 i32.const " (:alignment variant-layout)
+     " i32.const " (:size variant-layout) " call $realloc local.set $ret\n"
+     "    local.get $ret local.get $disc "
+     (variant-disc-store (:discriminant-size variant-layout)) " offset=0\n"
+     case-chain
+     "    local.get $ret)\n"
+     "  (func (export \"cm32p2||" export "_post\") (param i32)\n"
+     "    i32.const 8 global.set $next)\n"
+     "  (func (export \"cm32p2_initialize\") i32.const 8 global.set $next))\n")))
 
 (defn- scalar-record-wat [function schemas]
   (let [export (wit-name (:name function))
@@ -684,6 +892,9 @@
     :nested-record-identity
     (wasm-tools/parse-wat
      (nested-record-wat (first (exported-functions kir)) (:schemas kir)))
+    :variant-identity
+    (wasm-tools/parse-wat
+     (variant-wat (first (exported-functions kir)) (:schemas kir)))
     :scalar-record-projection
     (wasm-tools/parse-wat
      (scalar-record-projection-wat (first (exported-functions kir)) (:schemas kir)))

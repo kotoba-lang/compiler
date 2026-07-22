@@ -90,6 +90,18 @@ strings inside records, lists/tuples/options/results/variants (including a
 variant case wrapping a record), nested aggregates crossing a capability
 request/result boundary, and every production provider's semantics remain
 closed; no capability kit's `:wasm-aot` qualification changed.
+A sealed variant whose every case is a Canonical scalar or a sealed
+all-scalar record now has both a checked in-memory union layout and a
+checked joined component-flat signature, and an executable identity slice
+(ADR 0052), with manual Wasmtime 42.0.1 round trips on a four-case
+scalar-and-record shape and a two-case bool/f32 shape covering the full
+join/coercion table the Component Model spec defines for shared flat
+positions. A variant case wrapping an ADR 0051 one-level-nested record or
+another variant, strings or keywords inside a case's record payload (so
+`state-v1`'s actual result type remains unqualified), a variant used as a
+record field or crossing a `typed-cap-call` request/result boundary,
+lists/tuples/options/results, and every production provider's semantics all
+remain closed; no capability kit's `:wasm-aot` qualification changed.
 
 ## Official sources
 

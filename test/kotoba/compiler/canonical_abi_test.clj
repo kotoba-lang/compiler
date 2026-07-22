@@ -79,3 +79,66 @@
                           (canonical/layout [:ref :demo/self]
                                             {:demo/self [:record :demo/self
                                                          [[:child [:ref :demo/self]]]]})))))
+
+(deftest variant-with-record-and-scalar-cases-flattens-with-joined-core-types
+  (let [descriptor [:ref :demo/outcome]
+        schemas {:demo/entry [:record :demo/entry
+                              [[:code :i64] [:ratio :f64] [:present :bool]]]
+                 :demo/short [:record :demo/short [[:code :i64] [:flag :bool]]]
+                 :demo/outcome [:variant :demo/outcome
+                                [[:found [:ref :demo/entry]]
+                                 [:missing :bool]
+                                 [:failed :f32]
+                                 [:short [:ref :demo/short]]]]}
+        value (canonical/layout descriptor schemas)]
+    (is (= :variant (:kind value)))
+    (is (= 1 (:discriminant-size value)))
+    (is (= 8 (:payload-offset value)))
+    (is (= 8 (:alignment value)))
+    (is (= 32 (:size value)))
+    (is (= [:found :missing :failed :short] (mapv :tag (:cases value))))
+    ;; Position 0 is dominated by :found's and :short's i64 leading field;
+    ;; position 1, touched only by :found's f64 field until :short's trailing
+    ;; bool field also reaches it, is forced from f64 to i64 by that mixed
+    ;; join; position 2 is touched only by :found's own bool field, so it
+    ;; stays i32 with no other case to force a join at all.
+    (is (= [:i32 :i64 :i64 :i32] (:flat value)))
+    (is (= [:i32]
+           (:core-results
+            (canonical/export-plan
+             {:name 'echo :params ['value] :param-types [descriptor] :result descriptor}
+             schemas))))
+    (is (= [:i32 :i64 :i64 :i32]
+           (:core-params
+            (canonical/export-plan
+             {:name 'echo :params ['value] :param-types [descriptor] :result descriptor}
+             schemas))))))
+
+(deftest variant-with-only-bool-and-f32-cases-joins-to-i32
+  (let [descriptor [:ref :demo/flag-or-ratio]
+        schemas {:demo/flag-or-ratio [:variant :demo/flag-or-ratio
+                                      [[:urgent :bool] [:weight :f32]]]}
+        value (canonical/layout descriptor schemas)]
+    ;; Neither case ever touches i64/f64, so the Component Model spec's
+    ;; special-cased i32/f32 join keeps the shared payload position at i32
+    ;; instead of widening to i64 -- the only join outcome besides "both
+    ;; sides already agree" and "widen to i64".
+    (is (= [:i32 :i32] (:flat value)))
+    (is (= 1 (:discriminant-size value)))
+    ;; Payload area is aligned/sized to the wider case (f32, 4 bytes), so
+    ;; the 1-byte discriminant is padded up to offset 4 before it.
+    (is (= 4 (:payload-offset value)))
+    (is (= 8 (:size value)))
+    (is (= 4 (:alignment value)))))
+
+(deftest variant-reference-requires-matching-sealed-schema-identity
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"variant reference has no matching schema identity"
+                        (canonical/layout [:ref :demo/outcome]
+                                          {:demo/outcome [:variant :demo/other
+                                                          [[:a :bool]]]}))))
+
+(deftest variant-schema-recursion-through-a-case-payload-is-rejected
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"recursive schema has no bounded"
+                        (canonical/layout [:ref :demo/self]
+                                          {:demo/self [:variant :demo/self
+                                                       [[:child [:ref :demo/self]]]]}))))
