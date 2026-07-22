@@ -222,6 +222,25 @@
                       {:phase :value :bytes bytes :limit limit})))
     value))
 
+;; JVM `clojure.string/lower-case` (and bare `.toLowerCase()`) fold through
+;; the platform DEFAULT locale, which is not deterministic across hosts --
+;; the classic case is Turkish (`tr`/`tr-TR`), where uppercase `I` folds to
+;; dotless `ı`, not `i`. A safe deterministic application language cannot
+;; let case-folding depend on which machine it runs on, so this always pins
+;; `Locale/ROOT` on the JVM. cljs's `.toLowerCase()` (no-arg) is already
+;; locale-independent Unicode simple case mapping and is the closest cljs
+;; equivalent; the two are verified to agree only on the ASCII and common
+;; accented-Latin ranges this primitive's conformance vectors cover, not
+;; claimed to agree on the full Unicode SpecialCasing table (Turkish `İ`/`ı`,
+;; German `ß`, Lithuanian dot-retention, and similar locale/context-sensitive
+;; exceptions are explicitly out of scope).
+(defn fold-case!
+  [value]
+  (when-not (string? value)
+    (throw (ex-info "value is not a string" {:phase :value :value value})))
+  #?(:clj (.toLowerCase ^String value java.util.Locale/ROOT)
+     :cljs (.toLowerCase value)))
+
 (defn bounded-map!
   "Validate the first bounded map profile: canonical keyword keys and i64
   values only. The representation is immutable host data, never a pointer or

@@ -143,7 +143,8 @@
 (def document-variadic-operations '#{document-vector document-map})
 (def sequencing-operations '#{do})
 (def string-operations '{string-byte-length 1 string=? 2 string-concat 2
-                         string-replace-all 3 keyword-from-string 1 keyword-name 1})
+                         string-replace-all 3 string-contains? 2 string-fold-case 1
+                         keyword-from-string 1 keyword-name 1})
 (def xml-operations
   '{xml-path-count 2 xml-name-count 2 xml-name-text 3 xml-path-text 3 xml-path-attr 4})
 (def decimal-operations '{decimal-f64-parse 1 decimal-f64x3-parse 1})
@@ -2029,6 +2030,14 @@
       (do (doseq [[arg type] (map vector args types)]
             (require-expression-type! type :string arg))
           :string)
+
+      (= op 'string-contains?)
+      (do (doseq [[arg type] (map vector args types)]
+            (require-expression-type! type :string arg))
+          :i64)
+
+      (= op 'string-fold-case)
+      (do (require-expression-type! (first types) :string (first args)) :string)
 
       (= op 'keyword-from-string)
       (do (require-expression-type! (first types) :string (first args)) :keyword)

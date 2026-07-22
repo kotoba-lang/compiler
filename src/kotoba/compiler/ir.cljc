@@ -30,7 +30,7 @@
 ;; rejecting cleanly -- so admission has to inspect which features are
 ;; actually used, not just the HIR format tag.
 (def non-string-typed-ops
-  '#{string-replace-all
+  '#{string-replace-all string-contains? string-fold-case
      f32-to-bits f32-from-bits f64-to-f32-rounded f32-to-f64-exact
      f32-add f32-sub f32-mul f32-div f32-min f32-max f32-neg f32-abs f32-sqrt
      f32-eq f32-lt f32-le f32-gt f32-ge f32-unordered
@@ -759,6 +759,18 @@
           (when (empty? needle) (trap! :empty-string-replacement-needle {}))
           (value/bounded-string! (str/replace input needle replacement)
                                  value/string-value-byte-limit))
+
+        (= op 'string-contains?)
+        (let [[haystack needle]
+              (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
+          (when (empty? needle) (trap! :empty-string-search-needle {}))
+          #?(:clj (if (str/includes? haystack needle) 1 0)
+             :cljs (if (str/includes? haystack needle) i64/one i64/zero)))
+
+        (= op 'string-fold-case)
+        (value/bounded-string!
+         (value/fold-case! (eval-expr (first args) env functions fuel heap call-stack cap-call))
+         value/string-value-byte-limit)
 
         (= op 'keyword-from-string)
         (let [text (value/bounded-string!

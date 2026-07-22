@@ -54,6 +54,8 @@ const ALLOWED_IMPORTS = new Set([
   "kotoba:typed/map-dissoc-ref/function",
   "kotoba:typed/string-concat/function",
   "kotoba:typed/string-replace-all/function",
+  "kotoba:typed/string-contains/function",
+  "kotoba:typed/string-fold-case/function",
   "kotoba:typed/keyword-name/function",
   "kotoba:typed/string-index-new/function",
   "kotoba:typed/string-index-contains/function",
@@ -1072,6 +1074,23 @@ function createTypedRuntime(abi, typedCapCall, allow) {
       if (needle.length === 0)
         reject("invalid-typed-operation", "empty string replacement needle rejected");
       const result = value.split(needle).join(replacement);
+      if (utf8Length(result) > 65536) reject("invalid-typed-value", "typed string is oversized");
+      return result;
+    },
+    "string-contains"(descriptorId, haystack, needle) {
+      const descriptor = descriptorAt(descriptorId);
+      if (descriptor !== "string") reject("invalid-typed-operation", "string descriptor required");
+      haystack = assertValue(descriptor, haystack);
+      needle = assertValue(descriptor, needle);
+      if (needle.length === 0)
+        reject("invalid-typed-operation", "empty string search needle rejected");
+      return haystack.includes(needle) ? 1 : 0;
+    },
+    "string-fold-case"(descriptorId, value) {
+      const descriptor = descriptorAt(descriptorId);
+      if (descriptor !== "string") reject("invalid-typed-operation", "string descriptor required");
+      value = assertValue(descriptor, value);
+      const result = value.toLowerCase();
       if (utf8Length(result) > 65536) reject("invalid-typed-value", "typed string is oversized");
       return result;
     },
