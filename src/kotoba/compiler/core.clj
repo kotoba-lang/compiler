@@ -34,19 +34,23 @@
 (def targets target-profile/compatibility-targets)
 (def supported-targets (set (keys target-profile/profiles)))
 
-;; Native (x86_64/aarch64) targets admit ONLY the string slice of "typed
-;; values" (string literals + string-byte-length/string=?/string-concat,
-;; ADR-2607198300 follow-up) -- every other typed feature (options, results,
-;; variants, records, typed maps/vectors/sets) has zero native backend
-;; codegen and must keep producing the same "requires kotoba-script web
-;; target" rejection it always has. This is a content check, not a blanket
-;; per-backend allowance: :kotoba.hir/v3 covers ALL typed features uniformly,
-;; so admitting the format for native without inspecting which features are
-;; actually used would silently let unsupported ops reach the backend and
-;; crash confusingly instead of rejecting cleanly. Shared with
-;; `kotoba.compiler.nbb.cli` (the nbb-native fast path) via
-;; `kotoba.compiler.ir/only-string-typed-features?` so both compile paths
-;; admit the exact same native-typed-feature subset.
+;; Native (x86_64/aarch64) targets admit the string slice of "typed values"
+;; (string literals + string-byte-length/string=?/string-concat,
+;; ADR-2607198300 follow-up) PLUS -- as of the first native record increment
+;; (ADR 0062) -- a sealed, all-scalar (`:i64`/`:bool` fields only)
+;; `record-new`/`record-get` pair, used only in the one exact nested
+;; construction+projection shape `backend/x86-64.cljc`/`backend/aarch64.cljc`
+;; implement. Every other typed feature (options, results, variants, general
+;; records, typed maps/vectors/sets) has zero native backend codegen and must
+;; keep producing the same "requires kotoba-script web target" rejection it
+;; always has. This is a content check, not a blanket per-backend allowance:
+;; :kotoba.hir/v3 covers ALL typed features uniformly, so admitting the
+;; format for native without inspecting which features are actually used
+;; would silently let unsupported ops reach the backend and crash confusingly
+;; instead of rejecting cleanly. Shared with `kotoba.compiler.nbb.cli` (the
+;; nbb-native fast path) via
+;; `kotoba.compiler.ir/only-string-and-scalar-record-typed-features?` so both
+;; compile paths admit the exact same native-typed-feature subset.
 
 (defn check-source
   ([source] (check-source source {}))
@@ -96,8 +100,8 @@
                      (not (and (= :cljs-kotoba-v1 backend)
                                (ir/only-cljs-provider-typed-features? hir)))
                      (not (and (contains? #{:x86_64-kotoba-v1 :aarch64-kotoba-v1} backend)
-                               (ir/only-string-typed-features? hir))))
-            (throw (ex-info "typed values currently require the kotoba-script web target, typed Wasm/CLJS target, or (native targets) string-only typed features"
+                               (ir/only-string-and-scalar-record-typed-features? hir))))
+            (throw (ex-info "typed values currently require the kotoba-script web target, typed Wasm/CLJS target, or (native targets) string-only or sealed-scalar-record typed features"
                             {:phase :target :target target :backend backend
                              :value-profile :kotoba.value/typed-v1})))
         _ (when (and (nil? (:entry hir))

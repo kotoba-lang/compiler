@@ -404,6 +404,14 @@ semantics, or a compiled Kotoba application's own ability to issue a
 multi-step capability sequence -- all of ADR 0060's own remaining gaps 2-6
 carry forward unchanged.
 
+Native (x86-64/aarch64) value-representation progress is tracked
+separately, starting with ADR 0062, in `docs/native-aot-baseline.md` --
+that track shares no code with this Component Model track (no Canonical
+ABI lowering, no WIT generation, no component composition on native
+targets) and is deliberately NOT folded into this running summary, so
+native progress is never misread as Component Model progress or vice
+versa.
+
 ## Official sources
 
 - https://github.com/WebAssembly/component-model

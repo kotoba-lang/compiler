@@ -323,6 +323,41 @@
         (let [body-code (emit-expr body env d)]
           (vec (concat code body-code (pop-n (count pairs)))))))))
 
+;; A native scalar record has NO independent runtime representation at all --
+;; no pointer, no heap-arena allocation (unlike `pair`, which IS heap-backed
+;; via a host call), no new host ABI offset. Mirrors
+;; `kotoba.compiler.backend.x86-64/emit-record-get-of-new`'s own docstring
+;; exactly (this is the AArch64 half of the SAME design decision, see that
+;; comment for the full rationale): this increment's ENTIRE admitted shape
+;; is `(record-get type (record-new type v0 v1 ... vN-1) field)`, rewritten
+;; into the SAME `emit-let`/`load-let` machinery an ordinary `(let [f0 v0 f1
+;; v1 ... fN-1 vN-1] fI)` already uses -- one synthetic 16-byte-aligned
+;; stack slot per field (this backend's own `let` slot size), read back via
+;; the same depth-relative `load-let` arithmetic already proven correct by
+;; every existing `let` test.
+(defn- emit-record-get-of-new [type value-form field env depth]
+  (when-not (seq? value-form)
+    (throw (ex-info "record-get is only supported directly over a matching record-new construction on the native backend"
+                    {:phase :aarch64 :type type})))
+  (let [[record-op record-type & field-exprs] value-form
+        fields (nth type 2)
+        field-index (first (keep-indexed (fn [i [name _]] (when (= name field) i)) fields))]
+    (when-not (= 'record-new record-op)
+      (throw (ex-info "record-get is only supported directly over a matching record-new construction on the native backend"
+                      {:phase :aarch64 :type type})))
+    (when-not (= type record-type)
+      (throw (ex-info "record-get's schema must be identical to its record-new operand's schema"
+                      {:phase :aarch64 :expected type :actual record-type})))
+    (when-not (= (count fields) (count field-exprs))
+      (throw (ex-info "record-new does not supply exactly one value per declared field"
+                      {:phase :aarch64 :type type})))
+    (when (nil? field-index)
+      (throw (ex-info "record-get references an undeclared field"
+                      {:phase :aarch64 :type type :field field})))
+    (let [names (mapv #(symbol (str "$record-field-" %)) (range (count fields)))
+          bindings (vec (mapcat vector names field-exprs))]
+      (emit-let bindings (nth names field-index) env depth))))
+
 (defn emit-expr [form env depth]
   (cond
     ;; `integer?` alone does not reliably recognize a cljs `bigint` (see
@@ -330,6 +365,14 @@
     ;; `kotoba.compiler.backend.wasm`'s identical dispatch guard.
     #?(:clj (integer? form) :cljs (or (i64/bigint-value? form) (integer? form)))
     (load-constant form)
+    ;; A literal `true`/`false` -- the only source of a genuine `:bool`
+    ;; VALUE in this frontend's type system (see
+    ;; `emit-record-get-of-new`'s own doc comment above) -- is just the i64
+    ;; word 1/0, encoded through the SAME `load-constant` path an ordinary
+    ;; integer literal uses. MUST be checked before the generic `:else`,
+    ;; which would otherwise try to sequentially destructure a bare boolean
+    ;; and throw.
+    (boolean? form) (load-constant (if form 1 0))
     (string? form) (emit-string-literal form)
     (symbol? form)
     (let [binding (get env form)]
@@ -355,6 +398,12 @@
         (emit-let (first args) (second args) env depth)
         (= op 'cap-call)
         (emit-cap-call (first args) (second args) env depth)
+        (= op 'record-get)
+        (let [[type value-form field] args]
+          (emit-record-get-of-new type value-form field env depth))
+        (= op 'record-new)
+        (throw (ex-info "record-new is only supported as the direct operand of a matching record-get on the native backend"
+                        {:phase :aarch64}))
         (contains? '#{pair pair-first pair-second
                       kgraph-assert! kgraph-get kgraph-count kgraph-entity-at
                       string-byte-length string=? string-concat} op)
