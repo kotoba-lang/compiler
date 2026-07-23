@@ -651,6 +651,26 @@
              (list 'loop [index 0]
                    (list 'if (list '< index limit) iteration 0)))))))
 
+(defn- desugar-doseq [args form]
+  (let [[binding & body] args]
+    (when-not (and (vector? binding) (= 2 (count binding))
+                   (symbol? (first binding)) (nil? (namespace (first binding))))
+      (reject! "doseq requires one [unqualified-symbol collection] binding; modifiers and multiple bindings are not supported"
+               form))
+    (let [[item collection] binding]
+      (when-not (vector? collection)
+        (reject! "doseq collection must be a bounded vector literal" form))
+      (let [values (gensym "doseq-values__")
+            iterations
+            (map-indexed
+             (fn [index _]
+               (list 'let [item (list 'vector-at values index)]
+                     (list* 'do (concat body [0]))))
+             collection)]
+        (desugar-expr
+         (list 'let [values collection]
+               (list* 'do (concat iterations [0]))))))))
+
 (defn- thread-form [value step last?]
   (cond
     (symbol? step) (list step value)
@@ -1111,6 +1131,12 @@
         cond-> (desugar-cond-thread args form false)
         cond->> (desugar-cond-thread args form true)
         dotimes (desugar-dotimes args form)
+        doseq (desugar-doseq args form)
+        assert (do
+                 (when-not (= 1 (count args))
+                   (reject! "assert requires exactly one condition; messages are not supported"
+                            form))
+                 (list 'if (desugar-expr (first args)) 0 '(quot 1 0)))
         case (desugar-case args form)
         if-let (desugar-binding-if args form false)
         when-let (desugar-binding-if args form true)
@@ -2966,8 +2992,89 @@
                       form)
     :else form))
 
+(defn- closed-multimethod-literal? [value]
+  (or (kotoba-integer? value) (keyword? value) (boolean? value) (string? value)))
+
+(defn- expand-closed-multimethod-forms [forms]
+  (let [declarations (filter #(and (seq? %) (= 'defmulti (first %))) forms)
+        methods (filter #(and (seq? %) (= 'defmethod (first %))) forms)
+        declaration-names (mapv second declarations)]
+    (when-not (= (count declaration-names) (count (distinct declaration-names)))
+      (reject! "duplicate defmulti declaration" declarations))
+    (let [declarations-by-name
+          (into {}
+                (map (fn [form]
+                       (let [[_ name dispatch & extra] form]
+                         (when-not (and (symbol? name) (nil? (namespace name))
+                                        (symbol? dispatch) (nil? (namespace dispatch))
+                                        (empty? extra))
+                           (reject! "defmulti requires an unqualified name and one unqualified dispatch function symbol"
+                                    form))
+                         [name {:form form :dispatch dispatch}]))
+                     declarations))
+          methods-by-name
+          (group-by second methods)]
+      (doseq [form methods]
+        (let [[_ name dispatch-value params & body] form]
+          (when-not (contains? declarations-by-name name)
+            (reject! "defmethod requires a matching defmulti declaration" form))
+          (when-not (closed-multimethod-literal? dispatch-value)
+            (reject! "defmethod dispatch value must be a bounded literal or :default" form))
+          (when-not (and (vector? params) (<= (count params) max-parameters)
+                         (every? #(and (symbol? %) (nil? (namespace %))) params)
+                         (= (count params) (count (distinct params))))
+            (reject! "defmethod parameters must be a unique vector of unqualified symbols within the ABI arity"
+                     form))
+          (when (empty? body)
+            (reject! "defmethod requires at least one body expression" form))))
+      (let [expanded
+            (into {}
+                  (map
+                   (fn [[name {:keys [dispatch form]}]]
+                     (let [method-forms (get methods-by-name name)]
+                       (when (empty? method-forms)
+                         (reject! "defmulti requires at least one closed-world defmethod" form))
+                       (let [params (nth (first method-forms) 3)
+                             _ (doseq [method method-forms]
+                                 (when-not (= params (nth method 3))
+                                   (reject! "all defmethods must use the same parameter vector"
+                                            method)))
+                             values (mapv #(nth % 2) method-forms)
+                             _ (when-not (= (count values) (count (distinct values)))
+                                 (reject! "duplicate defmethod dispatch value" method-forms))
+                             default-method (first (filter #(= :default (nth % 2))
+                                                           method-forms))
+                             ordinary (remove #(= :default (nth % 2)) method-forms)
+                             body-form (fn [method]
+                                         (let [body (drop 4 method)]
+                                           (if (= 1 (count body))
+                                             (first body)
+                                             (list* 'do body))))
+                             clauses (mapcat (fn [method]
+                                               [(nth method 2) (body-form method)])
+                                             ordinary)
+                             clauses (cond-> (vec clauses)
+                                       default-method (conj (body-form default-method)))
+                             generated (list 'defn name params
+                                             (list* 'case
+                                                    (list* dispatch params)
+                                                    clauses))]
+                         [name generated])))
+                   declarations-by-name))]
+        (into [] (remove nil?)
+              (map (fn [form]
+                     (cond
+                       (and (seq? form) (= 'defmulti (first form)))
+                       (get expanded (second form))
+
+                       (and (seq? form) (= 'defmethod (first form)))
+                       nil
+
+                       :else form))
+                   forms))))))
+
 (defn analyze [source]
-  (let [forms (read-forms source)
+  (let [forms (expand-closed-multimethod-forms (read-forms source))
         namespaces (filter #(and (seq? %) (= 'ns (first %))) forms)
         defs (filter #(and (seq? %) (contains? '#{defn defn-} (first %))) forms)
         constant-forms (filter #(and (seq? %) (= 'def (first %))) forms)
