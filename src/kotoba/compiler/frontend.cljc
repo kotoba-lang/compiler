@@ -651,6 +651,26 @@
              (list 'loop [index 0]
                    (list 'if (list '< index limit) iteration 0)))))))
 
+(defn- desugar-doseq [args form]
+  (let [[binding & body] args]
+    (when-not (and (vector? binding) (= 2 (count binding))
+                   (symbol? (first binding)) (nil? (namespace (first binding))))
+      (reject! "doseq requires one [unqualified-symbol collection] binding; modifiers and multiple bindings are not supported"
+               form))
+    (let [[item collection] binding]
+      (when-not (vector? collection)
+        (reject! "doseq collection must be a bounded vector literal" form))
+      (let [values (gensym "doseq-values__")
+            iterations
+            (map-indexed
+             (fn [index _]
+               (list 'let [item (list 'vector-at values index)]
+                     (list* 'do (concat body [0]))))
+             collection)]
+        (desugar-expr
+         (list 'let [values collection]
+               (list* 'do (concat iterations [0]))))))))
+
 (defn- thread-form [value step last?]
   (cond
     (symbol? step) (list step value)
@@ -1111,6 +1131,7 @@
         cond-> (desugar-cond-thread args form false)
         cond->> (desugar-cond-thread args form true)
         dotimes (desugar-dotimes args form)
+        doseq (desugar-doseq args form)
         case (desugar-case args form)
         if-let (desugar-binding-if args form false)
         when-let (desugar-binding-if args form true)
