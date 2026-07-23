@@ -53,6 +53,7 @@ const ALLOWED_IMPORTS = new Set([
   "kotoba:typed/map-dissoc-i64/function",
   "kotoba:typed/map-dissoc-ref/function",
   "kotoba:typed/string-concat/function",
+  "kotoba:typed/string-substring/function",
   "kotoba:typed/string-replace-all/function",
   "kotoba:typed/string-contains/function",
   "kotoba:typed/string-fold-case/function",
@@ -1064,6 +1065,22 @@ function createTypedRuntime(abi, typedCapCall, allow) {
       const result = assertValue(descriptor, left) + assertValue(descriptor, right);
       if (utf8Length(result) > 65536) reject("invalid-typed-value", "typed string is oversized");
       return result;
+    },
+    "string-substring"(descriptorId, value, start, end) {
+      const descriptor = descriptorAt(descriptorId);
+      if (descriptor !== "string") reject("invalid-typed-operation", "string descriptor required");
+      value = assertValue(descriptor, value);
+      start = Number(start); end = Number(end);
+      const bytes = new TextEncoder().encode(value);
+      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) ||
+          start < 0 || start > end || end > bytes.length)
+        reject("invalid-typed-operation", "string substring indexes are out of bounds");
+      const decoder = new TextDecoder("utf-8", { fatal: true });
+      try {
+        return decoder.decode(bytes.slice(start, end));
+      } catch (_) {
+        reject("invalid-typed-operation", "string substring index splits a UTF-8 code point");
+      }
     },
     "string-replace-all"(descriptorId, value, needle, replacement) {
       const descriptor = descriptorAt(descriptorId);

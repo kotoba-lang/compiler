@@ -211,6 +211,31 @@
                       {:phase :value :bytes bytes :limit limit})))
     value))
 
+(defn utf8-substring!
+  "Checked UTF-8 byte-offset substring. Both offsets must be code-point
+  boundaries; malformed UTF-16 is rejected by utf8-byte-count! first."
+  [value start end]
+  (let [length (utf8-byte-count! value)]
+    (when-not (and (integer? start) (integer? end) (<= 0 start end length))
+      (throw (ex-info "string substring indexes are out of bounds"
+                      {:phase :value :start start :end end :length length})))
+    (loop [index 0 byte-index 0 boundaries {0 0}]
+      (if (= index (count value))
+        (let [from (get boundaries start) to (get boundaries end)]
+          (when-not (and (some? from) (some? to))
+            (throw (ex-info "string substring index splits a UTF-8 code point"
+                            {:phase :value :start start :end end})))
+          (subs value from to))
+        (let [unit #?(:clj (int (.charAt ^String value index))
+                      :cljs (.charCodeAt value index))
+              [units bytes] (cond
+                              (<= unit 0x7f) [1 1]
+                              (<= unit 0x7ff) [1 2]
+                              (<= 0xd800 unit 0xdbff) [2 4]
+                              :else [1 3])]
+          (recur (+ index units) (+ byte-index bytes)
+                 (assoc boundaries (+ byte-index bytes) (+ index units))))))))
+
 (defn bounded-keyword!
   [value limit]
   (when-not (keyword? value)

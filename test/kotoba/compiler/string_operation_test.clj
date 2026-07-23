@@ -5,10 +5,12 @@
             [kotoba.compiler.ir :as ir]))
 
 (def source
-  "(ns string.operation (:export [main concat replace]))
+  "(ns string.operation (:export [main concat substring replace]))
    (defn main [] :i64 0)
    (defn concat [left :string right :string] :string
      (string-concat left right))
+   (defn substring [value :string start :i64 end :i64] :string
+     (string-substring value start end))
    (defn replace [value :string needle :string replacement :string] :string
      (string-replace-all value needle replacement))")
 
@@ -22,6 +24,8 @@
         js64 (encoded (.getBytes ^String (:source javascript) "UTF-8"))
         wasm64 (encoded (:bytes wasm))
         checks (str "if(x.concat('a','b')!=='ab')process.exit(2);"
+                    "if(x.substring('a😀語z',1n,8n)!=='😀語')process.exit(6);"
+                    "try{x.substring('a😀',2n,5n);process.exit(7)}catch(e){};"
                     "if(x.replace('a.$a.$','.','$')!=='a$$a$$')process.exit(3);"
                     "try{x.replace('abc','','x');process.exit(4)}catch(e){};"
                     "try{x.replace('x'.repeat(40000),'x','xx');process.exit(5)}catch(e){}")
@@ -33,6 +37,9 @@
                                    "const h=await m.instantiateKotoba(Buffer.from(process.argv[1],'base64'));"
                                    "const x=h.instance.exports;" checks "})") wasm64)]
     (is (= "ab" (ir/execute kir 'concat ["a" "b"])))
+    (is (= "😀語" (ir/execute kir 'substring ["a😀語z" 1 8])))
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (ir/execute kir 'substring ["a😀" 2 5])))
     (is (= "a$$a$$" (ir/execute kir 'replace ["a.$a.$" "." "$"])))
     (is (thrown? clojure.lang.ExceptionInfo (ir/execute kir 'replace ["abc" "" "x"])))
     (is (zero? (:exit js-result)) (:err js-result))

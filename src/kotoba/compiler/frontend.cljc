@@ -142,7 +142,7 @@
     document-i64-value 1 document-f64-value 1})
 (def document-variadic-operations '#{document-vector document-map})
 (def sequencing-operations '#{do})
-(def string-operations '{string-byte-length 1 string=? 2 string-concat 2
+(def string-operations '{string-byte-length 1 string=? 2 string-concat 2 string-substring 3
                          string-replace-all 3 string-contains? 2 string-fold-case 1
                          keyword-from-string 1 keyword-name 1})
 (def xml-operations
@@ -1399,7 +1399,6 @@
                             form))
                  (list 'if (desugar-expr (first args)) 0 '(quot 1 0)))
         case (desugar-case args form)
-        string-substring (desugar-string-substring args form)
         if-let (desugar-binding-if args form false)
         when-let (desugar-binding-if args form true)
         if-some (desugar-binding-some args form false)
@@ -2427,6 +2426,12 @@
       (= op 'string-concat)
       (do (doseq [[arg type] (map vector args types)]
             (require-expression-type! type :string arg))
+          :string)
+
+      (= op 'string-substring)
+      (do (require-expression-type! (first types) :string (first args))
+          (doseq [[arg type] (map vector (rest args) (rest types))]
+            (require-expression-type! type :i64 arg))
           :string)
 
       (= op 'string-replace-all)

@@ -139,6 +139,12 @@
         (list 'kotoba$typed-value! (list 'quote :string)
               (list 'str (lower-expr (first args)) (lower-expr (second args))))
 
+        string-substring
+        (list 'kotoba$utf8-substring
+              (lower-expr (first args))
+              (lower-expr (second args))
+              (lower-expr (nth args 2)))
+
         (cond
           (contains? comparison-ops op)
           (list 'if (apply list op (map lower-expr args)) 1 0)
@@ -221,6 +227,28 @@
               (kotoba$typed-fail! "invalid-typed-value"
                                   {:reason :unpaired-surrogate})
               :else (recur (inc index) (+ total 3)))))))
+    (defn- kotoba$utf8-substring [text start end]
+      (let [length (kotoba$utf8-byte-count text)]
+        (when-not (and (integer? start) (integer? end) (<= 0 start end length))
+          (kotoba$typed-fail! "invalid-typed-operation"
+                              {:reason :substring-bounds}))
+        (loop [index 0 byte-index 0 boundaries {0 0}]
+          (if (= index (count text))
+            (let [from (get boundaries start) to (get boundaries end)]
+              (when-not (and (some? from) (some? to))
+                (kotoba$typed-fail! "invalid-typed-operation"
+                                    {:reason :substring-code-point-boundary}))
+              (subs text from to))
+            (let [unit (subs text index (inc index))
+                  [units bytes]
+                  (cond
+                    (<= (compare unit "\u007f") 0) [1 1]
+                    (<= (compare unit "\u07ff") 0) [1 2]
+                    (and (<= (compare "\ud800" unit) 0)
+                         (<= (compare unit "\udbff") 0)) [2 4]
+                    :else [1 3])]
+              (recur (+ index units) (+ byte-index bytes)
+                     (assoc boundaries (+ byte-index bytes) (+ index units))))))))
     (defn- kotoba$typed-value! [type value]
       (let [nodes (atom 0)]
         (letfn [(walk [descriptor item depth]
