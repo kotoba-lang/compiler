@@ -2,11 +2,11 @@
   (:require [clojure.test :refer [deftest is]]
             [kotoba.compiler.frontend :as frontend]))
 
-(deftest string-substring-folds-by-unicode-code-point
+(deftest string-substring-folds-by-utf8-byte-boundary
   (let [module (frontend/analyze
                  "(ns string.literal (:export [middle]))
                  (defn middle [] :string
-                   (string-substring \"a😀語z\" 1 3))")
+                   (string-substring \"a😀語z\" 1 8))")
         middle (first (filter #(= 'middle (:name %)) (:functions module)))]
     (is (= "😀語" (:body middle)))))
 
@@ -20,6 +20,12 @@
   (is (thrown-with-msg?
        clojure.lang.ExceptionInfo #"out of bounds"
        (frontend/analyze
-        "(ns string.bounds (:export [middle]))
+         "(ns string.bounds (:export [middle]))
          (defn middle [] :string
-           (string-substring \"abc\" 1 4))"))))
+           (string-substring \"abc\" 1 4))")))
+  (is (thrown-with-msg?
+       clojure.lang.ExceptionInfo #"UTF-8 code-point boundaries"
+       (frontend/analyze
+        "(ns string.boundary (:export [middle]))
+         (defn middle [] :string
+           (string-substring \"a😀\" 2 5))"))))
