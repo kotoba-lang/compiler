@@ -1913,19 +1913,26 @@
 
 (def state-provider-table-capacity
   "Slot count for `state-provider-wat`'s bounded in-memory key/value table --
-  deliberately far smaller than `kotoba.compiler.provider.state/max-entries`
-  (256, the pure-Clojure reference provider's own bound) for a first real
-  read/write/dispatch increment: growing capacity later is a straightforward,
-  mechanical follow-up (more slots, the identical per-slot layout/unrolled-
-  scan shape scales linearly), not a new semantic dimension, so narrowing it
-  here is an honest, deliberate scoping choice, not an oversight. `4` is
-  chosen, not `1`, because the task's own stateful-sequence evidence needs to
-  distinguish two genuinely different fail-closed shapes a 1-slot table could
-  not tell apart: 'rejects a second DISTINCT key once full' vs. 'rejects
-  every key unconditionally' -- and needs at least a few slots to also prove
-  no cross-key contamination among *multiple simultaneously stored* keys, not
-  only two."
-  4)
+  matches `kotoba.compiler.provider.state/max-entries` (256, the pure-
+  Clojure reference provider's own bound, itself equal to `state-v1.edn`'s
+  own declared `:limits {:entries 256 ...}`) exactly (ADR 0061). ADR 0060
+  deliberately narrowed this to `4` for its first real read/write/dispatch
+  increment, on the stated premise that growing it back to the reference's
+  real bound would be a mechanical, separate follow-up: 'the per-slot
+  layout and unrolled scan generalize directly to any fixed compile-time
+  slot count'. That premise held -- `state-scan-wat` already built its
+  per-slot branches via `(map ... (range capacity))`, a Clojure-side
+  generator over this constant, not hand-written cases, and
+  `state-slot-layout`/`state-provider-wat`'s own memory-sizing math
+  (`table-size`, `pages`) is already `capacity`-parametric -- so reaching
+  256 needed exactly this one constant change plus proportionally more WAT
+  text at emission time (a bigger `(module ...)`, not a different shape).
+  `package-state-provider`/`state-provider-wat` both keep their own
+  explicit-`capacity` arities so a test/evidence fixture can still request a
+  SMALLER table (e.g. `4`, to re-run ADR 0060's own stateful-sequence
+  fixture unchanged as a no-regression check) without touching this
+  production default."
+  256)
 
 (defn- field-by-name
   "The `{:name :offset :layout}` entry of `record-layout`'s own `:fields`
@@ -2309,10 +2316,10 @@
   the existing REQUEST-headroom-plus-result-size sum ADR 0059's own
   `asymmetric-variant-capability-provider-wat` already established.
 
-  What this provider deliberately does NOT do, matching the task's own
-  framing: it does not implement the reference's full 256-entry capacity
-  (`state-provider-table-capacity` narrows this to 4, an honest, separate,
-  mechanically-scalable narrowing -- see that def's own docstring); it caps
+  What this provider does and does not do, matching the task's own framing:
+  since ADR 0061 it DOES implement the reference's full 256-entry capacity
+  (`state-provider-table-capacity` -- see that def's own docstring for the
+  ADR 0060 -> ADR 0061 history); it caps
   stored key/value bytes at the same FULL Kotoba bound the reference itself
   enforces (512/65536), not a narrower internal limit, so no request that
   passes Kotoba's own byte-bound validation can ever be rejected by this

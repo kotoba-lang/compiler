@@ -497,9 +497,12 @@
   (same package/world/interface, same `func(request: T) -> U` signature) --
   only the WASM BODY differs, real bounded-table dispatch/storage/byte-
   comparison logic in place of a fixed compile-time constant. `capacity`
-  (default `component-core/state-provider-table-capacity`, `4`) is exposed so
-  a test/evidence fixture can build a SMALLER table (e.g. to reach the
-  capacity-exhaustion fail-closed path in fewer `put`s) without touching the
+  (default `component-core/state-provider-table-capacity`, `256` as of ADR
+  0061, matching the pure-Clojure reference's own bound; ADR 0060 shipped
+  this default as `4`) is exposed so a test/evidence fixture can build a
+  SMALLER table (e.g. to reach the capacity-exhaustion fail-closed path in
+  fewer `put`s, or to re-run ADR 0060's own 14-step stateful-sequence
+  fixture unchanged as a no-regression check) without touching the
   production default."
   ([capability-name request-descriptor result-descriptor schemas]
    (package-state-provider capability-name request-descriptor result-descriptor
