@@ -307,6 +307,91 @@
                request-schema result-schema capability)
       {:capability capability :request request-type :result result})))
 
+(defn- scalar-only-variant-case?
+  "True when `payload-type` is a shape this ADR 0055 slice admits as one
+  variant case's payload *when that variant is used as a `typed-cap-call`
+  request/result*: a bare Canonical scalar (`i64`/`f32`/`f64`/`bool`) only.
+  Deliberately narrower than `record-or-scalar-variant-case?` (ADR 0054),
+  which also admits a sealed all-scalar record case (ADR 0052) or a sealed
+  string/keyword-bearing record case (ADR 0053) for an *identity-export*
+  variant. Both record-case kinds were tried for a `typed-cap-call`-crossing
+  variant during this ADR's own implementation and rejected for a concrete,
+  reproduced reason, not merely 'not yet tested': `wac plug` (pinned 0.9.0),
+  composing an application component (built from this namespace's own
+  already-proven WIT/WAT pipeline) with a provider component exporting the
+  identical WIT-encoded variant-wrapping-record shape, fails encoding with
+  `type not valid to be used as import` for *every* record-case variant
+  tried (a single record-only case, three cases mixing scalar and record,
+  and a one-field record case), reproduced independent of case count, case
+  mix, and the `types` interface's internal declaration order (a
+  hand-written provider WIT/WAT declaring the variant before its record
+  dependency, matching the application side's own alphabetical schema
+  ordering, fails identically). Each half validates as a well-formed
+  component on its own (`wasm-tools component new --reject-legacy-names`
+  succeeds for both the application and the provider individually); the
+  failure is specific to `wac`'s own plug-time re-encoding of a `types`
+  interface that exports two types where one (the variant) references the
+  other (the record) and that interface crosses a capability import/export
+  boundary. This is recorded as a currently-blocked path in 'Remaining
+  gaps', not attempted further in this ADR -- see ADR 0055 for the full
+  reproduction. Scoping this first variant-crossing slice to bare scalar
+  cases keeps every flat position a plain scalar core value
+  (`i64`/`f32`/`f64`/`i32`) and the `types` interface to exactly one
+  exported type (the variant itself, no record dependency), which is
+  exactly the shape ADR 0046's own scalar `typed-cap-call` slice and ADR
+  0048's own record `typed-cap-call` slice each already proved crosses
+  `wac plug` correctly."
+  [payload-type]
+  (contains? #{:i64 :f32 :f64 :bool} payload-type))
+
+(defn- scalar-variant-capability-schema
+  "Schema of `descriptor` when it is a sealed variant whose every case's
+  payload independently satisfies `scalar-only-variant-case?`. Structurally
+  the same admission shape as `variant-case-schema` (ADR 0052/0054), narrowed
+  to bare scalar cases only for the reason `scalar-only-variant-case?`
+  documents. Kept as a separate function (not a parameterization of
+  `variant-case-schema`) so the identity-export path's own admitted case set
+  never silently narrows if this one changes, and vice versa."
+  [descriptor schemas]
+  (let [schema (cond
+                 (and (vector? descriptor) (= :ref (first descriptor)))
+                 (get schemas (second descriptor))
+                 (and (vector? descriptor) (= :variant (first descriptor))) descriptor)]
+    (when (and (vector? schema)
+               (= :variant (first schema))
+               (seq (nth schema 2))
+               (= schema (get schemas (second schema)))
+               (every? (fn [[_ payload-type]] (scalar-only-variant-case? payload-type))
+                       (nth schema 2)))
+      schema)))
+
+(defn- variant-capability-call
+  "Admission for a direct `typed-cap-call` whose request and result are one
+  sealed variant (`scalar-variant-capability-schema`), the same request/
+  result identity, matching `record-capability-call`'s own same-type
+  discipline (ADR 0048) rather than ADR 0046's scalar slice, which allows
+  request and result to differ -- widening a *structured* request/result to
+  different identities would require the provider to perform a real semantic
+  mapping between two distinct shapes, out of scope for a wiring-only
+  identity provider slice."
+  [function schemas]
+  (let [{:keys [params param-types result body]} function
+        request-type (first param-types)
+        [_ id body-request-type body-result-type request] (when (seq? body) body)
+        capability (some #(when (= id (:id %)) %) (:capabilities component-wit/contract))
+        request-schema (scalar-variant-capability-schema request-type schemas)
+        result-schema (scalar-variant-capability-schema result schemas)]
+    (when (and (= 1 (count params))
+               (= 1 (count param-types))
+               (seq? body)
+               (= 'typed-cap-call (first body))
+               (= request (first params))
+               (= body-request-type request-type)
+               (= body-result-type result)
+               (= request-type result)
+               request-schema result-schema capability)
+      {:capability capability :request request-type :result result})))
+
 (defn assert-supported! [kir]
   (let [exports (exported-functions kir)]
     (cond
@@ -316,6 +401,9 @@
       (and (= 1 (count (:functions kir)))
            (= 1 (count exports))
            (record-capability-call (first exports) (:schemas kir))) :record-capability-call
+      (and (= 1 (count (:functions kir)))
+           (= 1 (count exports))
+           (variant-capability-call (first exports) (:schemas kir))) :variant-capability-call
       (every? scalar-function? exports) :scalar
       (and (= 1 (count (:functions kir)))
            (= 1 (count exports))
@@ -1137,6 +1225,124 @@
      "    i32.const 8 global.set $next)\n"
      "  (func (export \"cm32p2_initialize\") i32.const 8 global.set $next))\n")))
 
+(defn- variant-capability-wat
+  "Application-side standard32 core module for a direct `typed-cap-call`
+  whose request/result is one sealed variant admitted by
+  `scalar-variant-capability-schema`. The joined component-flat signature
+  (`$disc` plus one core param per joined payload position, exactly
+  `variant-wat`'s own signature -- `canonical/layout`'s `:flat` on the
+  variant descriptor) is unchanged from the identity-export case; the only
+  difference is that this module never itself un-joins or stores a case's
+  payload -- it allocates the variant's Canonical result area (`realloc`
+  sized to the variant layout's own `:size`/`:alignment`, exactly as
+  `variant-wat` does for its own self-allocated result), forwards the
+  discriminant and every joined payload value plus that result pointer to
+  the imported provider function unchanged, and returns the same pointer.
+  This is `record-capability-wat`'s exact division of labor (forward flat
+  values plus a caller-allocated result pointer to an import that has no
+  core result, matching the Canonical ABI's own indirect-result convention
+  for a >1-flat-value result) generalized from a record's flat field list to
+  a variant's joined `:flat` case-value list. Unlike `record-capability-wat`
+  (which validates bool fields on the *application* side before crossing),
+  disc-range-checking and per-case validation for a variant can only be done
+  correctly by whichever side actually knows which case is active, which is
+  exactly the side that performs the case-dispatch store -- here, the
+  provider (`variant-capability-provider-wat`), which reuses `variant-wat`'s
+  own case-chain (disc range check plus in-branch bool validation)
+  unmodified. The application module therefore performs no validation of its
+  own; it is a thin pass-through, exactly mirroring `scalar-capability-wat`'s
+  own no-validation precedent for a single scalar leaf, now applied to every
+  joined position of a variant."
+  [function schemas plan]
+  (let [export (wit-name (:name function))
+        capability (:capability plan)
+        variant-layout (canonical/layout (:request plan) schemas)
+        joined-types (vec (rest (:flat variant-layout)))
+        payload-params (apply str
+                              (map (fn [core-type] (str " (param " (core-type-name core-type) ")"))
+                                   joined-types))
+        import-params (str " (param i32)" payload-params)
+        params (apply str
+                      (cons " (param $disc i32)"
+                            (map-indexed
+                             (fn [index core-type]
+                               (str " (param $p" index " " (core-type-name core-type) ")"))
+                             joined-types)))
+        arguments (apply str
+                         (cons "    local.get $disc\n"
+                               (map-indexed (fn [index _] (str "    local.get $p" index "\n"))
+                                            joined-types)))]
+    (str
+     "(module\n"
+     "  (import \"cm32p2|kotoba:application/" (:interface capability) "@1\" \""
+     (:function capability) "\" (func $provider" import-params " (param i32)))\n"
+     "  (memory (export \"cm32p2_memory\") 1 1)\n"
+     "  (global $next (mut i32) (i32.const 8))\n"
+     "  (func $realloc (export \"cm32p2_realloc\")\n"
+     "    (param i32 i32) (param $align i32) (param $size i32) (result i32)\n"
+     "    (local $ptr i32)\n"
+     "    global.get $next local.get $align i32.const 1 i32.sub i32.add\n"
+     "    i32.const 0 local.get $align i32.sub i32.and local.tee $ptr\n"
+     "    local.get $size i32.add global.set $next local.get $ptr)\n"
+     "  (func (export \"cm32p2||" export "\")" params " (result i32)\n"
+     "    (local $ret i32)\n"
+     "    i32.const 0 i32.const 0 i32.const " (:alignment variant-layout)
+     " i32.const " (:size variant-layout) " call $realloc local.set $ret\n"
+     arguments
+     "    local.get $ret call $provider local.get $ret)\n"
+     "  (func (export \"cm32p2||" export "_post\") (param i32)\n"
+     "    i32.const 8 global.set $next)\n"
+     "  (func (export \"cm32p2_initialize\") i32.const 8 global.set $next))\n")))
+
+(defn variant-capability-provider-wat
+  "Wiring-only provider core module for one sealed variant admitted by
+  `scalar-variant-capability-schema` (ADR 0055) -- public so
+  `kotoba.compiler.component-composition` can build a provider artifact for
+  it (mirroring `kotoba.compiler.component-composition/record-provider-wat`,
+  which duplicates `record-capability-wat`'s own store shape locally rather
+  than calling into this namespace; this function is exposed directly
+  instead because the case-chain it reuses, `variant-case-chain`, is
+  materially more involved than a flat record's own field loop and
+  duplicating it would risk the two copies silently drifting). `entry` is a
+  `{:interface :function}` capability map (the same shape
+  `component-wit/contract`'s own `:capabilities` entries and
+  `component-composition`'s local `capability` lookup already use).
+  Reuses `variant-wat`'s exact case-chain (disc range check, then in-branch
+  bool validation and store for the active case only -- string/keyword
+  leaves cannot appear here because `scalar-variant-capability-schema`
+  excludes them) unchanged, the only difference being that the result
+  pointer is the fixed minimal address `record-provider-wat`'s own
+  precedent already uses (`i32.const 8`, no dynamic allocation) rather than
+  a bump-allocated one, since this provider's own memory is never grown
+  beyond its own fixed-size union layout."
+  [entry descriptor schemas]
+  (let [export (str "cm32p2|kotoba:application/" (:interface entry) "@1|" (:function entry))
+        variant-layout (canonical/layout descriptor schemas)
+        joined-types (vec (rest (:flat variant-layout)))
+        params (apply str
+                      (cons " (param $disc i32)"
+                            (map-indexed
+                             (fn [index core-type]
+                               (str " (param $p" index " " (core-type-name core-type) ")"))
+                             joined-types)))
+        case-chain (variant-case-chain (:cases variant-layout)
+                                       (:payload-offset variant-layout)
+                                       joined-types 65536)]
+    (str
+     "(module\n"
+     "  (memory (export \"cm32p2_memory\") 1 1)\n"
+     "  (func (export \"" export "\")" params " (result i32)\n"
+     "    (local $ret i32)\n"
+     "    i32.const 8 local.set $ret\n"
+     "    local.get $disc i32.const " (count (:cases variant-layout)) " i32.ge_u if unreachable end\n"
+     "    local.get $ret local.get $disc "
+     (variant-disc-store (:discriminant-size variant-layout)) " offset=0\n"
+     case-chain
+     "    local.get $ret)\n"
+     "  (func (export \"" export "_post\") (param i32))\n"
+     "  (func (export \"cm32p2_realloc\") (param i32 i32 i32 i32) (result i32) i32.const 8)\n"
+     "  (func (export \"cm32p2_initialize\")))\n")))
+
 (defn emit [kir target]
   (case (assert-supported! kir)
     :scalar (wasm/emit-component-core kir target)
@@ -1175,4 +1381,9 @@
     (let [function (first (exported-functions kir))]
       (wasm-tools/parse-wat
        (record-capability-wat function (:schemas kir)
-                              (record-capability-call function (:schemas kir)))))))
+                              (record-capability-call function (:schemas kir)))))
+    :variant-capability-call
+    (let [function (first (exported-functions kir))]
+      (wasm-tools/parse-wat
+       (variant-capability-wat function (:schemas kir)
+                               (variant-capability-call function (:schemas kir)))))))

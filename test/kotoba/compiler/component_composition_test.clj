@@ -65,3 +65,54 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"sealed scalar schema"
                           (composition/package-record-identity-provider
                            :http/post descriptor (:schemas kir))))))
+
+(deftest scalar-only-variant-provider-closes-the-application-world
+  ;; ADR 0055: a variant crosses a `typed-cap-call` boundary and is closed by
+  ;; a real composed (application + provider) component for the first time.
+  ;; `demo/flag-or-ratio` is the exact ADR 0052 bool/f32 join-table fixture,
+  ;; proving the full `join-core-type`/`variant-coerce-ops` table survives a
+  ;; real cross-component crossing, not only a single-module identity export.
+  (let [descriptor [:ref :demo/flag-or-ratio]
+        schemas {:demo/flag-or-ratio [:variant :demo/flag-or-ratio
+                                      [[:urgent :bool] [:weight :f32]]]}
+        kir {:format :kotoba.kir/v4 :exports ['invoke] :schemas schemas
+             :functions [{:name 'invoke :params ['request]
+                          :param-types [descriptor] :result descriptor
+                          :body (list 'typed-cap-call 8 descriptor descriptor 'request)}]}
+        world (wit/emit kir)
+        application (artifact/package
+                     (component-core/emit kir :wasm32-wasi-kotoba-v1) kir world)
+        provider (composition/package-variant-identity-provider
+                  :state/transact descriptor schemas)
+        closed (composition/compose-closed application [provider])]
+    (is (= :variant-capability-call (:canonical-lowering application)))
+    (is (= :wasm-component-provider/v1 (:format provider)))
+    (is (= :wasm-component-closed/v1 (:format closed)))
+    (is (= [{:capability :state/transact :descriptor descriptor}]
+           (:providers closed)))
+    (is (= [0 97 115 109 13 0 1 0]
+           (mapv #(bit-and (int %) 0xff) (take 8 (:bytes closed)))))))
+
+(deftest variant-with-record-case-boundary-remains-sealed
+  ;; A case wrapping a sealed all-scalar record remains fail-closed for a
+  ;; capability-call boundary in this slice (unlike the identity-export
+  ;; path, ADR 0052/0054, which already admits it) -- `wac plug` (pinned
+  ;; 0.9.0) fails encoding a record-referencing-variant provider that
+  ;; crosses a capability boundary. `component-core/emit` rejects it at
+  ;; admission (before any encoding is attempted), and
+  ;; `package-variant-identity-provider` independently rejects it too, so
+  ;; the boundary fails closed at both layers rather than surfacing only as
+  ;; a downstream `wac` encoding error.
+  (let [descriptor [:ref :demo/cap-outcome]
+        schemas {:demo/cap-tally [:record :demo/cap-tally [[:count :i64]]]
+                 :demo/cap-outcome [:variant :demo/cap-outcome
+                                    [[:tally [:ref :demo/cap-tally]] [:empty :bool]]]}
+        kir {:format :kotoba.kir/v4 :exports ['invoke] :schemas schemas
+             :functions [{:name 'invoke :params ['request]
+                          :param-types [descriptor] :result descriptor
+                          :body (list 'typed-cap-call 8 descriptor descriptor 'request)}]}]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
+                          (component-core/emit kir :wasm32-wasi-kotoba-v1)))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"scalar-only cases"
+                          (composition/package-variant-identity-provider
+                           :state/transact descriptor schemas)))))
