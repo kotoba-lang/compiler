@@ -21,6 +21,7 @@
             [kotoba.compiler.f64-value-test]
             [kotoba.compiler.f32-value-test]
             [kotoba.compiler.frontend-limits-test]
+            [kotoba.compiler.frontend-multimethod-test]
             [kotoba.compiler.frontend-extensions-test]
             [kotoba.compiler.frontend-destructuring-loop-test]
             [kotoba.compiler.frontend-named-capability-test]
@@ -79,6 +80,7 @@
                                           'kotoba.compiler.f64-value-test
                                           'kotoba.compiler.f32-value-test
                                           'kotoba.compiler.frontend-limits-test
+                                          'kotoba.compiler.frontend-multimethod-test
                                           'kotoba.compiler.frontend-extensions-test
                                           'kotoba.compiler.frontend-destructuring-loop-test
                                           'kotoba.compiler.frontend-named-capability-test
