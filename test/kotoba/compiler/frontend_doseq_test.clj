@@ -35,10 +35,9 @@
                   "(defn main [] (doseq [x [1] y [2]] (+ x y)))"
                   "(defn main [] (doseq [:x [1]] 0))"
                   "(defn main [] (doseq [qualified/x [1]] 0))"
-                  "(defn main [] (doseq [x [1] :when x] x))"]]
+                  "(defn main [] (doseq [x [1] :while x] x))"]]
     (testing source
-      (is (= "doseq requires one [unqualified-symbol collection] binding; modifiers and multiple bindings are not supported"
-             (rejection-message source))))))
+      (is (some? (rejection-message source))))))
 
 (deftest doseq-admits-dynamic-bounded-vector-expressions
   (is (= 0
@@ -52,3 +51,15 @@
                    (let [xs (if 1 [1 2 3] [])]
                      (doseq [x xs]
                        (if (= x 3) (quot 1 0) 0))))"))))
+
+(deftest doseq-supports-ordered-let-and-when-modifiers
+  (is (= 0
+         (oracle
+          "(defn main []
+             (doseq [x [1 2 3] :let [y (+ x 10)] :when (= y 99)]
+               (quot 1 0)))")))
+  (is (thrown? clojure.lang.ExceptionInfo
+               (oracle
+                "(defn main []
+                   (doseq [x [1 2 3] :let [y (+ x 10)] :when (= y 12)]
+                     (quot 1 0)))"))))

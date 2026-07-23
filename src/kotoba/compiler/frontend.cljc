@@ -653,18 +653,53 @@
 
 (defn- desugar-doseq [args form]
   (let [[binding & body] args]
-    (when-not (and (vector? binding) (= 2 (count binding))
+    (when-not (and (vector? binding) (<= 2 (count binding))
                    (symbol? (first binding)) (nil? (namespace (first binding))))
-      (reject! "doseq requires one [unqualified-symbol collection] binding; modifiers and multiple bindings are not supported"
+      (reject! "doseq requires one [unqualified-symbol collection] binding with optional :let/:when modifiers"
                form))
-    (let [[item collection] binding
+    (let [[item collection & modifier-forms] binding]
+      (when (odd? (count modifier-forms))
+        (reject! "doseq modifiers require keyword/value pairs" form))
+      (let [modifiers
+            (mapv
+             (fn [[modifier value]]
+               (case modifier
+                 :let
+                 (do
+                   (when-not (and (vector? value) (even? (count value))
+                                  (every? #(and (symbol? %)
+                                                (nil? (namespace %)))
+                                          (take-nth 2 value))
+                                  (= (count (take-nth 2 value))
+                                     (count (distinct (take-nth 2 value)))))
+                     (reject! "doseq :let requires unique unqualified symbol/value bindings"
+                              form))
+                   [:let value])
+
+                 :when [:when value]
+
+                 :while
+                 (reject! "doseq :while is not supported by this portable profile"
+                          form)
+
+                 (reject! "doseq supports only :let and :when modifiers; multiple collection bindings are not supported"
+                          form)))
+             (partition 2 modifier-forms))
+            iteration-body
+            (reduce
+             (fn [inner [modifier value]]
+               (case modifier
+                 :let (list 'let value inner)
+                 :when (list 'if value inner 0)))
+             (list* 'do (concat body [0]))
+             (reverse modifiers))
           values (gensym "doseq-values__")
           length (gensym "doseq-length__")
           iterations
           (map (fn [index]
                  (list 'if (list '< index length)
                        (list 'let [item (list 'vector-at values index)]
-                             (list* 'do (concat body [0])))
+                             iteration-body)
                        0))
                (range value/vector-literal-item-limit))
           blocks (map #(list* 'do (concat % [0]))
@@ -673,7 +708,7 @@
       (desugar-expr
        (list 'let [values collection]
              (list 'let [length (list 'vector-count values)]
-                   unrolled))))))
+                   unrolled)))))))
 
 (defn- thread-form [value step last?]
   (cond
