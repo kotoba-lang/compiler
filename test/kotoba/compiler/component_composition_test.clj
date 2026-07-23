@@ -93,26 +93,58 @@
     (is (= [0 97 115 109 13 0 1 0]
            (mapv #(bit-and (int %) 0xff) (take 8 (:bytes closed)))))))
 
-(deftest variant-with-record-case-boundary-remains-sealed
-  ;; A case wrapping a sealed all-scalar record remains fail-closed for a
-  ;; capability-call boundary in this slice (unlike the identity-export
-  ;; path, ADR 0052/0054, which already admits it) -- `wac plug` (pinned
-  ;; 0.9.0) fails encoding a record-referencing-variant provider that
-  ;; crosses a capability boundary. `component-core/emit` rejects it at
-  ;; admission (before any encoding is attempted), and
-  ;; `package-variant-identity-provider` independently rejects it too, so
-  ;; the boundary fails closed at both layers rather than surfacing only as
-  ;; a downstream `wac` encoding error.
+(deftest variant-with-record-case-closes-the-application-world
+  ;; ADR 0056: a case wrapping a sealed all-scalar record now crosses a
+  ;; `typed-cap-call` boundary too (ADR 0055 found this blocked at the `wac
+  ;; plug` layer with `type not valid to be used as import`; `wac` 0.10.0
+  ;; fixes it -- bytecodealliance/wac#205). `demo/state-outcome` is a
+  ;; structural slice of `state-v1`'s own `result` shape: `found: entry`
+  ;; (`entry` a scalar-only record here, narrower than `state-v1`'s real
+  ;; keyword/string-bearing `entry`) / `missing: bool`.
+  (let [descriptor [:ref :demo/state-outcome]
+        schemas {:demo/state-entry [:record :demo/state-entry [[:key :i64] [:value :i64]]]
+                 :demo/state-outcome [:variant :demo/state-outcome
+                                      [[:found [:ref :demo/state-entry]] [:missing :bool]]]}
+        kir {:format :kotoba.kir/v4 :exports ['invoke] :schemas schemas
+             :functions [{:name 'invoke :params ['request]
+                          :param-types [descriptor] :result descriptor
+                          :body (list 'typed-cap-call 8 descriptor descriptor 'request)}]}
+        world (wit/emit kir)
+        application (artifact/package
+                     (component-core/emit kir :wasm32-wasi-kotoba-v1) kir world)
+        provider (composition/package-variant-identity-provider
+                  :state/transact descriptor schemas)
+        closed (composition/compose-closed application [provider])]
+    (is (= :variant-capability-call (:canonical-lowering application)))
+    (is (= :wasm-component-provider/v1 (:format provider)))
+    (is (= :wasm-component-closed/v1 (:format closed)))
+    (is (= [{:capability :state/transact :descriptor descriptor}]
+           (:providers closed)))
+    (is (= [0 97 115 109 13 0 1 0]
+           (mapv #(bit-and (int %) 0xff) (take 8 (:bytes closed)))))))
+
+(deftest variant-with-string-keyword-record-case-boundary-remains-sealed
+  ;; A case wrapping a sealed *string/keyword-bearing* record (the ADR 0053
+  ;; shape) remains fail-closed for a capability-call boundary -- ADR 0056
+  ;; only widened admission to the all-scalar record case ADR 0052 already
+  ;; proved for identity-export; string/keyword data crossing a
+  ;; capability-call boundary at all is a separate, still-unattempted gap
+  ;; (see ADR 0056's 'Remaining gaps'), not something the `wac` fix touches.
+  ;; `component-core/emit` rejects it at admission (before any encoding is
+  ;; attempted), and `package-variant-identity-provider` independently
+  ;; rejects it too, so the boundary fails closed at both layers rather than
+  ;; surfacing only as a downstream `wac` encoding error.
   (let [descriptor [:ref :demo/cap-outcome]
-        schemas {:demo/cap-tally [:record :demo/cap-tally [[:count :i64]]]
+        schemas {:demo/cap-entry [:record :demo/cap-entry
+                                  [[:key :keyword] [:value :string] [:version :i64]]]
                  :demo/cap-outcome [:variant :demo/cap-outcome
-                                    [[:tally [:ref :demo/cap-tally]] [:empty :bool]]]}
+                                    [[:found [:ref :demo/cap-entry]] [:missing :bool]]]}
         kir {:format :kotoba.kir/v4 :exports ['invoke] :schemas schemas
              :functions [{:name 'invoke :params ['request]
                           :param-types [descriptor] :result descriptor
                           :body (list 'typed-cap-call 8 descriptor descriptor 'request)}]}]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
                           (component-core/emit kir :wasm32-wasi-kotoba-v1)))
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"scalar-only cases"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"scalar or sealed all-scalar record cases"
                           (composition/package-variant-identity-provider
                            :state/transact descriptor schemas)))))

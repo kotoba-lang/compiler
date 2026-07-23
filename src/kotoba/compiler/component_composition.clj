@@ -11,7 +11,21 @@
 (defn- reject [message data]
   (throw (ex-info message (assoc data :phase :component-composition))))
 
-(def wac-version "0.9.0")
+(def wac-version
+  "ADR 0056 bumps this from 0.9.0 (ADR 0047-0055's pin) to 0.10.1: 0.9.0
+  fails encoding any capability-crossing variant whose case wraps a record
+  with `type not valid to be used as import` (ADR 0055's own reproduced
+  finding); 0.10.0 fixes exactly that failure mode
+  (bytecodealliance/wac#205, 'Alias `use`'d types during composition
+  instead of re-encoding them locally' -- the type-aliasing fix a `use`'d
+  type crossing an import/export boundary needs), independently confirmed
+  here against ADR 0055's own reproduction before this pin moved; 0.10.1 is
+  the latest patch release on top of it (bytecodealliance/wac#207, only a
+  release-process fix, no further behavior change relevant here). Narrow,
+  deliberate bump made only because it directly and verifiably closes a
+  reproduced defect this codebase hit -- not a routine or blind toolchain
+  refresh."
+  "0.10.1")
 
 (defn- assert-wac-version! []
   (let [actual (.trim ^String (wasm-tools/run-command! ["wac" "--version"]))]
@@ -159,39 +173,95 @@
 (def ^:private variant-case-wit-type
   {:i64 "s64" :f32 "f32" :f64 "f64" :bool "bool"})
 
+(defn- variant-record-case-schema
+  "Schema of `payload-type` when it is `[:ref name]` to a sealed record whose
+  fields are each a bare Canonical scalar (the ADR 0052 shape) -- the
+  provider-side admission twin of
+  `kotoba.compiler.component-core/sealed-scalar-record` (private there;
+  duplicated here narrowly rather than reaching across the namespace
+  boundary, matching this file's own established precedent --
+  `record-provider-wat` already duplicates `record-capability-wat`'s store
+  shape locally for the same reason)."
+  [payload-type schemas]
+  (when (and (vector? payload-type) (= :ref (first payload-type)))
+    (let [schema (get schemas (second payload-type))]
+      (when (and (vector? schema) (= :record (first schema))
+                 (= (second payload-type) (second schema))
+                 (seq (nth schema 2))
+                 (every? (comp variant-case-wit-type second) (nth schema 2)))
+        schema))))
+
+(defn- variant-referenced-record-schemas
+  "Every distinct record schema `cases` reference, in stable sorted order (so
+  the generated WIT text is deterministic)."
+  [cases schemas]
+  (->> cases
+       (keep (fn [[_ payload-type]] (variant-record-case-schema payload-type schemas)))
+       distinct
+       (sort-by (comp str second))))
+
+(defn- variant-case-payload-wit
+  "WIT type text for one variant case's payload: a bare scalar's WIT spelling,
+  or a sealed all-scalar record case's own WIT type name."
+  [payload-type schemas]
+  (or (get variant-case-wit-type payload-type)
+      (when-let [schema (variant-record-case-schema payload-type schemas)]
+        (wit-name (second schema)))
+      (reject "provider variant case is not scalar or a sealed all-scalar record"
+              {:payload-type payload-type})))
+
 (defn- variant-wit
-  "Deterministic WIT package/world text for one sealed variant provider
-  whose every case's payload is a bare Canonical scalar (ADR 0055) -- the
-  provider-side counterpart to `record-wit`. Deliberately does not admit a
-  case wrapping a record (unlike the identity-export variant path, ADR
-  0052/0054): a record-referencing-variant provider built this same way was
-  tried against `wac plug` during this ADR's own implementation and fails
-  encoding with `type not valid to be used as import` for every shape tried,
+  "Deterministic WIT package/world text for one sealed variant provider whose
+  every case's payload is a bare Canonical scalar (ADR 0055) or a sealed
+  all-scalar record (ADR 0056, the ADR 0052 record shape) -- the
+  provider-side counterpart to `record-wit`. ADR 0055 deliberately did not
+  admit a case wrapping a record (unlike the identity-export variant path,
+  ADR 0052/0054): a record-referencing-variant provider built this same way
+  was tried against `wac plug` (pinned 0.9.0 at the time) and failed encoding
+  with `type not valid to be used as import` for every shape tried,
   independent of case count, case mix, and `types`-interface declaration
-  order -- see `kotoba.compiler.component-core/scalar-only-variant-case?`'s
-  docstring for the full reproduction. Every case's `types`-interface
-  footprint here is therefore exactly one exported type (the variant
-  itself), matching `provider-wit`'s own single-scalar-type shape and
-  `record-wit`'s own single-record-type shape, both already proven to
-  `wac plug` correctly."
+  order. ADR 0056 confirmed `wac` 0.10.0 (bytecodealliance/wac#205) fixes
+  exactly that failure mode and widened this function to declare the
+  referenced record type(s) inside the same `interface types {...}` block as
+  the variant, mirroring `record-wit`'s own record-declaration style, rather
+  than the single-type-only footprint ADR 0055 scoped down to. A case
+  wrapping a sealed *string/keyword-bearing* record (ADR 0053's shape)
+  remains unadmitted here -- string/keyword data crossing a capability-call
+  boundary at all is a separate, still-unattempted gap this ADR does not
+  close (see ADR 0056's own 'Remaining gaps')."
   [entry descriptor schemas]
   (let [schema (get schemas (second descriptor))
         [_ identity cases] schema
         variant-name (wit-name identity)
-        interface (:interface entry)]
+        interface (:interface entry)
+        record-schemas (variant-referenced-record-schemas cases schemas)]
     (when-not (and (= :ref (first descriptor))
                    (= :variant (first schema))
                    (= identity (second descriptor))
                    (seq cases)
-                   (every? (comp variant-case-wit-type second) cases))
-      (reject "provider variant requires scalar-only cases"
+                   (every? (fn [[_ payload-type]]
+                             (or (contains? variant-case-wit-type payload-type)
+                                 (variant-record-case-schema payload-type schemas)))
+                           cases))
+      (reject "provider variant requires scalar or sealed all-scalar record cases"
               {:descriptor descriptor :schema schema}))
     (str "package kotoba:application@1.0.0;\n\n"
          "interface types {\n"
+         (apply str
+                (map (fn [[_ record-identity fields]]
+                       (str "  record " (wit-name record-identity) " {\n"
+                            (apply str
+                                   (map (fn [[field type]]
+                                          (str "    " (wit-name field) ": "
+                                               (get variant-case-wit-type type) ",\n"))
+                                        fields))
+                            "  }\n"))
+                     record-schemas))
          "  variant " variant-name " {\n"
          (apply str
                 (map (fn [[tag payload-type]]
-                       (str "    " (wit-name tag) "(" (get variant-case-wit-type payload-type) "),\n"))
+                       (str "    " (wit-name tag) "("
+                            (variant-case-payload-wit payload-type schemas) "),\n"))
                      cases))
          "  }\n}\n\n"
          "interface " interface " {\n"
@@ -201,9 +271,10 @@
          "world " interface "-provider {\n  export " interface ";\n}\n")))
 
 (defn package-variant-identity-provider
-  "Build a wiring-only provider for one sealed scalar-only-case variant
-  identity (ADR 0055), the variant-crossing counterpart to
-  `package-record-identity-provider`. The provider core module itself is
+  "Build a wiring-only provider for one sealed variant identity whose cases
+  are each a bare scalar or a sealed all-scalar record (ADR 0055/0056), the
+  variant-crossing counterpart to `package-record-identity-provider`. The
+  provider core module itself is
   `kotoba.compiler.component-core/variant-capability-provider-wat`, which
   reuses that namespace's own `variant-case-chain` (disc range check plus
   in-branch bool validation and store) rather than duplicating it here."

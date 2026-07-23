@@ -29,7 +29,7 @@
     (is (= :async-func (get-in contract [:spec-baseline :wasi :profiles :async :function-mode])))
     (is (= :legacy-explicit
            (get-in contract [:spec-baseline :wasi :compatibility 0 :status])))
-    (is (= {:wasm-tools "1.243.0" :wac-cli "0.9.0"}
+    (is (= {:wasm-tools "1.243.0" :wac-cli "0.10.1"}
            (get-in contract [:spec-baseline :wasi :toolchain])))
     (is (= :reject-v1 (get-in contract [:types :recursive-schema :disposition])))
     (is (= :not-required (get-in contract [:limits :wit-bounded-list-feature])))))
