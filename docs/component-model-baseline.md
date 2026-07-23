@@ -165,6 +165,39 @@ record, exactly the shape found blocked); string/keyword leaves crossing
 any capability boundary, different request/result variant identities, and
 every production provider's semantics all remain closed; no capability
 kit's `:wasm-aot` qualification changed.
+The ADR 0055 `wac plug` limitation is now resolved: it was a real,
+independently reproduced `wac` defect (plug-time re-encoding of a `use`'d
+type that references another `use`'d type as a fresh local definition
+rather than aliasing the imported instance's own export, `type not valid to
+be used as import`), not a bug in Kotoba's own WIT/Canonical ABI generation
+(confirmed by review -- the WAT emitters were already case-kind agnostic,
+zero lines changed) and not a permanent tooling ceiling. `bytecodealliance/
+wac` v0.10.0 (PR #205, "Alias `use`'d types during composition instead of
+re-encoding them locally") fixes exactly this failure mode; ADR 0056
+independently confirmed the fix against ADR 0055's own exact failing
+fixture before touching any source, then narrowly bumped the pinned
+`wac-cli` from 0.9.0 to 0.10.1 (checking blast radius first: no concurrent
+PR/branch touches Component Model, `wac` is invoked nowhere else in this
+codebase, and CI installs its own fresh ephemeral `wac-cli` per run). A
+sealed variant whose every case is a bare Canonical scalar *or* a sealed
+all-scalar record (the ADR 0052 shape) now crosses a real `typed-cap-call`
+capability boundary (ADR 0056), widening ADR 0055's scalar-only admission by
+exactly the record-case kind the `wac plug` limitation had blocked, with a
+real composed application-plus-provider component and real Wasmtime 42.0.1
+execution proven on `demo/state-outcome` (`found: entry` / `missing: bool`,
+`entry` a structural stand-in for `state-v1`'s own `entry` with scalar-only
+fields rather than its real keyword/string fields) covering the full i64
+range and both variant cases. Still deliberately narrower than the
+identity-export path: a case wrapping a sealed *string/keyword-bearing*
+record (the ADR 0053 shape) remains fail-closed for a capability-call
+boundary, because string/keyword data crossing a capability-call boundary at
+all is a separate, still-unattempted gap the `wac` fix does not touch (no
+case kind, and no plain record `typed-cap-call` either, has ever exercised
+it). `state-v1`'s actual request/result types (whose real `entry`/`error`
+records are string/keyword-bearing) remain unclosed by this ADR for that
+reason; a real production `state` provider also remains unattempted (every
+provider in this ADR chain, like every prior one, is a wiring-only identity
+fixture); no capability kit's `:wasm-aot` qualification changed.
 
 ## Official sources
 

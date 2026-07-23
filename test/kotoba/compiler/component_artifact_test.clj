@@ -299,7 +299,7 @@
       (is (= :variant-identity (:canonical-lowering artifact)))
       (is (= :wasm-component/v1 (:format artifact))))))
 
-(deftest variant-capability-call-with-scalar-cases-is-admitted
+(deftest variant-capability-call-with-scalar-or-record-cases-is-admitted
   ;; ADR 0055: a direct `typed-cap-call` may now use one sealed variant
   ;; (bare-scalar cases only) as its same-identity request/result, the first
   ;; slice to cross a *structured* (multi-case) type through a capability
@@ -323,14 +323,15 @@
       (is (= :wasm-component/v1 (:format artifact)))
       (is (= [0 97 115 109 13 0 1 0]
              (mapv #(bit-and (int %) 0xff) (take 8 (:bytes artifact))))))
-    ;; A case wrapping a sealed all-scalar record remains fail-closed for a
-    ;; capability-call boundary in this slice -- unlike the identity-export
-    ;; path (ADR 0052/0054), which already admits it -- because `wac plug`
-    ;; (pinned 0.9.0) fails encoding a record-referencing-variant provider
-    ;; that crosses a capability boundary (`type not valid to be used as
-    ;; import`), reproduced independent of case count/mix/declaration order.
-    ;; See `component-core/scalar-only-variant-case?`'s docstring and ADR
-    ;; 0055 for the full reproduction.
+    ;; ADR 0056: a case wrapping a sealed all-scalar record (the ADR 0052
+    ;; shape) is now admitted for a capability-call boundary too -- ADR 0055
+    ;; found this blocked at the `wac plug` layer (`type not valid to be
+    ;; used as import`); `wac` 0.10.0 fixes exactly that failure mode
+    ;; (bytecodealliance/wac#205). `demo/cap-outcome` is the same fixture ADR
+    ;; 0055 recorded as blocked, now proven admitted at the KIR-admission
+    ;; layer this test exercises (`component_composition_test.clj` proves
+    ;; the same shape through a real composed component and Wasmtime
+    ;; execution).
     (let [record-case-schemas
           {:demo/cap-tally [:record :demo/cap-tally [[:count :i64]]]
            :demo/cap-outcome [:variant :demo/cap-outcome
@@ -342,9 +343,32 @@
                               (assoc-in [:functions 0 :body]
                                         (list 'typed-cap-call 8 [:ref :demo/cap-outcome]
                                               [:ref :demo/cap-outcome] 'request)))]
+      (is (true? (component/assert-scalar-slice! record-case-kir (wit/emit record-case-kir))))
+      (let [record-case-artifact (component/package
+                                  (component-core/emit record-case-kir :wasm32-wasi-kotoba-v1)
+                                  record-case-kir (wit/emit record-case-kir))]
+        (is (= :variant-capability-call (:canonical-lowering record-case-artifact)))
+        (is (= :wasm-component/v1 (:format record-case-artifact)))))
+    ;; A case wrapping a sealed *string/keyword-bearing* record (the ADR
+    ;; 0053 shape) remains fail-closed -- ADR 0056 only widened admission to
+    ;; the all-scalar record case; string/keyword data crossing a
+    ;; capability-call boundary at all is a separate, still-unattempted gap
+    ;; (see ADR 0056's own 'Remaining gaps').
+    (let [string-case-schemas
+          {:demo/cap-entry [:record :demo/cap-entry
+                            [[:key :keyword] [:value :string] [:version :i64]]]
+           :demo/cap-string-outcome [:variant :demo/cap-string-outcome
+                                     [[:found [:ref :demo/cap-entry]] [:missing :bool]]]}
+          string-case-kir (-> kir
+                              (assoc :schemas string-case-schemas)
+                              (assoc-in [:functions 0 :param-types] [[:ref :demo/cap-string-outcome]])
+                              (assoc-in [:functions 0 :result] [:ref :demo/cap-string-outcome])
+                              (assoc-in [:functions 0 :body]
+                                        (list 'typed-cap-call 8 [:ref :demo/cap-string-outcome]
+                                              [:ref :demo/cap-string-outcome] 'request)))]
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
-                            (component/assert-scalar-slice! record-case-kir
-                                                            (wit/emit record-case-kir)))))
+                            (component/assert-scalar-slice! string-case-kir
+                                                            (wit/emit string-case-kir)))))
     ;; Different request/result variant identities remain fail-closed,
     ;; matching `record-capability-call`'s own same-identity discipline (ADR
     ;; 0048).

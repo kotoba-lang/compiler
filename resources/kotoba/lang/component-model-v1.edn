@@ -24,7 +24,7 @@
                           :status :legacy-explicit}]
          :minimum-wasmtime-major 43
          :toolchain {:wasm-tools "1.243.0"
-                     :wac-cli "0.9.0"}}}
+                     :wac-cli "0.10.1"}}}
  :types
  {:i64 {:wit :s64}
   :f32 {:wit :f32}

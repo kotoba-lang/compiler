@@ -307,51 +307,44 @@
                request-schema result-schema capability)
       {:capability capability :request request-type :result result})))
 
-(defn- scalar-only-variant-case?
-  "True when `payload-type` is a shape this ADR 0055 slice admits as one
-  variant case's payload *when that variant is used as a `typed-cap-call`
-  request/result*: a bare Canonical scalar (`i64`/`f32`/`f64`/`bool`) only.
-  Deliberately narrower than `record-or-scalar-variant-case?` (ADR 0054),
-  which also admits a sealed all-scalar record case (ADR 0052) or a sealed
-  string/keyword-bearing record case (ADR 0053) for an *identity-export*
-  variant. Both record-case kinds were tried for a `typed-cap-call`-crossing
-  variant during this ADR's own implementation and rejected for a concrete,
-  reproduced reason, not merely 'not yet tested': `wac plug` (pinned 0.9.0),
-  composing an application component (built from this namespace's own
-  already-proven WIT/WAT pipeline) with a provider component exporting the
-  identical WIT-encoded variant-wrapping-record shape, fails encoding with
-  `type not valid to be used as import` for *every* record-case variant
-  tried (a single record-only case, three cases mixing scalar and record,
-  and a one-field record case), reproduced independent of case count, case
-  mix, and the `types` interface's internal declaration order (a
-  hand-written provider WIT/WAT declaring the variant before its record
-  dependency, matching the application side's own alphabetical schema
-  ordering, fails identically). Each half validates as a well-formed
-  component on its own (`wasm-tools component new --reject-legacy-names`
-  succeeds for both the application and the provider individually); the
-  failure is specific to `wac`'s own plug-time re-encoding of a `types`
-  interface that exports two types where one (the variant) references the
-  other (the record) and that interface crosses a capability import/export
-  boundary. This is recorded as a currently-blocked path in 'Remaining
-  gaps', not attempted further in this ADR -- see ADR 0055 for the full
-  reproduction. Scoping this first variant-crossing slice to bare scalar
-  cases keeps every flat position a plain scalar core value
-  (`i64`/`f32`/`f64`/`i32`) and the `types` interface to exactly one
-  exported type (the variant itself, no record dependency), which is
-  exactly the shape ADR 0046's own scalar `typed-cap-call` slice and ADR
-  0048's own record `typed-cap-call` slice each already proved crosses
-  `wac plug` correctly."
-  [payload-type]
-  (contains? #{:i64 :f32 :f64 :bool} payload-type))
+(defn- variant-capability-case?
+  "True when `payload-type` is a shape ADR 0056 admits as one variant case's
+  payload *when that variant is used as a `typed-cap-call` request/result*:
+  a bare Canonical scalar (`i64`/`f32`/`f64`/`bool`, ADR 0055's original
+  scope) or a sealed all-scalar record (the ADR 0052 shape, via
+  `sealed-scalar-record`). Widens ADR 0055's own `scalar-only-variant-case?`
+  (renamed here) by exactly the record-case kind ADR 0055 found blocked at
+  the `wac plug` layer and recorded as a currently-blocked path, not a
+  permanent one: `wac plug` (pinned 0.9.0 during ADR 0055) failed encoding
+  any record-referencing-variant crossing a capability boundary with `type
+  not valid to be used as import`, reproduced across four independent
+  variations; `wac` 0.10.0 (bytecodealliance/wac#205, 'Alias `use`'d types
+  during composition instead of re-encoding them locally') fixes exactly
+  this failure mode -- confirmed here by an independent reproduction of ADR
+  0055's own failing shape against both the pinned 0.9.0 (fails identically)
+  and 0.10.1 (composes, validates, and round-trips through real Wasmtime
+  execution) before this predicate was widened. Still deliberately narrower
+  than `record-or-scalar-variant-case?` (ADR 0054), which also admits a
+  sealed string/keyword-bearing record case (ADR 0053) for an
+  *identity-export* variant: string/keyword data crossing a capability-call
+  boundary at all is a separate, unattempted gap (no case kind has ever
+  exercised it, not even a plain record `typed-cap-call`, ADR 0048) and is
+  not what the `wac plug` fix resolves -- widening to that case kind remains
+  future work, not something this ADR's own reproduction touched."
+  [payload-type schemas]
+  (or (contains? #{:i64 :f32 :f64 :bool} payload-type)
+      (boolean (sealed-scalar-record payload-type schemas))))
 
-(defn- scalar-variant-capability-schema
+(defn- variant-capability-schema
   "Schema of `descriptor` when it is a sealed variant whose every case's
-  payload independently satisfies `scalar-only-variant-case?`. Structurally
-  the same admission shape as `variant-case-schema` (ADR 0052/0054), narrowed
-  to bare scalar cases only for the reason `scalar-only-variant-case?`
-  documents. Kept as a separate function (not a parameterization of
-  `variant-case-schema`) so the identity-export path's own admitted case set
-  never silently narrows if this one changes, and vice versa."
+  payload independently satisfies `variant-capability-case?`. Structurally
+  the same admission shape as `variant-case-schema` (ADR 0052/0054), renamed
+  from ADR 0055's own `scalar-variant-capability-schema` now that the case
+  set is no longer scalar-only. Kept as a separate function (not a
+  parameterization of `variant-case-schema`) so the identity-export path's
+  own admitted case set never silently narrows if this one changes, and vice
+  versa -- `variant-case-schema` still additionally admits a string/keyword-
+  bearing record case, which this one does not."
   [descriptor schemas]
   (let [schema (cond
                  (and (vector? descriptor) (= :ref (first descriptor)))
@@ -361,13 +354,13 @@
                (= :variant (first schema))
                (seq (nth schema 2))
                (= schema (get schemas (second schema)))
-               (every? (fn [[_ payload-type]] (scalar-only-variant-case? payload-type))
+               (every? (fn [[_ payload-type]] (variant-capability-case? payload-type schemas))
                        (nth schema 2)))
       schema)))
 
 (defn- variant-capability-call
   "Admission for a direct `typed-cap-call` whose request and result are one
-  sealed variant (`scalar-variant-capability-schema`), the same request/
+  sealed variant (`variant-capability-schema`), the same request/
   result identity, matching `record-capability-call`'s own same-type
   discipline (ADR 0048) rather than ADR 0046's scalar slice, which allows
   request and result to differ -- widening a *structured* request/result to
@@ -379,8 +372,8 @@
         request-type (first param-types)
         [_ id body-request-type body-result-type request] (when (seq? body) body)
         capability (some #(when (= id (:id %)) %) (:capabilities component-wit/contract))
-        request-schema (scalar-variant-capability-schema request-type schemas)
-        result-schema (scalar-variant-capability-schema result schemas)]
+        request-schema (variant-capability-schema request-type schemas)
+        result-schema (variant-capability-schema result schemas)]
     (when (and (= 1 (count params))
                (= 1 (count param-types))
                (seq? body)
@@ -1228,7 +1221,11 @@
 (defn- variant-capability-wat
   "Application-side standard32 core module for a direct `typed-cap-call`
   whose request/result is one sealed variant admitted by
-  `scalar-variant-capability-schema`. The joined component-flat signature
+  `variant-capability-schema`. Unchanged since ADR 0055 -- widening the
+  admitted case set to include a sealed all-scalar record (ADR 0056)
+  required no change here, because this module only ever forwards the
+  variant's already-flattened joined core values (`canonical/layout`'s
+  `:flat`), which is already case-kind agnostic. The joined component-flat signature
   (`$disc` plus one core param per joined payload position, exactly
   `variant-wat`'s own signature -- `canonical/layout`'s `:flat` on the
   variant descriptor) is unchanged from the identity-export case; the only
@@ -1296,7 +1293,7 @@
 
 (defn variant-capability-provider-wat
   "Wiring-only provider core module for one sealed variant admitted by
-  `scalar-variant-capability-schema` (ADR 0055) -- public so
+  `variant-capability-schema` (ADR 0055/0056) -- public so
   `kotoba.compiler.component-composition` can build a provider artifact for
   it (mirroring `kotoba.compiler.component-composition/record-provider-wat`,
   which duplicates `record-capability-wat`'s own store shape locally rather
@@ -1308,9 +1305,11 @@
   `component-wit/contract`'s own `:capabilities` entries and
   `component-composition`'s local `capability` lookup already use).
   Reuses `variant-wat`'s exact case-chain (disc range check, then in-branch
-  bool validation and store for the active case only -- string/keyword
-  leaves cannot appear here because `scalar-variant-capability-schema`
-  excludes them) unchanged, the only difference being that the result
+  bool validation and store for the active case, including a sealed
+  all-scalar record's own field stores at the correct union offset since
+  ADR 0056 widened admission -- string/keyword leaves still cannot appear
+  here because `variant-capability-schema` excludes them) unchanged, the
+  only difference being that the result
   pointer is the fixed minimal address `record-provider-wat`'s own
   precedent already uses (`i32.const 8`, no dynamic allocation) rather than
   a bump-allocated one, since this provider's own memory is never grown
