@@ -473,12 +473,17 @@
         (is (= :different-variant-capability-call
                (:canonical-lowering record-different-identity-artifact)))
         (is (= :wasm-component/v1 (:format record-different-identity-artifact)))))
-    ;; A different-identity crossing where one side's case wraps a sealed
-    ;; *string/keyword-bearing* record (the ADR 0053/0057 shape) remains
-    ;; fail-closed -- `asymmetric-variant-capability-schema` is deliberately
-    ;; narrower than `variant-capability-schema` (the same-identity path),
-    ;; not yet combining the different-identity and string/keyword-crossing
-    ;; dimensions in one increment.
+    ;; ADR 0059: a different-identity crossing where one side's case wraps a
+    ;; sealed *string/keyword-bearing* record (the ADR 0053/0057 shape) is
+    ;; now admitted too -- ADR 0058 deliberately left this combination
+    ;; unattempted (`asymmetric-variant-capability-schema` was narrower than
+    ;; `variant-capability-schema`, the same-identity path); ADR 0059 closes
+    ;; exactly that gap. `demo/cap-string-outcome` (`found: cap-entry`/
+    ;; `missing: bool`, `cap-entry` = `state-v1`'s own real `entry` shape)
+    ;; crossing to `demo/other-outcome` (bare bool) is the smallest such
+    ;; shape; `component_composition_test.clj` proves this (and
+    ;; `state-v1`'s own literal shape) through a real composed component
+    ;; and Wasmtime execution.
     (let [string-other-schemas
           {:demo/cap-entry [:record :demo/cap-entry
                             [[:key :keyword] [:value :string] [:version :i64]]]
@@ -493,9 +498,15 @@
              (assoc-in [:functions 0 :body]
                        (list 'typed-cap-call 8 [:ref :demo/cap-string-outcome]
                              [:ref :demo/other-outcome] 'request)))]
-      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
-                            (component/assert-scalar-slice! string-different-identity-kir
-                                                            (wit/emit string-different-identity-kir)))))
+      (is (true? (component/assert-scalar-slice! string-different-identity-kir
+                                                  (wit/emit string-different-identity-kir))))
+      (let [string-different-identity-artifact
+            (component/package
+             (component-core/emit string-different-identity-kir :wasm32-wasi-kotoba-v1)
+             string-different-identity-kir (wit/emit string-different-identity-kir))]
+        (is (= :different-variant-capability-call
+               (:canonical-lowering string-different-identity-artifact)))
+        (is (= :wasm-component/v1 (:format string-different-identity-artifact)))))
     ;; A different-identity crossing where one side's case wraps an ADR 0051
     ;; one-level-nested record remains fail-closed too, for the same reason
     ;; it remains fail-closed on the same-identity path.
