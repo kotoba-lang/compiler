@@ -32,9 +32,9 @@
 
 (deftest doseq-validates-its-bounded-binding-shape
   (doseq [source ["(defn main [] (doseq [x] x))"
-                  "(defn main [] (doseq [x [1] y [2]] (+ x y)))"
                   "(defn main [] (doseq [:x [1]] 0))"
-                  "(defn main [] (doseq [qualified/x [1]] 0))"]]
+                  "(defn main [] (doseq [qualified/x [1]] 0))"
+                  "(defn main [] (doseq [x [1] y [2] z [3]] (+ x y z)))"]]
     (testing source
       (is (some? (rejection-message source))))))
 
@@ -88,3 +88,32 @@
                 "(defn main []
                    (doseq [x [1 2 3] :while (< x 3)]
                      (if (= x 2) (quot 1 0) 0)))"))))
+
+(deftest doseq-supports-two-bounded-cartesian-bindings
+  (is (thrown? clojure.lang.ExceptionInfo
+               (oracle
+                "(defn main []
+                   (doseq [x [1 2] y [1 2 3]]
+                     (if (= x 2)
+                       (if (= y 3) (quot 1 0) 0)
+                       0)))")))
+  (is (thrown? clojure.lang.ExceptionInfo
+               (oracle
+                "(defn main []
+                   (doseq [x [1 2]
+                           :let [ys [x]]
+                           y ys]
+                     (if (= x 2)
+                       (if (= y 2) (quot 1 0) 0)
+                       0)))")))
+  (is (= 0
+         (oracle
+          "(defn main []
+             (doseq [x [1 2] y [1 2 3] :while (< y 2)]
+               (if (= y 2) (quot 1 0) 0)))")))
+  (is (thrown? clojure.lang.ExceptionInfo
+               (oracle
+                "(defn main []
+                   (doseq [x [1]
+                           y [1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17]]
+                     0))"))))
