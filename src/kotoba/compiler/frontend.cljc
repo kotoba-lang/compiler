@@ -483,7 +483,7 @@
          :schemas schemas
          :schema-identities (when schemas (schema/identities schemas))}))))
 
-(declare desugar-expr desugar-do form-free-symbols replace-recur)
+(declare desugar-expr desugar-do thread-form form-free-symbols replace-recur)
 
 ;; ADR-2607150000: bound (via `binding`) around each top-level defn's
 ;; desugaring pass in `analyze`, to an atom `loop`'s desugar-expr case
@@ -594,14 +594,16 @@
                         (lower remaining))))))]
     (lower args)))
 
-(defn- desugar-cond-thread [args form]
+(defn- desugar-cond-thread [args form last?]
   (when (or (empty? args) (odd? (count (rest args))))
-    (reject! "cond-> requires an initial value followed by test/form pairs" form))
+    (reject! (str (if last? "cond->>" "cond->")
+                  " requires an initial value followed by test/form pairs") form))
   (reduce (fn [value [test step]]
             (when-not (and (seq? step) (symbol? (first step)))
-              (reject! "cond-> update must be a non-empty call form" step))
+              (reject! (str (if last? "cond->>" "cond->")
+                            " update must be a non-empty call form") step))
             (let [tmp (gensym "cond-thread__")
-                  threaded (list* (first step) tmp (rest step))]
+                  threaded (thread-form tmp step last?)]
               (list 'let [tmp value]
                     (list 'if (desugar-expr test)
                           (desugar-expr threaded)
@@ -622,6 +624,14 @@
   (when (empty? args)
     (reject! (if last? "->> requires an initial value" "-> requires an initial value") form))
   (desugar-expr (reduce #(thread-form %1 %2 last?) (first args) (rest args))))
+
+(defn- desugar-as-thread [args form]
+  (let [[initial name & steps] args]
+    (when-not (and (<= 2 (count args)) (symbol? name) (nil? (namespace name)))
+      (reject! "as-> requires an initial value, an unqualified binding symbol, and optional forms" form))
+    (desugar-expr
+     (reduce (fn [value step] (list 'let [name value] step))
+             initial steps))))
 
 (defn- desugar-some-thread [args form last?]
   (when (empty? args)
@@ -1053,15 +1063,31 @@
         or (desugar-or args)
         -> (desugar-thread args form false)
         ->> (desugar-thread args form true)
+        as-> (desugar-as-thread args form)
         some-> (desugar-some-thread args form false)
         some->> (desugar-some-thread args form true)
         cond (desugar-cond args form)
-        cond-> (desugar-cond-thread args form)
+        cond-> (desugar-cond-thread args form false)
+        cond->> (desugar-cond-thread args form true)
         case (desugar-case args form)
         if-let (desugar-binding-if args form false)
         when-let (desugar-binding-if args form true)
         if-some (desugar-binding-some args form false)
         when-some (desugar-binding-some args form true)
+        if-not (do (when-not (<= 2 (count args) 3)
+                     (reject! "if-not requires then and optional else expressions" form))
+                   (let [[test then else] args]
+                     (list 'if (list '= (desugar-expr test) 0)
+                           (desugar-expr then)
+                           (if (= 3 (count args)) (desugar-expr else) 0))))
+        when-not (do (when (empty? args)
+                       (reject! "when-not requires a test expression" form))
+                     (let [[test & body] args
+                           then (cond
+                                  (empty? body) 0
+                                  (= 1 (count body)) (desugar-expr (first body))
+                                  :else (list* 'do (mapv desugar-expr body)))]
+                       (list 'if (list '= (desugar-expr test) 0) then 0)))
         when (do (when (empty? args)
                    (reject! "when requires a test expression" form))
                  (let [[test & body] args

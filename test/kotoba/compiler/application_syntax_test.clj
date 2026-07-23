@@ -62,6 +62,24 @@
   (is (thrown? clojure.lang.ExceptionInfo
                (compiler/check-source "(defn main [] (->))"))))
 
+(deftest negative-conditionals-and-additional-threading-sugar
+  (is (= 7 (oracle "(defn main [] (if-not 0 7 (quot 1 0)))")))
+  (is (= 0 (oracle "(defn main [] (if-not 1 (quot 1 0)))")))
+  (is (= 9 (oracle "(defn main [] (when-not 0 (+ 1 2) (+ 4 5)))")))
+  (is (= 0 (oracle "(defn main [] (when-not 1 (quot 1 0)))")))
+  (is (= 7 (oracle "(defn sub [a b] (- a b))
+                    (defn main [] (cond->> 3 true (sub 10) false (quot 0)))")))
+  (is (= 42 (oracle "(defn main [] (as-> 5 x (+ x 2) (* x 6)))")))
+  (is (= 5 (oracle "(defn main [] (as-> 5 x))")))
+  (doseq [bad ["(defn main [] (if-not 1))"
+               "(defn main [] (if-not 1 2 3 4))"
+               "(defn main [] (when-not))"
+               "(defn main [] (cond->> 1 true))"
+               "(defn main [] (cond->> 1 true :not-a-call))"
+               "(defn main [] (as-> 1))"
+               "(defn main [] (as-> 1 :x (+ x 1)))"]]
+    (is (thrown? clojure.lang.ExceptionInfo (compiler/check-source bad)))))
+
 (deftest variadic-comparisons-short-circuit-through-binary-core
   (let [source "(defn main []
                   (+ (=) (= 1) (= 2 2 2)
@@ -73,7 +91,7 @@
         kir (compile-kir source)
         printed (pr-str kir)]
     (is (= 8 (:oracle-value kir)))
-    (doseq [surface ["(not= " "(-> " "(->> " "(some-> " "(some->> "
+    (doseq [surface ["(not= " "(-> " "(->> " "(as-> " "(some-> " "(some->> "
                      "(case " "(if-let " "(when-let " "(if-some " "(when-some "]]
       (is (not (.contains printed surface)))))
   (testing "ordered comparison still rejects zero operands"
