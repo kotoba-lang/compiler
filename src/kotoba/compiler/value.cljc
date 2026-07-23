@@ -4,6 +4,7 @@
 (def string-literal-byte-limit 4096)
 (def string-value-byte-limit 65536)
 (def keyword-value-byte-limit 512)
+(def symbol-value-byte-limit 512)
 (def map-entry-limit 128)
 (def vector-literal-item-limit 128)
 (def vector-item-limit 16384)
@@ -247,6 +248,17 @@
                       {:phase :value :bytes bytes :limit limit})))
     value))
 
+(defn bounded-symbol!
+  [value limit]
+  (when-not (symbol? value)
+    (throw (ex-info "value is not a symbol" {:phase :value :value value})))
+  (let [text (str value)
+        bytes (utf8-byte-count! text)]
+    (when (> bytes limit)
+      (throw (ex-info "symbol exceeds UTF-8 byte limit"
+                      {:phase :value :bytes bytes :limit limit})))
+    value))
+
 ;; JVM `clojure.string/lower-case` (and bare `.toLowerCase()`) fold through
 ;; the platform DEFAULT locale, which is not deterministic across hosts --
 ;; the classic case is Turkish (`tr`/`tr-TR`), where uppercase `I` folds to
@@ -476,7 +488,7 @@
       (walk value 0))))
 
 (def ^:private leaf-value-types
-  #{:i64 :f32 :f64 :string :keyword :map :bool :option-i64 :result-i64
+  #{:i64 :f32 :f64 :string :keyword :symbol :map :bool :option-i64 :result-i64
     :vector-i64 :vector-f64 :string-index :disjoint-set-i64 :document})
 
 (defn validate-value-type!
@@ -578,6 +590,7 @@
     :i64 (compare left right)
     :string (compare left right)
     :keyword (compare (str left) (str right))
+    :symbol (compare (str left) (str right))
     :bool (compare left right)
     :option-i64 (if (= (first left) (first right))
                   (if (first left) (compare (second left) (second right)) 0)
@@ -668,6 +681,7 @@
                 (throw (ex-info "value is not f32" {:phase :value}))) value)
      :string (bounded-string! value string-value-byte-limit)
      :keyword (bounded-keyword! value keyword-value-byte-limit)
+     :symbol (bounded-symbol! value symbol-value-byte-limit)
      :map (bounded-map! value)
      :bool (do (when-not (boolean? value)
                  (throw (ex-info "value is not a boolean" {:phase :value}))) value)

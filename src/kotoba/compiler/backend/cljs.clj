@@ -145,6 +145,10 @@
               (lower-expr (second args))
               (lower-expr (nth args 2)))
 
+        symbol
+        (list 'kotoba$typed-value! (list 'quote :symbol)
+              (list 'symbol (lower-expr (first args))))
+
         (cond
           (contains? comparison-ops op)
           (list 'if (apply list op (map lower-expr args)) 1 0)
@@ -270,6 +274,10 @@
                     (when-not (and (keyword? item)
                                    (<= (kotoba$utf8-byte-count (str item)) 512))
                       (kotoba$typed-fail! "invalid-typed-value" {:expected :keyword}))
+                    (= descriptor :symbol)
+                    (when-not (and (symbol? item)
+                                   (<= (kotoba$utf8-byte-count (str item)) 512))
+                      (kotoba$typed-fail! "invalid-typed-value" {:expected :symbol}))
                     (= descriptor :bool)
                     (when-not (or (true? item) (false? item))
                       (kotoba$typed-fail! "invalid-typed-value" {:expected :bool}))

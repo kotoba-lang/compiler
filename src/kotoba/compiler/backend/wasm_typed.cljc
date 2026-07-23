@@ -5,10 +5,11 @@
 (def schema-abi-version 9)
 (def compact-graph-abi-version 10)
 (def document-abi-version 11)
+(def symbol-abi-version 12)
 (def custom-section-name "kotoba.typed")
 
 (def ^:private primitive-tags
-  {:i64 0 :string 1 :keyword 2 :bool 3 :vector-i64 11 :f64 12 :f32 13
+  {:i64 0 :string 1 :keyword 2 :bool 3 :symbol 19 :vector-i64 11 :f64 12 :f32 13
    :vector-f64 14 :string-index 16 :disjoint-set-i64 17 :document 18})
 
 (def ^:private boolean-result-ops
@@ -126,6 +127,8 @@
             value)
     (and (seq? value) (= 'keyword-from-string (first value)))
     (reduce (fn [result item] (walk item result)) (conj found :keyword) value)
+    (and (seq? value) (= 'symbol (first value)))
+    (reduce (fn [result item] (walk item result)) (conj found :symbol) value)
     (map? value) (reduce (fn [result item] (walk item result)) found (vals value))
     (coll? value) (reduce (fn [result item] (walk item result)) found value)
     (string? value) (conj found :string)
@@ -215,11 +218,13 @@
         identities (:schema-identities kir)
         contracts (capability-contracts kir)
         document? (some #{:document} descriptors)
+        symbol? (some #{:symbol} descriptors)
         compact-graph? (some #{:string-index :disjoint-set-i64} descriptors)
         schema? (or (seq schemas) (seq contracts))
-        extended-schema? (or schema? compact-graph? document?)
+        extended-schema? (or schema? compact-graph? document? symbol?)
         indices (descriptor-indices kir)]
-    (vec (concat [(cond document? document-abi-version
+    (vec (concat [(cond symbol? symbol-abi-version
+                        document? document-abi-version
                         compact-graph? compact-graph-abi-version
                         schema? schema-abi-version
                         :else abi-version)]
@@ -308,6 +313,7 @@
         (contains? '#{document-contains document-equal?} op) :bool
         (contains? '#{string-concat string-substring string-replace-all string-fold-case keyword-name} op) :string
         (contains? '#{keyword-from-string document-kind} op) :keyword
+        (= op 'symbol) :symbol
         (contains? '#{xml-name-text xml-path-text xml-path-attr} op) [:option :string]
         (= op 'decimal-f64-parse) [:option :f64]
         (= op 'decimal-f64x3-parse) [:option [:vector [:f64 :f64 :f64]]]
