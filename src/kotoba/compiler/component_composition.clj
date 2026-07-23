@@ -2,6 +2,7 @@
   "Closed-world composition support for compiler-qualified Component artifacts."
   (:require [clojure.string :as str]
             [kotoba.compiler.canonical-abi :as canonical]
+            [kotoba.compiler.component-core :as component-core]
             [kotoba.compiler.component-wit :as component-wit]
             [kotoba.compiler.wasm-tools :as wasm-tools])
   (:import [java.nio.file Files]
@@ -144,6 +145,78 @@
     (try
       (Files/writeString world wit (make-array java.nio.file.OpenOption 0))
       (Files/write core (wasm-tools/parse-wat (record-provider-wat entry descriptor schemas))
+                   (make-array java.nio.file.OpenOption 0))
+      (wasm-tools/run-command! ["wasm-tools" "component" "embed" (str world) (str core)
+                                "--encoding" "utf8" "-o" (str embedded)])
+      (wasm-tools/run-command! ["wasm-tools" "component" "new" (str embedded)
+                                "--reject-legacy-names" "-o" (str component)])
+      {:format :wasm-component-provider/v1 :capability capability-name
+       :descriptor descriptor :schemas schemas :bytes (Files/readAllBytes component)}
+      (finally
+        (doseq [path [component embedded core world]] (Files/deleteIfExists path))
+        (Files/deleteIfExists dir)))))
+
+(def ^:private variant-case-wit-type
+  {:i64 "s64" :f32 "f32" :f64 "f64" :bool "bool"})
+
+(defn- variant-wit
+  "Deterministic WIT package/world text for one sealed variant provider
+  whose every case's payload is a bare Canonical scalar (ADR 0055) -- the
+  provider-side counterpart to `record-wit`. Deliberately does not admit a
+  case wrapping a record (unlike the identity-export variant path, ADR
+  0052/0054): a record-referencing-variant provider built this same way was
+  tried against `wac plug` during this ADR's own implementation and fails
+  encoding with `type not valid to be used as import` for every shape tried,
+  independent of case count, case mix, and `types`-interface declaration
+  order -- see `kotoba.compiler.component-core/scalar-only-variant-case?`'s
+  docstring for the full reproduction. Every case's `types`-interface
+  footprint here is therefore exactly one exported type (the variant
+  itself), matching `provider-wit`'s own single-scalar-type shape and
+  `record-wit`'s own single-record-type shape, both already proven to
+  `wac plug` correctly."
+  [entry descriptor schemas]
+  (let [schema (get schemas (second descriptor))
+        [_ identity cases] schema
+        variant-name (wit-name identity)
+        interface (:interface entry)]
+    (when-not (and (= :ref (first descriptor))
+                   (= :variant (first schema))
+                   (= identity (second descriptor))
+                   (seq cases)
+                   (every? (comp variant-case-wit-type second) cases))
+      (reject "provider variant requires scalar-only cases"
+              {:descriptor descriptor :schema schema}))
+    (str "package kotoba:application@1.0.0;\n\n"
+         "interface types {\n"
+         "  variant " variant-name " {\n"
+         (apply str
+                (map (fn [[tag payload-type]]
+                       (str "    " (wit-name tag) "(" (get variant-case-wit-type payload-type) "),\n"))
+                     cases))
+         "  }\n}\n\n"
+         "interface " interface " {\n"
+         "  use types.{" variant-name "};\n"
+         "  " (:function entry) ": func(request: " variant-name ") -> " variant-name ";\n"
+         "}\n\n"
+         "world " interface "-provider {\n  export " interface ";\n}\n")))
+
+(defn package-variant-identity-provider
+  "Build a wiring-only provider for one sealed scalar-only-case variant
+  identity (ADR 0055), the variant-crossing counterpart to
+  `package-record-identity-provider`. The provider core module itself is
+  `kotoba.compiler.component-core/variant-capability-provider-wat`, which
+  reuses that namespace's own `variant-case-chain` (disc range check plus
+  in-branch bool validation and store) rather than duplicating it here."
+  [capability-name descriptor schemas]
+  (let [entry (capability capability-name)
+        wit (variant-wit entry descriptor schemas)
+        dir (Files/createTempDirectory "kotoba-variant-provider-" (make-array FileAttribute 0))
+        world (.resolve dir "provider.wit") core (.resolve dir "provider.wasm")
+        embedded (.resolve dir "embedded.wasm") component (.resolve dir "provider.component.wasm")]
+    (try
+      (Files/writeString world wit (make-array java.nio.file.OpenOption 0))
+      (Files/write core (wasm-tools/parse-wat
+                         (component-core/variant-capability-provider-wat entry descriptor schemas))
                    (make-array java.nio.file.OpenOption 0))
       (wasm-tools/run-command! ["wasm-tools" "component" "embed" (str world) (str core)
                                 "--encoding" "utf8" "-o" (str embedded)])

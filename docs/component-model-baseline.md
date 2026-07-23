@@ -141,6 +141,30 @@ field, a variant used as a record field or nested inside another variant's
 case, lists/tuples/options/results, and every production provider's
 semantics all remain closed; no capability kit's `:wasm-aot` qualification
 changed.
+A direct `typed-cap-call` may now use one sealed variant, whose every case's
+payload is a bare Canonical scalar, as its same-identity request *and*
+result, crossing a real composed application-plus-provider component for
+the first time (ADR 0055) -- ADR 0046 crossed one bare scalar and ADR 0048
+crossed one flat all-scalar record; this is the first *structured, multi-
+case* type to cross a capability-call boundary, closing both the request
+and result side at once (same identity, matching ADR 0048's own discipline).
+Manual Wasmtime 42.0.1 execution of the composed component round-trips the
+full i64-widening join and the i32/f32 special-case join/coercion table
+(the exact ADR 0052 `flag-or-ratio` fixture), now crossing a real
+application-to-provider boundary rather than staying inside one module.
+A materially narrower case-kind than the identity-export path admits
+(scalar only, no record case) for a concrete, reproduced reason: a variant
+case wrapping a record, crossing a capability boundary, was tried first and
+found to fail `wac plug` (pinned 0.9.0) encoding with `type not valid to be
+used as import`, reproduced across four independent variations (case
+count, case mix, record field count, and `types`-interface declaration
+order all ruled out as the cause) -- recorded as a currently-blocked path,
+not force-fitted around. `state-v1`'s actual request/result types are not
+closed by this ADR at all (every one of its own non-bool cases wraps a
+record, exactly the shape found blocked); string/keyword leaves crossing
+any capability boundary, different request/result variant identities, and
+every production provider's semantics all remain closed; no capability
+kit's `:wasm-aot` qualification changed.
 
 ## Official sources
 

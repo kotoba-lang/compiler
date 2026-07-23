@@ -299,6 +299,85 @@
       (is (= :variant-identity (:canonical-lowering artifact)))
       (is (= :wasm-component/v1 (:format artifact))))))
 
+(deftest variant-capability-call-with-scalar-cases-is-admitted
+  ;; ADR 0055: a direct `typed-cap-call` may now use one sealed variant
+  ;; (bare-scalar cases only) as its same-identity request/result, the first
+  ;; slice to cross a *structured* (multi-case) type through a capability
+  ;; boundary rather than a single bare scalar (ADR 0046) or a flat record
+  ;; (ADR 0048). `demo/flag-or-ratio` is the exact ADR 0052 bool/f32
+  ;; join-table fixture, reused here crossing a capability boundary for the
+  ;; first time.
+  (let [descriptor [:ref :demo/flag-or-ratio]
+        schemas {:demo/flag-or-ratio [:variant :demo/flag-or-ratio
+                                      [[:urgent :bool] [:weight :f32]]]}
+        kir {:format :kotoba.kir/v4 :exports ['invoke] :schemas schemas
+             :functions [{:name 'invoke :params ['request]
+                          :param-types [descriptor] :result descriptor
+                          :body (list 'typed-cap-call 8 descriptor descriptor 'request)}]}]
+    (is (true? (component/assert-scalar-slice! kir (wit/emit kir))))
+    (let [artifact (component/package
+                    (component-core/emit kir :wasm32-wasi-kotoba-v1)
+                    kir (wit/emit kir))]
+      (is (= :variant-capability-call (:canonical-lowering artifact)))
+      (is (= [:state/transact] (:imports artifact)))
+      (is (= :wasm-component/v1 (:format artifact)))
+      (is (= [0 97 115 109 13 0 1 0]
+             (mapv #(bit-and (int %) 0xff) (take 8 (:bytes artifact))))))
+    ;; A case wrapping a sealed all-scalar record remains fail-closed for a
+    ;; capability-call boundary in this slice -- unlike the identity-export
+    ;; path (ADR 0052/0054), which already admits it -- because `wac plug`
+    ;; (pinned 0.9.0) fails encoding a record-referencing-variant provider
+    ;; that crosses a capability boundary (`type not valid to be used as
+    ;; import`), reproduced independent of case count/mix/declaration order.
+    ;; See `component-core/scalar-only-variant-case?`'s docstring and ADR
+    ;; 0055 for the full reproduction.
+    (let [record-case-schemas
+          {:demo/cap-tally [:record :demo/cap-tally [[:count :i64]]]
+           :demo/cap-outcome [:variant :demo/cap-outcome
+                              [[:tally [:ref :demo/cap-tally]] [:empty :bool]]]}
+          record-case-kir (-> kir
+                              (assoc :schemas record-case-schemas)
+                              (assoc-in [:functions 0 :param-types] [[:ref :demo/cap-outcome]])
+                              (assoc-in [:functions 0 :result] [:ref :demo/cap-outcome])
+                              (assoc-in [:functions 0 :body]
+                                        (list 'typed-cap-call 8 [:ref :demo/cap-outcome]
+                                              [:ref :demo/cap-outcome] 'request)))]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
+                            (component/assert-scalar-slice! record-case-kir
+                                                            (wit/emit record-case-kir)))))
+    ;; Different request/result variant identities remain fail-closed,
+    ;; matching `record-capability-call`'s own same-identity discipline (ADR
+    ;; 0048).
+    (let [other-schemas
+          {:demo/flag-or-ratio [:variant :demo/flag-or-ratio
+                                [[:urgent :bool] [:weight :f32]]]
+           :demo/other-outcome [:variant :demo/other-outcome [[:urgent :bool]]]}
+          different-identity-kir
+          (-> kir
+             (assoc :schemas other-schemas)
+             (assoc-in [:functions 0 :result] [:ref :demo/other-outcome])
+             (assoc-in [:functions 0 :body]
+                       (list 'typed-cap-call 8 descriptor [:ref :demo/other-outcome] 'request)))]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
+                            (component/assert-scalar-slice! different-identity-kir
+                                                            (wit/emit different-identity-kir)))))
+    ;; A computed capability request (anything other than a bare parameter
+    ;; passthrough) remains fail-closed.
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
+                          (component/assert-scalar-slice!
+                           (assoc-in kir [:functions 0 :body]
+                                     (list 'typed-cap-call 8 descriptor descriptor
+                                           (list 'typed-cap-call 8 descriptor descriptor 'request)))
+                           (wit/emit kir))))
+    ;; An unknown capability id remains fail-closed.
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
+                          (component/assert-scalar-slice!
+                           (assoc-in kir [:functions 0 :body]
+                                     (list 'typed-cap-call 999999 descriptor descriptor 'request))
+                           (wit/emit
+                            (assoc-in kir [:functions 0 :body]
+                                      (list 'typed-cap-call 8 descriptor descriptor 'request))))))))
+
 (deftest string-and-keyword-field-record-identity-is-admitted
   ;; `demo/state-entry` mirrors `state-v1.edn`'s actual `entry` record
   ;; shape (`key: keyword, value: string, version: i64`) -- the concrete
