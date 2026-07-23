@@ -651,6 +651,103 @@
              (list 'loop [index 0]
                    (list 'if (list '< index limit) iteration 0)))))))
 
+(defn- annotate-doseq-collection-kinds
+  "Lexically mark pair-sequence symbols used as doseq collections. Pair and
+  owned-vector values have different backend representations, so this
+  provenance must be resolved before the syntax-only doseq desugar."
+  [root]
+  (letfn [(kind-of [form env]
+            (cond
+              (symbol? form) (get env form)
+              (vector? form) :vector
+              (and (seq? form)
+                   (contains? #{'list 'cons 'rest
+                                '__kotoba_pair_sequence}
+                              (first form))) :pair
+              :else nil))
+          (walk-bindings [bindings env]
+            (loop [pairs (seq (partition 2 bindings))
+                   current env
+                   out []]
+              (if-let [[name value] (first pairs)]
+                (let [value* (walk-form value current)
+                      kind (kind-of value* current)
+                      next-env (if (symbol? name)
+                                 (cond-> (dissoc current name)
+                                   kind (assoc name kind))
+                                 current)]
+                  (recur (next pairs) next-env (conj out name value*)))
+                [(vec out) current])))
+          (walk-doseq-binding [binding env]
+            (loop [tokens (seq binding) current env out []]
+              (if-not tokens
+                [(vec out) current]
+                (let [item (first tokens)
+                      collection (second tokens)
+                      collection* (walk-form collection current)
+                      kind (kind-of collection* current)
+                      collection* (if (and (= :pair kind)
+                                           (symbol? collection*))
+                                    (list '__kotoba_pair_sequence collection*)
+                                    collection*)
+                      after-item (if (symbol? item)
+                                   (dissoc current item)
+                                   current)]
+                  (let [[remaining next-env group-out]
+                        (loop [remaining (nnext tokens)
+                               modifier-env after-item
+                               group-out (conj out item collection*)]
+                          (if (and remaining (keyword? (first remaining)))
+                            (let [modifier (first remaining)
+                                  value (second remaining)]
+                              (if (= modifier :let)
+                                (let [[value* next-env]
+                                      (if (and (vector? value)
+                                               (even? (count value)))
+                                        (walk-bindings value modifier-env)
+                                        [(walk-form value modifier-env)
+                                         modifier-env])]
+                                  (recur (nnext remaining) next-env
+                                         (conj group-out modifier value*)))
+                                (recur (nnext remaining) modifier-env
+                                       (conj group-out modifier
+                                             (walk-form value modifier-env)))))
+                            [remaining modifier-env group-out]))]
+                    (if remaining
+                      (recur remaining next-env group-out)
+                      [(vec group-out) next-env]))))))
+          (walk-form [form env]
+            (cond
+              (seq? form)
+              (let [[op & args] form]
+                (case op
+                  let
+                  (let [[bindings & body] args]
+                    (if (and (vector? bindings) (even? (count bindings)))
+                      (let [[bindings* body-env] (walk-bindings bindings env)]
+                        (list* 'let bindings*
+                               (map #(walk-form % body-env) body)))
+                      (apply list op (map #(walk-form % env) args))))
+
+                  doseq
+                  (let [[binding & body] args]
+                    (if (and (vector? binding) (<= 2 (count binding)))
+                      (let [[binding* body-env]
+                            (walk-doseq-binding binding env)]
+                        (list* 'doseq binding*
+                               (map #(walk-form % body-env) body)))
+                      (apply list op (map #(walk-form % env) args))))
+
+                  (apply list op (map #(walk-form % env) args))))
+              (vector? form) (mapv #(walk-form % env) form)
+              (map? form) (into {} (map (fn [[k v]]
+                                          [(walk-form k env)
+                                           (walk-form v env)]))
+                                form)
+              (set? form) (set (map #(walk-form % env) form))
+              :else form))]
+    (walk-form root {})))
+
 (defn- desugar-doseq [args form]
   (let [[binding & body] args]
     (when-not (vector? binding)
@@ -673,6 +770,11 @@
                 :while [:while modifier-value]
                 (reject! "doseq supports only :let, :when, and :while modifiers"
                          form)))
+            (pair-sequence-form? [collection]
+              (and (seq? collection)
+                   (contains? #{'list 'cons 'rest
+                                '__kotoba_pair_sequence}
+                              (first collection))))
             (parse-groups []
               (loop [tokens (seq binding) groups [] current nil]
                 (cond
@@ -686,7 +788,10 @@
                       (reject! "doseq requires [unqualified-symbol collection] binding pairs"
                                form))
                     (recur (nnext tokens) groups
-                           {:item item :collection collection :modifiers []}))
+                           {:item item
+                            :collection collection
+                            :pair-sequence? (pair-sequence-form? collection)
+                            :modifiers []}))
 
                   (keyword? (first tokens))
                   (do
@@ -702,7 +807,8 @@
                   :else
                   (reject! "doseq requires binding pairs separated only by :let/:when/:while modifiers"
                            form))))
-            (lower-group [{:keys [item collection modifiers]} group-body limit]
+            (lower-group [{:keys [item collection modifiers pair-sequence?]}
+                          group-body limit]
               (let [iteration-signal
                     (reduce
                      (fn [inner [modifier modifier-value]]
@@ -734,24 +840,58 @@
                               (list 'if block continuation 0))
                             0
                             (reverse blocks))
+                    pair-unrolled
+                    ((fn step [index cursor-expr]
+                       (let [cursor (gensym "doseq-cursor__")]
+                         (list 'let [cursor cursor-expr]
+                               (if (= index limit)
+                                 (list 'if (list '= cursor 0)
+                                       0
+                                       (list 'quot 1 0))
+                                 (let [next-cursor (gensym "doseq-next__")]
+                                   (list 'if (list '= cursor 0)
+                                         0
+                                         (list 'let
+                                               [next-cursor
+                                                (list 'pair-second cursor)]
+                                               (list 'if
+                                                     (list 'let
+                                                           [item (list 'pair-first cursor)]
+                                                           iteration-signal)
+                                                     (step (inc index) next-cursor)
+                                                     0))))))))
+                     0 values)
                     bounded
-                    (if (< limit value/vector-literal-item-limit)
-                      (list 'if (list '< limit length) (list 'quot 1 0) unrolled)
-                      unrolled)]
-                (list 'let [values collection]
-                      (list 'let [length (list 'vector-count values)]
-                            bounded))))]
+                    (if pair-sequence?
+                      pair-unrolled
+                      (if (< limit value/vector-literal-item-limit)
+                        (list 'if (list '< limit length)
+                              (list 'quot 1 0)
+                              unrolled)
+                        unrolled))]
+                (list 'let [values (if (and pair-sequence?
+                                            (seq? collection)
+                                            (= '__kotoba_pair_sequence
+                                               (first collection)))
+                                     (second collection)
+                                     collection)]
+                      (if pair-sequence?
+                        bounded
+                        (list 'let [length (list 'vector-count values)]
+                              bounded)))))]
       (let [groups (parse-groups)
             group-count (count groups)]
-        (when-not (<= 1 group-count 2)
-          (reject! "doseq supports one binding, or two bindings capped at 16 items each"
+        (when-not (<= 1 group-count 3)
+          (reject! "doseq supports at most three collection bindings"
                    form))
-        (let [limit (if (= 1 group-count)
-                      value/vector-literal-item-limit
-                      16)
-              lowered
+        (let [lowered
               (reduce (fn [inner group]
-                        (lower-group group [inner] limit))
+                        (lower-group group [inner]
+                                     (cond
+                                       (= 3 group-count) 4
+                                       (= 2 group-count) 16
+                                       (:pair-sequence? group) 32
+                                       :else value/vector-literal-item-limit)))
                       (list* 'do (concat body [0]))
                       (reverse groups))]
           (desugar-expr lowered))))))
@@ -3159,7 +3299,8 @@
                    forms))))))
 
 (defn analyze [source]
-  (let [forms (expand-closed-multimethod-forms (read-forms source))
+  (let [forms (mapv annotate-doseq-collection-kinds (read-forms source))
+        forms (expand-closed-multimethod-forms forms)
         namespaces (filter #(and (seq? %) (= 'ns (first %))) forms)
         defs (filter #(and (seq? %) (contains? '#{defn defn-} (first %))) forms)
         constant-forms (filter #(and (seq? %) (= 'def (first %))) forms)
