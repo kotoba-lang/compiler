@@ -678,33 +678,43 @@
 
                  :when [:when value]
 
-                 :while
-                 (reject! "doseq :while is not supported by this portable profile"
-                          form)
+                 :while [:while value]
 
-                 (reject! "doseq supports only :let and :when modifiers; multiple collection bindings are not supported"
+                 (reject! "doseq supports only :let, :when, and :while modifiers; multiple collection bindings are not supported"
                           form)))
              (partition 2 modifier-forms))
-            iteration-body
+            iteration-signal
             (reduce
              (fn [inner [modifier value]]
                (case modifier
                  :let (list 'let value inner)
-                 :when (list 'if value inner 0)))
-             (list* 'do (concat body [0]))
+                 :when (list 'if value inner 1)
+                 :while (list 'if value inner 0)))
+             (list* 'do (concat body [1]))
              (reverse modifiers))
           values (gensym "doseq-values__")
           length (gensym "doseq-length__")
-          iterations
-          (map (fn [index]
-                 (list 'if (list '< index length)
-                       (list 'let [item (list 'vector-at values index)]
-                             iteration-body)
-                       0))
-               (range value/vector-literal-item-limit))
-          blocks (map #(list* 'do (concat % [0]))
-                      (partition-all 16 iterations))
-          unrolled (list* 'do (concat blocks [0]))]
+          block-signal
+          (fn [indices]
+            (reduce
+             (fn [continuation index]
+               (list 'if (list '< index length)
+                     (list 'if
+                           (list 'let [item (list 'vector-at values index)]
+                                 iteration-signal)
+                           continuation
+                           0)
+                     1))
+             1
+             (reverse indices)))
+          blocks (map block-signal
+                      (partition-all 16
+                                     (range value/vector-literal-item-limit)))
+          unrolled
+          (reduce (fn [continuation block]
+                    (list 'if block continuation 0))
+                  0
+                  (reverse blocks))]
       (desugar-expr
        (list 'let [values collection]
              (list 'let [length (list 'vector-count values)]
