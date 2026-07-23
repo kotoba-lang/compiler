@@ -40,7 +40,9 @@
 ;; (ADR 0062) -- a sealed, all-scalar (`:i64`/`:bool` fields only)
 ;; `record-new`/`record-get` pair, used only in the one exact nested
 ;; construction+projection shape `backend/x86-64.cljc`/`backend/aarch64.cljc`
-;; implement. Every other typed feature (options, results, variants, general
+;; implement, plus a sealed `typed-cap-call :i64 :i64` boundary which is
+;; bit-identical to the existing native capability callback ABI. Every other
+;; typed feature (options, results, variants, general
 ;; records, typed maps/vectors/sets) has zero native backend codegen and must
 ;; keep producing the same "requires kotoba-script web target" rejection it
 ;; always has. This is a content check, not a blanket per-backend allowance:
@@ -101,7 +103,7 @@
                                (ir/only-cljs-provider-typed-features? hir)))
                      (not (and (contains? #{:x86_64-kotoba-v1 :aarch64-kotoba-v1} backend)
                                (ir/only-string-and-scalar-record-typed-features? hir))))
-            (throw (ex-info "typed values currently require the kotoba-script web target, typed Wasm/CLJS target, or (native targets) string-only or sealed-scalar-record typed features"
+            (throw (ex-info "typed values currently require the kotoba-script web target, typed Wasm/CLJS target, or a qualified native string/scalar-record/i64-capability slice"
                             {:phase :target :target target :backend backend
                              :value-profile :kotoba.value/typed-v1})))
         _ (when (and (nil? (:entry hir))

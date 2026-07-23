@@ -398,6 +398,13 @@
         (emit-let (first args) (second args) env depth)
         (= op 'cap-call)
         (emit-cap-call (first args) (second args) env depth)
+        (= op 'typed-cap-call)
+        (let [[cap-id request-type result-type request] args]
+          (when-not (= :i64 request-type result-type)
+            (throw (ex-info "native typed capability ABI supports only i64 request/result"
+                            {:phase :aarch64 :request-type request-type
+                             :result-type result-type})))
+          (emit-cap-call cap-id request env depth))
         (= op 'record-get)
         (let [[type value-form field] args]
           (emit-record-get-of-new type value-form field env depth))
