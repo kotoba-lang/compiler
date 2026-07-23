@@ -1132,6 +1132,11 @@
         cond->> (desugar-cond-thread args form true)
         dotimes (desugar-dotimes args form)
         doseq (desugar-doseq args form)
+        assert (do
+                 (when-not (= 1 (count args))
+                   (reject! "assert requires exactly one condition; messages are not supported"
+                            form))
+                 (list 'if (desugar-expr (first args)) 0 '(quot 1 0)))
         case (desugar-case args form)
         if-let (desugar-binding-if args form false)
         when-let (desugar-binding-if args form true)
