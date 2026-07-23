@@ -361,6 +361,49 @@ admission pipeline) all remain closed; no capability kit's `:qualification`
 changed, and `resources/kotoba/lang/capability-kits/state-v1.edn` is not
 modified.
 
+The table grew from ADR 0060's deliberate 4-slot narrowing to the real
+256-entry target capacity (ADR 0061), confirmed by reading BOTH declared
+sources of that bound directly rather than assumed: `state-v1.edn`'s own
+`:limits {:entries 256 ...}` and `kotoba.compiler.provider.state/max-
+entries`. ADR 0060's own "mechanical, separate follow-up" premise was
+verified, not merely trusted: `state-scan-wat` already built its per-slot
+branches via a Clojure-side `(map ... (range capacity))` generator, and
+`state-slot-layout`/`state-provider-wat`'s own memory-sizing math was
+already `capacity`-parametric, so the production change really was the one
+constant (`state-provider-table-capacity`, `4` -> `256`) ADR 0060
+predicted -- no restructuring of the WAT-emission approach itself was
+needed. The one genuinely new code was TEST-only: ADR 0060's own 14-step
+driver used a `u32` bitmask (one bit per step), which cannot address the
+~262 steps a full 256-entry fill-to-capacity-and-back sequence needs, so a
+parallel driver construct (`state-full-capacity-steps`/`state-full-
+capacity-driver-wat`) returns a first-FAILING-step `i32` index (or `-1`)
+instead -- strictly more diagnostic for a long sequence, not a workaround.
+Real Wasmtime 42.0.1 execution of the composed full-capacity driver+
+provider component (256 sequential `put`s filling the table to EXACTLY its
+new capacity on 256 distinct keys, a 257th distinct key rejected with
+`error{code: "state/capacity"}` proving the capacity check itself scales,
+`get`/`delete` on the 256th/LAST slot proving the unrolled scan is
+genuinely complete and not silently truncated, an existing key still
+succeeding once full, and a final put succeeding once a slot frees -- 262
+steps total, one Wasmtime instantiation) returned the all-passed sentinel
+(`4294967295`, the `u32` encoding of this driver's own `-1`), with a
+negative control (one step's expectation deliberately corrupted) returning
+exactly that step's own index (`258`), confirming the harness genuinely
+discriminates failure and pinpoints it precisely. ADR 0060's OWN unchanged
+14-step fixture was re-run with `capacity` now passed EXPLICITLY (`4`,
+previously implicit via the changed default) as a no-regression check,
+returning the identical `16383` real Wasmtime recorded originally. No
+capability kit's `:qualification` changed, and `resources/kotoba/lang/
+capability-kits/state-v1.edn` remains not modified -- full capacity alone
+does not close native-AOT, JIT, production/security hardening (the
+persistent table's own linear-memory footprint grew 64x, from ~264KB to
+~16.9MB, still unaudited beyond confirming the byte-bound traps and bump
+allocator still engage correctly at the new size), the `:ref`-only
+representational discipline, every other capability's real provider
+semantics, or a compiled Kotoba application's own ability to issue a
+multi-step capability sequence -- all of ADR 0060's own remaining gaps 2-6
+carry forward unchanged.
+
 ## Official sources
 
 - https://github.com/WebAssembly/component-model

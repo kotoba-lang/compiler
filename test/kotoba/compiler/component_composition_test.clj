@@ -894,23 +894,323 @@
         (Files/deleteIfExists dir)))))
 
 (deftest state-stateful-sequence-driver-closes-and-validates
-  ;; ADR 0060: the driver (`state-driver-wat`, running `state-driver-steps`
-  ;; internally against the REAL provider `package-state-provider` builds)
-  ;; composes and `wasm-tools validate`s cleanly, exactly as every other
-  ;; composed artifact in this file does. The full 14-step sequence's own
-  ;; PASS/FAIL bitmask (proving real cross-call persistence, isolation,
-  ;; version increments, deletion, and capacity fail-closed behavior, not
-  ;; merely composition) comes from real Wasmtime execution of this exact
-  ;; artifact, recorded in this ADR's own Evidence section (matching every
-  ;; ADR in this chain's own test-suite/manual-evidence split).
+  ;; ADR 0060 (re-verified unchanged by ADR 0061 as a no-regression check --
+  ;; see `state-real-provider-full-capacity-driver-closes-and-validates`
+  ;; below for the ADR 0061 256-capacity counterpart): the driver
+  ;; (`state-driver-wat`, running `state-driver-steps` internally against
+  ;; the REAL provider `package-state-provider` builds) composes and
+  ;; `wasm-tools validate`s cleanly, exactly as every other composed
+  ;; artifact in this file does. `capacity` is now passed EXPLICITLY as `4`
+  ;; (previously implicit via `package-state-provider`'s own default, which
+  ;; ADR 0061 changed from `4` to `256`) so this exact fixture -- table size
+  ;; included -- is unchanged byte-for-byte from ADR 0060, not merely
+  ;; behaviorally equivalent. The full 14-step sequence's own PASS/FAIL
+  ;; bitmask (proving real cross-call persistence, isolation, version
+  ;; increments, deletion, and capacity fail-closed behavior, not merely
+  ;; composition) comes from real Wasmtime execution of this exact artifact,
+  ;; recorded in ADR 0060's own Evidence section and re-confirmed unchanged
+  ;; in ADR 0061's own Evidence section (matching every ADR in this chain's
+  ;; own test-suite/manual-evidence split).
   (let [{:keys [result-descriptor schemas]} (state-v1-descriptors)
         driver (package-state-driver result-descriptor schemas)
         provider (composition/package-state-provider
                   :state/transact (:descriptor (state-v1-descriptors))
-                  result-descriptor schemas)
+                  result-descriptor schemas 4)
         closed (composition/compose-closed driver [provider])]
     (is (= :wasm-component-provider/v1 (:format provider)))
     (is (= :wasm-component-closed/v1 (:format closed)))
     (is (= [0 97 115 109 13 0 1 0]
            (mapv #(bit-and (int %) 0xff) (take 8 (:bytes closed)))))
     (is (= 16383 state-driver-expected-mask))))
+
+;; --- Full-capacity stateful-sequence driver fixture (ADR 0061) -------------
+;;
+;; ADR 0060 deliberately narrowed `state-provider-table-capacity` to `4` and
+;; stated growing it back to the pure-Clojure reference's own `256`
+;; (`kotoba.compiler.provider.state/max-entries`, matching `state-v1.edn`'s
+;; own declared `:limits {:entries 256 ...}`) would be "a mechanical,
+;; separate follow-up (the per-slot layout and unrolled scan generalize
+;; directly to any fixed compile-time slot count)". `state-scan-wat`
+;; confirmed that premise directly: it already builds its per-slot branches
+;; via `(map ... (range capacity))`, a Clojure-side generator over the
+;; capacity constant, not hand-written cases, so ADR 0061's production code
+;; change really is the one-constant change in `component-core.clj`. The
+;; ONE piece of genuinely new code this needs is TEST-only: `state-driver-
+;; wat`'s own 14-step sequence used a `u32` bitmask, one bit per step, which
+;; cannot address the ~262 steps a full 256-entry fill-to-capacity sequence
+;; needs. `state-full-capacity-steps`/`state-full-capacity-driver-wat` below
+;; are a parallel, generalized construct (steps and literal-plan are
+;; function ARGUMENTS/derived values rather than fixed defs, and the
+;; returned aggregate is a first-FAILING-step INDEX, or `-1`, rather than a
+;; bitmask -- strictly more diagnostic for a long sequence, not a
+;; workaround) that otherwise follows `state-driver-wat`'s own design
+;; exactly: one exported function, one Wasmtime instantiation, N sequential
+;; calls to the REAL imported provider, each checked against an
+;; independently-computed expectation.
+
+(defn- state-full-capacity-steps
+  "`[disc key value-or-nil expect]` steps (`state-driver-steps`'s own shape,
+  generalized to `capacity`) proving the ADR 0061 target capacity end to
+  end: `capacity` sequential `put`s on `capacity` DISTINCT keys
+  (`key0`..`key<capacity-1>`, `expect`'s own `version` computed from the
+  provider's own documented convention -- a GLOBAL counter starting at 1,
+  pre-incremented before every SUCCESSFUL write, so the Nth successful write
+  in a fresh instance is version N+1 -- not assumed, but derived the same
+  way `state-driver-steps`' own docstring derives its literal versions),
+  filling the table EXACTLY to capacity; one MORE distinct key
+  (`key<capacity>`) rejected with `error{code: \"state/capacity\"}` (proving
+  the capacity check itself scales to the real bound, not merely that many
+  slots exist); an EXISTING key (`key0`) still succeeding once full
+  (matching `state-driver-steps`' own `put k2 again` convention); `get` and
+  `delete` on the LAST-filled slot (`key<capacity-1>`, the `capacity`th
+  slot) -- specifically exercising whether `state-scan-wat`'s own unrolled
+  scan is genuinely complete across the FULL range, not silently truncated
+  to an early subset, which a fixture that only ever touches the first few
+  slots could not catch; and a final `put` for the previously-rejected key
+  succeeding once that slot frees, closing the loop on `state-driver-steps`'
+  own 'existing key succeeds when full' idea applied instead to a freshly
+  vacated slot."
+  [capacity]
+  (let [fill (mapv (fn [i]
+                      (let [key (str "key" i) value (str "v" i) version (+ i 2)]
+                        [1 key value {:tag 2 :key key :value value :version version}]))
+                    (range capacity))
+        overflow-key (str "key" capacity)
+        last-key (str "key" (dec capacity))
+        last-value (str "v" (dec capacity))
+        last-version (inc capacity)
+        existing-key-version (+ capacity 2)
+        freed-slot-version (+ existing-key-version 1)]
+    (vec
+     (concat
+      fill
+      [[1 overflow-key "overflow" {:tag 4 :code "state/capacity"}]]
+      [[1 "key0" "updated0" {:tag 2 :key "key0" :value "updated0" :version existing-key-version}]]
+      [[0 last-key nil {:tag 0 :key last-key :value last-value :version last-version}]]
+      [[2 last-key nil {:tag 3 :bool true}]]
+      [[0 last-key nil {:tag 1 :bool false}]]
+      [[1 overflow-key "now-fits" {:tag 2 :key overflow-key :value "now-fits" :version freed-slot-version}]]))))
+
+(defn- state-full-capacity-literal-plan
+  "Generalizes `state-driver-literal-plan`'s own fixed 15-entry list to
+  DERIVE its literal-string set from `steps` itself (every request `key`/
+  `value` and every checked `expect` `:key`/`:value`/`:code`) rather than a
+  hand-transcribed vector -- `state-driver-steps`' own 14 steps were few
+  enough to hand-list; `state-full-capacity-steps`' own ~262 (256 fill keys
+  alone) are not. Same sequential fixed `(data ...)` layout technique,
+  starting at byte 8, as the original."
+  [steps]
+  (let [literals (distinct (mapcat (fn [[_ key value expect]]
+                                      (remove nil? [key value (:key expect)
+                                                    (:value expect) (:code expect)]))
+                                    steps))]
+    (loop [remaining literals offset 8 acc {}]
+      (if-let [text (first remaining)]
+        (let [bytes (vec (.getBytes ^String text "UTF-8"))]
+          (recur (next remaining) (+ offset (count bytes))
+                 (assoc acc text {:pointer offset :length (count bytes)})))
+        acc))))
+
+(defn state-full-capacity-driver-wat
+  "ADR 0061's full-capacity counterpart to `state-driver-wat`: identical
+  design (imports the SAME real provider core function, issues N sequential
+  calls from within ONE exported function so cross-call state survives one
+  Wasmtime instantiation -- see `state-driver-wat`'s own docstring for why
+  that is necessary), generalized in exactly the two ways `state-driver-
+  wat` itself does not need at 14 steps: `steps` and its own literal plan
+  are function ARGUMENTS/derived values (a Clojure-side `(range
+  capacity)`-driven generator via `state-full-capacity-steps`, the same
+  'Clojure code loops to EMIT WAT text' shape `state-scan-wat` already
+  established in `component-core.clj` -- NOT a runtime WASM loop; the
+  emitted module still fully unrolls one straight-line call+check per
+  step), and the returned aggregate is a first-FAILING-step `i32` INDEX (or
+  `-1` if every step passed) rather than a per-step bitmask, since a `u32`
+  cannot address as many steps as this driver runs for the production
+  capacity."
+  [steps result-descriptor schemas]
+  (let [result-layout (canonical/layout result-descriptor schemas)
+        result-cases (:cases result-layout)
+        entry-layout (:layout (nth result-cases 0))
+        error-layout (:layout (nth result-cases 4))
+        payload-offset (:payload-offset result-layout)
+        result-size (:size result-layout)
+        result-alignment (:alignment result-layout)
+        key-off (+ payload-offset (state-driver-field-offset entry-layout :key))
+        value-off (+ payload-offset (state-driver-field-offset entry-layout :value))
+        version-off (+ payload-offset (state-driver-field-offset entry-layout :version))
+        code-off (+ payload-offset (state-driver-field-offset error-layout :code))
+        literal-plan (state-full-capacity-literal-plan steps)
+        literal-end (reduce (fn [acc [_ {:keys [pointer length]}]] (max acc (+ pointer length)))
+                            8 literal-plan)
+        arena-base (state-driver-align-up literal-end 8)
+        result-headroom-bytes (* 3 65536)
+        required-bytes (+ arena-base result-headroom-bytes result-size)
+        pages (max 1 (quot (+ required-bytes 65535) 65536))
+        capacity-bytes (* pages 65536)
+        lit (fn [text] (get literal-plan text))
+        call-args (fn [disc key value]
+                    (let [{kp :pointer kl :length} (lit key)]
+                      (if value
+                        (let [{vp :pointer vl :length} (lit value)]
+                          (str "i32.const " disc " i32.const " kp " i32.const " kl
+                               " i32.const " vp " i32.const " vl))
+                        (str "i32.const " disc " i32.const " kp " i32.const " kl
+                             " i32.const 0 i32.const 0"))))
+        field-check-wat
+        (fn [check]
+          (case (:tag check)
+            (0 2)
+            (str
+             "    local.get $ret i32.load offset=" key-off
+             " local.get $ret i32.load offset=" (+ key-off 4)
+             " i32.const " (:pointer (lit (:key check)))
+             " i32.const " (:length (lit (:key check)))
+             " call $bytes-equal i32.eqz if i32.const 0 local.set $ok end\n"
+             "    local.get $ret i32.load offset=" value-off
+             " local.get $ret i32.load offset=" (+ value-off 4)
+             " i32.const " (:pointer (lit (:value check)))
+             " i32.const " (:length (lit (:value check)))
+             " call $bytes-equal i32.eqz if i32.const 0 local.set $ok end\n"
+             "    local.get $ret i64.load offset=" version-off
+             " i64.const " (:version check) " i64.ne if i32.const 0 local.set $ok end\n")
+            (1 3)
+            (str
+             "    local.get $ret i32.load8_u offset=" payload-offset " i32.const "
+             (if (:bool check) 1 0) " i32.ne if i32.const 0 local.set $ok end\n")
+            4
+            (str
+             "    local.get $ret i32.load offset=" code-off
+             " local.get $ret i32.load offset=" (+ code-off 4)
+             " i32.const " (:pointer (lit (:code check)))
+             " i32.const " (:length (lit (:code check)))
+             " call $bytes-equal i32.eqz if i32.const 0 local.set $ok end\n")))
+        step-wat
+        (fn [index [disc key value expect]]
+          (str
+           "    i32.const 0 i32.const 0 i32.const " result-alignment
+           " i32.const " result-size " call $realloc local.set $ret\n"
+           "    " (call-args disc key value) " local.get $ret call $provider\n"
+           "    i32.const 1 local.set $ok\n"
+           "    local.get $ret i32.load8_u offset=0 i32.const " (:tag expect)
+           " i32.ne if i32.const 0 local.set $ok end\n"
+           (field-check-wat expect)
+           "    local.get $ok i32.eqz\n"
+           "    if\n"
+           "      local.get $failidx i32.const -1 i32.eq\n"
+           "      if i32.const " index " local.set $failidx end\n"
+           "    end\n"
+           "    i32.const " arena-base " global.set $next\n"))
+        data-segments
+        (apply str
+               (map (fn [[text {:keys [pointer]}]]
+                      (str "  (data (i32.const " pointer ") \""
+                           (state-driver-wat-data (vec (.getBytes ^String text "UTF-8")))
+                           "\")\n"))
+                    literal-plan))]
+    (str
+     "(module\n"
+     "  (import \"cm32p2|kotoba:application/state@1\" \"transact\""
+     " (func $provider (param i32) (param i32) (param i32) (param i32) (param i32) (param i32)))\n"
+     "  (memory (export \"cm32p2_memory\") " pages " " pages ")\n"
+     "  (global $next (mut i32) (i32.const " arena-base "))\n"
+     "  (func $realloc (export \"cm32p2_realloc\")\n"
+     "    (param $old-ptr i32) (param $old-size i32)\n"
+     "    (param $align i32) (param $new-size i32) (result i32)\n"
+     "    (local $ptr i32) (local $end i32) (local $copy-size i32)\n"
+     "    local.get $new-size i32.eqz if i32.const 0 return end\n"
+     "    local.get $align i32.eqz if unreachable end\n"
+     "    local.get $align i32.const 8 i32.gt_u if unreachable end\n"
+     "    local.get $align local.get $align i32.const 1 i32.sub i32.and if unreachable end\n"
+     "    global.get $next local.get $align i32.const 1 i32.sub i32.add\n"
+     "    i32.const 0 local.get $align i32.sub i32.and local.tee $ptr\n"
+     "    local.get $new-size i32.add local.tee $end local.get $ptr i32.lt_u\n"
+     "    if unreachable end\n"
+     "    local.get $end i32.const " capacity-bytes " i32.gt_u if unreachable end\n"
+     "    local.get $end global.set $next\n"
+     "    local.get $old-ptr i32.eqz if else\n"
+     "      local.get $old-size local.get $new-size i32.lt_u\n"
+     "      if (result i32) local.get $old-size else local.get $new-size end\n"
+     "      local.set $copy-size\n"
+     "      local.get $ptr local.get $old-ptr local.get $copy-size memory.copy\n"
+     "    end local.get $ptr)\n"
+     "  (func $bytes-equal (param $a i32) (param $alen i32)"
+     " (param $b i32) (param $blen i32) (result i32)\n"
+     "    (local $i i32)\n"
+     "    local.get $alen local.get $blen i32.ne if i32.const 0 return end\n"
+     "    i32.const 0 local.set $i\n"
+     "    loop $scan\n"
+     "      local.get $i local.get $alen i32.ge_u if i32.const 1 return end\n"
+     "      local.get $a local.get $i i32.add i32.load8_u\n"
+     "      local.get $b local.get $i i32.add i32.load8_u\n"
+     "      i32.ne if i32.const 0 return end\n"
+     "      local.get $i i32.const 1 i32.add local.set $i\n"
+     "      br $scan\n"
+     "    end\n"
+     "    i32.const 1)\n"
+     "  (func (export \"cm32p2||run\") (result i32)\n"
+     "    (local $ret i32) (local $failidx i32) (local $ok i32)\n"
+     "    i32.const -1 local.set $failidx\n"
+     (apply str (map-indexed step-wat steps))
+     "    local.get $failidx)\n"
+     "  (func (export \"cm32p2||run_post\") (param i32)\n"
+     "    i32.const " arena-base " global.set $next)\n"
+     "  (func (export \"cm32p2_initialize\") i32.const " arena-base " global.set $next)\n"
+     data-segments
+     ")\n")))
+
+(defn- package-state-full-capacity-driver
+  "`package-state-driver`'s own full-capacity counterpart -- `state-driver-
+  wit` is reused UNCHANGED (the WIT shape is identical, only the WASM body
+  differs)."
+  [steps result-descriptor schemas]
+  (let [wit (state-driver-wit)
+        core-wat (state-full-capacity-driver-wat steps result-descriptor schemas)
+        dir (Files/createTempDirectory "kotoba-state-full-capacity-driver-"
+                                       (make-array FileAttribute 0))
+        world (.resolve dir "driver.wit") core (.resolve dir "driver.wasm")
+        embedded (.resolve dir "embedded.wasm") component (.resolve dir "driver.component.wasm")]
+    (try
+      (Files/writeString world wit (make-array java.nio.file.OpenOption 0))
+      (Files/write core (wasm-tools/parse-wat core-wat) (make-array java.nio.file.OpenOption 0))
+      (wasm-tools/run-command! ["wasm-tools" "component" "embed" (str world) (str core)
+                                "--encoding" "utf8" "-o" (str embedded)])
+      (wasm-tools/run-command! ["wasm-tools" "component" "new" (str embedded)
+                                "--reject-legacy-names" "-o" (str component)])
+      {:format :wasm-component/v1 :imports [:state/transact]
+       :bytes (Files/readAllBytes component)}
+      (finally
+        (doseq [path [component embedded core world]] (Files/deleteIfExists path))
+        (Files/deleteIfExists dir)))))
+
+(deftest state-real-provider-full-capacity-driver-closes-and-validates
+  ;; ADR 0061: the full-capacity counterpart to `state-stateful-sequence-
+  ;; driver-closes-and-validates` above, at the PRODUCTION default capacity
+  ;; (`component-core/state-provider-table-capacity`, `256` as of this ADR --
+  ;; passed IMPLICITLY here via `package-state-provider`'s own default, so
+  ;; this deftest exercises exactly what a real caller gets without passing
+  ;; `capacity` at all). `state-full-capacity-steps` generates 256
+  ;; sequential `put`s on 256 DISTINCT keys (filling the table exactly to
+  ;; capacity), a 257th DISTINCT key rejected with `error{code:
+  ;; "state/capacity"}`, an EXISTING key (`key0`) still succeeding once
+  ;; full, `get`/`delete` on the LAST-filled slot (`key255`, the 256th
+  ;; slot -- proving the unrolled scan is genuinely complete across the full
+  ;; range, not silently truncated), and a final `put` for the
+  ;; previously-rejected key succeeding once that slot frees. This deftest
+  ;; proves composition and `wasm-tools validate` only, matching every ADR
+  ;; in this chain's own test-suite/manual-evidence split; the real
+  ;; Wasmtime execution and its resulting first-failing-step index
+  ;; (expected `-1`, meaning every one of the 262 checks passed) are
+  ;; recorded in ADR 0061's own Evidence section.
+  (let [{:keys [result-descriptor schemas]} (state-v1-descriptors)
+        steps (state-full-capacity-steps component-core/state-provider-table-capacity)
+        driver (package-state-full-capacity-driver steps result-descriptor schemas)
+        provider (composition/package-state-provider
+                  :state/transact (:descriptor (state-v1-descriptors))
+                  result-descriptor schemas)
+        closed (composition/compose-closed driver [provider])]
+    (is (= 256 component-core/state-provider-table-capacity))
+    (is (= (+ component-core/state-provider-table-capacity 6) (count steps)))
+    (is (= :wasm-component-provider/v1 (:format provider)))
+    (is (= :wasm-component-closed/v1 (:format closed)))
+    (is (= [0 97 115 109 13 0 1 0]
+           (mapv #(bit-and (int %) 0xff) (take 8 (:bytes closed)))))))
