@@ -999,6 +999,28 @@
                     (desugar-expr default)
                     (reverse pairs))))))
 
+(defn- literal-code-points [s]
+  #?(:clj (vec (.toArray (.codePoints ^String s)))
+     :cljs (vec (js/Array.from s))))
+
+(defn- code-points->string [points]
+  #?(:clj (String. (int-array points) 0 (count points))
+     :cljs (.join (clj->js points) "")))
+
+(defn- desugar-string-substring [args form]
+  (when-not (= 3 (count args))
+    (reject! "string-substring requires a string, start, and end" form))
+  (let [[s start end] args]
+    (when-not (string? s)
+      (reject! "string-substring currently requires a literal string" form))
+    (when-not (and (integer? start) (integer? end))
+      (reject! "string-substring indexes must be integer literals" form))
+    (let [points (literal-code-points s)
+          length (count points)]
+      (when-not (<= 0 start end length)
+        (reject! "string-substring indexes are out of bounds" form))
+      (code-points->string (subvec points start end)))))
+
 (defn- desugar-comparison-chain [op args form]
   (when (and (not= op '=) (empty? args))
     (reject! "ordered comparison requires at least one operand" form))
@@ -1364,6 +1386,7 @@
                             form))
                  (list 'if (desugar-expr (first args)) 0 '(quot 1 0)))
         case (desugar-case args form)
+        string-substring (desugar-string-substring args form)
         if-let (desugar-binding-if args form false)
         when-let (desugar-binding-if args form true)
         if-some (desugar-binding-some args form false)
