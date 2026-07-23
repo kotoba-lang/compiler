@@ -14,6 +14,7 @@
             [kotoba.compiler.document-value-test]
             [kotoba.compiler.string-operation-test]
             [kotoba.compiler.frontend-fuzz-test]
+            [kotoba.compiler.frontend-dotimes-test]
             [kotoba.compiler.f64-value-test]
             [kotoba.compiler.f32-value-test]
             [kotoba.compiler.frontend-limits-test]
@@ -68,6 +69,7 @@
                                           'kotoba.compiler.document-value-test
                                           'kotoba.compiler.string-operation-test
                                           'kotoba.compiler.frontend-fuzz-test
+                                          'kotoba.compiler.frontend-dotimes-test
                                           'kotoba.compiler.f64-value-test
                                           'kotoba.compiler.f32-value-test
                                           'kotoba.compiler.frontend-limits-test
