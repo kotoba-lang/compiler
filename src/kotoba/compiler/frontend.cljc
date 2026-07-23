@@ -673,6 +673,9 @@
                 :while [:while modifier-value]
                 (reject! "doseq supports only :let, :when, and :while modifiers"
                          form)))
+            (pair-sequence-form? [collection]
+              (and (seq? collection)
+                   (contains? #{'list 'cons 'rest} (first collection))))
             (parse-groups []
               (loop [tokens (seq binding) groups [] current nil]
                 (cond
@@ -686,7 +689,10 @@
                       (reject! "doseq requires [unqualified-symbol collection] binding pairs"
                                form))
                     (recur (nnext tokens) groups
-                           {:item item :collection collection :modifiers []}))
+                           {:item item
+                            :collection collection
+                            :pair-sequence? (pair-sequence-form? collection)
+                            :modifiers []}))
 
                   (keyword? (first tokens))
                   (do
@@ -702,7 +708,8 @@
                   :else
                   (reject! "doseq requires binding pairs separated only by :let/:when/:while modifiers"
                            form))))
-            (lower-group [{:keys [item collection modifiers]} group-body limit]
+            (lower-group [{:keys [item collection modifiers pair-sequence?]}
+                          group-body limit]
               (let [iteration-signal
                     (reduce
                      (fn [inner [modifier modifier-value]]
@@ -734,24 +741,52 @@
                               (list 'if block continuation 0))
                             0
                             (reverse blocks))
+                    pair-unrolled
+                    ((fn step [index cursor-expr]
+                       (let [cursor (gensym "doseq-cursor__")]
+                         (list 'let [cursor cursor-expr]
+                               (if (= index limit)
+                                 (list 'if (list '= cursor 0)
+                                       0
+                                       (list 'quot 1 0))
+                                 (let [next-cursor (gensym "doseq-next__")]
+                                   (list 'if (list '= cursor 0)
+                                         0
+                                         (list 'let
+                                               [next-cursor
+                                                (list 'pair-second cursor)]
+                                               (list 'if
+                                                     (list 'let
+                                                           [item (list 'pair-first cursor)]
+                                                           iteration-signal)
+                                                     (step (inc index) next-cursor)
+                                                     0))))))))
+                     0 values)
                     bounded
-                    (if (< limit value/vector-literal-item-limit)
-                      (list 'if (list '< limit length) (list 'quot 1 0) unrolled)
-                      unrolled)]
+                    (if pair-sequence?
+                      pair-unrolled
+                      (if (< limit value/vector-literal-item-limit)
+                        (list 'if (list '< limit length)
+                              (list 'quot 1 0)
+                              unrolled)
+                        unrolled))]
                 (list 'let [values collection]
-                      (list 'let [length (list 'vector-count values)]
-                            bounded))))]
+                      (if pair-sequence?
+                        bounded
+                        (list 'let [length (list 'vector-count values)]
+                              bounded)))))]
       (let [groups (parse-groups)
             group-count (count groups)]
         (when-not (<= 1 group-count 2)
           (reject! "doseq supports one binding, or two bindings capped at 16 items each"
                    form))
-        (let [limit (if (= 1 group-count)
-                      value/vector-literal-item-limit
-                      16)
-              lowered
+        (let [lowered
               (reduce (fn [inner group]
-                        (lower-group group [inner] limit))
+                        (lower-group group [inner]
+                                     (cond
+                                       (= 2 group-count) 16
+                                       (:pair-sequence? group) 32
+                                       :else value/vector-literal-item-limit)))
                       (list* 'do (concat body [0]))
                       (reverse groups))]
           (desugar-expr lowered))))))
