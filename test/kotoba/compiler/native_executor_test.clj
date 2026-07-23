@@ -52,6 +52,23 @@
            (:report result)))
     (is (<= (:started-at result) (:finished-at result)))))
 
+(deftest typed-i64-capability-call-is-qualified-on-native
+  (let [source "(defn main [] :i64 (typed-cap-call 4 :i64 :i64 41))"
+        policy {:allow #{[:cap/call 4]}}
+        {:keys [envelope trust]} (signed source policy)
+        {:keys [trust options]} (execution-options trust)
+        result (executor/execute envelope trust policy {:args []} options)]
+    (is (= {:status :ok :result 42}
+           (select-keys (:evidence result) [:status :result])))
+    (is (= #{[:cap/call 4]} (get-in envelope [:artifact :effects])))
+    (is (= '(typed-cap-call 4 :i64 :i64 41)
+           (get-in envelope [:artifact :program :functions 0 :body])))
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo #"typed values currently require"
+         (compiler/compile-source
+          "(defn main [] :string (typed-cap-call 4 :string :string \"request\"))"
+          (target) policy)))))
+
 (deftest execution-rejects-before-entering-untrusted-or-unauthorized-code
   (let [{:keys [envelope trust]} (signed "(defn main [] 42)" {:allow #{}})
         tampered (assoc-in envelope [:artifact :code 0] 255)
@@ -512,7 +529,7 @@
                    (record-get " schema " (record-new " schema " \"x\") :s))
                  (defn main [] 0)")]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                          #"typed values currently require the kotoba-script web target, typed Wasm/CLJS target, or \(native targets\) string-only or sealed-scalar-record typed features"
+                          #"qualified native string/scalar-record/i64-capability slice"
                           (compiler/compile-source source (target))))
     ;; Confirms the rejection is native-specific admission, not a generic
     ;; type error: the identical source compiles fine on the Wasm target,
