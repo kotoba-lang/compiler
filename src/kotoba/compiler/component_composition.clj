@@ -321,33 +321,43 @@
 
 (defn- asymmetric-variant-record-case-schema
   "Schema of `payload-type` when it is `[:ref name]` to a sealed all-scalar
-  record (the ADR 0052 shape) ONLY -- the provider-side admission twin of
-  `kotoba.compiler.component-core/asymmetric-variant-capability-case?`
-  (ADR 0058), deliberately narrower than `variant-record-case-schema` (which
-  also admits a string/keyword-bearing record field, ADR 0057): the
-  different-identity crossing does not admit a string/keyword leaf on
-  either side, see that function's own docstring for why. Reuses
-  `variant-case-wit-type` (scalar-only) rather than `record-field-wit-type`
-  for its own field check, exactly mirroring `sealed-scalar-record`'s own
-  scalar-only field discipline on the `component-core` side."
+  record (the ADR 0052 shape) or a bounded `string`/`keyword` leaf (the ADR
+  0053 shape, admitted for the different-identity crossing for the first
+  time in ADR 0059) -- the provider-side admission twin of
+  `kotoba.compiler.component-core/asymmetric-variant-capability-case?`.
+  Through ADR 0058 this was deliberately narrower than `variant-record-
+  case-schema` (which already admitted a string/keyword-bearing record
+  field for the SAME-identity path since ADR 0057): the different-identity
+  crossing did not yet admit a string/keyword leaf on either side. ADR 0059
+  closes exactly that gap for this (provider-side) admission twin, mirroring
+  `component-core/asymmetric-variant-capability-case?`'s own widening in
+  the same ADR -- now identical in shape to `variant-record-case-schema`
+  (reusing `record-field-wit-type`, not `variant-case-wit-type`, for its own
+  field check), kept as a SEPARATE function rather than merged into it for
+  the same reason every twin pair in this namespace stays separate: so the
+  same-identity path's own admitted set never silently narrows if this one
+  changes, and vice versa."
   [payload-type schemas]
   (when (and (vector? payload-type) (= :ref (first payload-type)))
     (let [schema (get schemas (second payload-type))]
       (when (and (vector? schema) (= :record (first schema))
                  (= (second payload-type) (second schema))
                  (seq (nth schema 2))
-                 (every? (comp variant-case-wit-type second) (nth schema 2)))
+                 (every? (comp record-field-wit-type second) (nth schema 2)))
         schema))))
 
 (defn- asymmetric-variant-case-payload-wit
   "WIT type text for one asymmetric-crossing variant case's payload: a bare
-  scalar's WIT spelling, or a sealed all-scalar record case's own WIT type
-  name -- the narrower (no string/keyword) twin of `variant-case-payload-wit`."
+  scalar's WIT spelling, or a sealed all-scalar OR string/keyword-bearing
+  record case's own WIT type name (ADR 0059 widens this from scalar-only,
+  matching `variant-case-payload-wit`'s own admitted set) -- the
+  provider-side twin of `component-core/asymmetric-variant-capability-
+  case?`."
   [payload-type schemas]
   (or (get variant-case-wit-type payload-type)
       (when-let [schema (asymmetric-variant-record-case-schema payload-type schemas)]
         (wit-name (second schema)))
-      (reject "provider variant case is not scalar or a sealed all-scalar record"
+      (reject "provider variant case is not scalar or a sealed all-scalar or string/keyword-bearing record"
               {:payload-type payload-type})))
 
 (defn- asymmetric-variant-schema-valid?
@@ -378,7 +388,22 @@
   generic `typed-cap-call` body walk already renders exactly this shape for
   the *application* side (confirmed by inspection, ADR 0055/0056/0057's own
   'no changes needed' finding extends here too); this is only the
-  provider-side counterpart."
+  provider-side counterpart. ADR 0059 fixes a latent bug this function's own
+  record-field WIT-rendering loop had (dormant until this ADR, since no
+  fixture before it ever reached a string/keyword-bearing record on this
+  path): it rendered every field type via `variant-case-wit-type`, the
+  scalar-only map with no `:string`/`:keyword` entry, which would silently
+  emit malformed WIT text (`key: ,`) for a string/keyword field rather than
+  a clear error -- `variant-referenced-record-schemas` (this function's own
+  record-collection call, unchanged since ADR 0058) already reused the
+  SAME-identity path's `variant-record-case-schema` (which already admits a
+  string/keyword-bearing record for the SAME-identity path since ADR 0057),
+  so the collected `record-schemas` could already contain a string/keyword-
+  bearing record even before ADR 0059's own admission widening, but nothing
+  before this ADR ever fed one through this specific code path exercising
+  it. Now uses `record-field-wit-type` (the same map `record-wit`/
+  `variant-wit` already use), matching every other record-field WIT
+  emission site in this namespace."
   [entry request-descriptor result-descriptor schemas]
   (when-not (and (asymmetric-variant-schema-valid? request-descriptor schemas)
                  (asymmetric-variant-schema-valid? result-descriptor schemas)
@@ -402,7 +427,7 @@
                             (apply str
                                    (map (fn [[field type]]
                                           (str "    " (wit-name field) ": "
-                                               (get variant-case-wit-type type) ",\n"))
+                                               (get record-field-wit-type type) ",\n"))
                                         fields))
                             "  }\n"))
                      record-schemas))

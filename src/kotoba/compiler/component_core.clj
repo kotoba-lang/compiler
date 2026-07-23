@@ -383,33 +383,43 @@
 
 (defn- asymmetric-variant-capability-case?
   "True when `payload-type` is a shape admitted as one variant case's payload
-  for the *different-identity* `typed-cap-call` crossing (ADR 0058): a bare
-  Canonical scalar (`i64`/`f32`/`f64`/`bool`) or a sealed all-scalar record
-  (the ADR 0052 shape) -- exactly ADR 0055's and ADR 0056's own case-kind
-  union. Deliberately narrower than `variant-capability-case?` (the same-
-  identity path, which additionally admits ADR 0057's string/keyword-
-  bearing record case): a string/keyword leaf crossing a capability boundary
-  at all already required real new allocator engineering for the SAME-
-  identity path (ADR 0057's capacity-bounded bump allocator, needed because
-  the Canonical ABI's own cross-instance string-copy glue calls a module's
-  exported `cm32p2_realloc` an unpredictable extra number of times before
-  that module's own body runs). Combining that risk with a genuinely
-  different request/result identity -- which itself requires new
-  engineering (the provider can no longer echo the request case verbatim
-  into the result area, since the two shapes are unrelated; both sides'
-  result-area sizing must be driven by the RESULT layout rather than a
-  layout shared with the request) -- in one step would not be the smallest
-  honest increment this chain's own discipline follows (ADR 0055 -> 0056 ->
-  0057 each widened by exactly one new dimension, never two at once). Also,
-  practically: because this case-kind set never carries a string/keyword
-  leaf, the different-identity crossing never triggers the Canonical ABI's
-  cross-instance string-copy glue at all, so neither side of this crossing
-  needs any string-aware memory sizing -- a plain fixed one-page module and
-  the simplest bump allocator suffice, exactly ADR 0055/0056's own pre-0057
-  precedent."
+  for the *different-identity* `typed-cap-call` crossing: a bare Canonical
+  scalar (`i64`/`f32`/`f64`/`bool`), a sealed all-scalar record (the ADR
+  0052 shape, ADR 0058), or -- new in ADR 0059 -- a sealed flat
+  string/keyword-bearing record (the ADR 0053 shape, via
+  `string-field-record-schema`), exactly `variant-capability-case?`'s own
+  (same-identity) case-kind union. This closes the exact gap ADR 0058's own
+  'Remaining gaps' named first and in these words: 'String/keyword-bearing
+  cases crossing the different-identity boundary ... this ADR deliberately
+  narrowed the different-identity crossing to exactly ADR 0055/0056's
+  scalar-or-all-scalar-record case-kind union, leaving ADR 0057's
+  string/keyword-bearing record case unattempted for this specific
+  (asymmetric) boundary.' ADR 0058 itself named the two things that gap
+  required before it could be closed: '(a) confirming the Canonical ABI's
+  cross-instance string-copy glue composes correctly when request-layout
+  and result-layout genuinely differ ... headroom is still deliberately
+  computed from the request layout alone, correct only because neither side
+  may carry a string leaf'; '(b) a provider that ... can allocate and write
+  literal string/keyword byte data for a chosen result case.' Both are
+  addressed by this ADR: (a) `variant-capability-wat`'s own memory-page
+  sizing formula below now sums REQUEST-side and RESULT-side string
+  headroom independently rather than assuming one side alone always
+  suffices; (b) `asymmetric-variant-capability-provider-wat` gains
+  `plan-result-string-data`, embedding one fixed compile-time literal per
+  string/keyword RESULT leaf as a `(data ...)` segment (the provider's
+  fixed-constant dispatch was already never derived from any request
+  payload value, so a fixed literal string is the same 'wiring only, not
+  semantic' framing ADR 0058's own numeric constants already used, merely
+  widened to a leaf kind that cannot be a bare numeric immediate). This
+  ADR does NOT widen the case-kind set further than `variant-capability-
+  case?` already established for the same-identity path -- a case wrapping
+  an ADR 0051 one-level-nested record, or a bare `:string`/`:keyword` case
+  payload with no record wrapper, remain fail-closed here exactly as they
+  do there."
   [payload-type schemas]
   (or (contains? #{:i64 :f32 :f64 :bool} payload-type)
-      (boolean (sealed-scalar-record payload-type schemas))))
+      (boolean (sealed-scalar-record payload-type schemas))
+      (boolean (string-field-record-schema payload-type schemas))))
 
 (defn- asymmetric-variant-capability-schema
   "Schema of `descriptor` when it is a sealed variant whose every case's
@@ -747,6 +757,43 @@
   [(variant-flat-value-expr joined-types (:flat-index leaf) :i32)
    (variant-flat-value-expr joined-types (inc (:flat-index leaf)) :i32)])
 
+(defn- variant-case-validation
+  "Just the validation half of one active variant case's leaves (bool
+  range-check, and, since ADR 0054, string/keyword length-against-
+  `:max-bytes` plus pointer-range-against-`capacity` -- exactly
+  `string-field-record-wat`'s `validate-parameters` shape), with no
+  result-area store at all. Factored out of `variant-case-body` in ADR 0059
+  so a second caller can run validation alone: `asymmetric-variant-
+  capability-provider-wat`'s own REQUEST-side dispatch (new in ADR 0059)
+  needs to validate the ACTIVE REQUEST case's own leaves against their
+  Kotoba-declared bounds even though that provider never stores or reads
+  their VALUES (it only ever writes a fixed, request-independent RESULT
+  constant) -- without this, an oversized request string/keyword leaf would
+  silently flow through the crossing unchecked simply because this
+  provider has no other reason to touch it, breaking every prior ADR's
+  fail-closed discipline for the byte bounds. `variant-case-body` itself is
+  unchanged in observable behavior: it now calls this function for its own
+  validation half rather than duplicating the logic inline (confirmed by
+  the ADR 0055/0056/0057/0058 identity/same-identity fixtures' unchanged
+  round trips after this refactor -- see Evidence)."
+  [joined-types capacity leaves]
+  (apply str
+         (keep (fn [leaf]
+                 (cond
+                   (:max-bytes leaf)
+                   (let [[pointer length] (variant-string-leaf-value-exprs joined-types leaf)]
+                     (str
+                      "      " length " i32.const " (:max-bytes leaf)
+                      " i32.gt_u if unreachable end\n"
+                      "      " pointer " " length " i32.add\n"
+                      "      local.tee $end " pointer " i32.lt_u if unreachable end\n"
+                      "      local.get $end i32.const " capacity " i32.gt_u if unreachable end\n"))
+                   (= :bool (:descriptor leaf))
+                   (str "      " (variant-payload-value-expr joined-types leaf)
+                        " i32.const 1 i32.gt_u if unreachable end\n")
+                   :else nil))
+               leaves)))
+
 (defn- variant-case-body
   "The validation and result-area stores for one active variant case,
   covering three leaf shapes now: a plain scalar leaf (unchanged from ADR
@@ -758,25 +805,11 @@
   this case's own branch only, matching the existing bool-validation
   precedent: validating a shared joined position unconditionally, before
   knowing which case is active, would wrongly reject a legitimate payload
-  belonging to a different case occupying the same position."
+  belonging to a different case occupying the same position. The
+  validation half is `variant-case-validation` (ADR 0059 factors it out for
+  reuse); this function adds the store half."
   [payload-offset joined-types capacity leaves]
-  (let [validation
-        (apply str
-               (keep (fn [leaf]
-                       (cond
-                         (:max-bytes leaf)
-                         (let [[pointer length] (variant-string-leaf-value-exprs joined-types leaf)]
-                           (str
-                            "      " length " i32.const " (:max-bytes leaf)
-                            " i32.gt_u if unreachable end\n"
-                            "      " pointer " " length " i32.add\n"
-                            "      local.tee $end " pointer " i32.lt_u if unreachable end\n"
-                            "      local.get $end i32.const " capacity " i32.gt_u if unreachable end\n"))
-                         (= :bool (:descriptor leaf))
-                         (str "      " (variant-payload-value-expr joined-types leaf)
-                              " i32.const 1 i32.gt_u if unreachable end\n")
-                         :else nil))
-                     leaves))
+  (let [validation (variant-case-validation joined-types capacity leaves)
         stores
         (apply str
                (map (fn [leaf]
@@ -1303,6 +1336,18 @@
      "    i32.const 8 global.set $next)\n"
      "  (func (export \"cm32p2_initialize\") i32.const 8 global.set $next))\n")))
 
+(defn- max-string-leaves-per-case
+  "The widest single case's own string/keyword-leaf count in `variant-
+  layout` -- the shared measurement every capability-crossing variant's
+  string-aware memory-sizing formula keys off (`variant-capability-string-
+  headroom`, and, new in ADR 0059, `string-headroom-bytes`/`asymmetric-
+  variant-capability-provider-wat`'s own independent per-side sizing),
+  factored out here so both call sites compute it identically rather than
+  re-deriving it."
+  [variant-layout]
+  (let [case-leaves (mapv (fn [case] (variant-case-leaves (:layout case))) (:cases variant-layout))]
+    (reduce max 0 (map #(count (filter :max-bytes %)) case-leaves))))
+
 (defn- variant-capability-string-headroom
   "`[pages capacity needs-string-headroom?]` for a capability-crossing
   variant layout, the capability-call twin of `variant-wat`'s own generous-
@@ -1318,17 +1363,47 @@
   the request's string bytes once they cross in, *and* leave room for its
   own result struct) need the same string-aware sizing `string-field-record-
   wat`/`variant-wat` already established, reused here rather than
-  re-derived."
+  re-derived. Unchanged by ADR 0059 -- still used as-is by the SAME-identity
+  path (`variant-capability-provider-wat`), where request-layout and
+  result-layout are structurally identical so a single shared measurement is
+  correct by construction; the DIFFERENT-identity path now uses
+  `string-headroom-bytes` below instead, precisely because that coincidence
+  no longer holds there."
   [variant-layout]
-  (let [case-leaves (mapv (fn [case] (variant-case-leaves (:layout case))) (:cases variant-layout))
-        max-string-leaves-per-case (reduce max 0 (map #(count (filter :max-bytes %)) case-leaves))
-        needs-string-headroom? (pos? max-string-leaves-per-case)
+  (let [leaves-per-case (max-string-leaves-per-case variant-layout)
+        needs-string-headroom? (pos? leaves-per-case)
         pages (if needs-string-headroom?
-                (max 1 (quot (+ 8 (* (inc max-string-leaves-per-case) 65536)
+                (max 1 (quot (+ 8 (* (inc leaves-per-case) 65536)
                                 (:size variant-layout) 65535)
                              65536))
                 1)]
     [pages (* pages 65536) needs-string-headroom?]))
+
+(defn- string-headroom-bytes
+  "Generous-not-tight extra byte headroom one side (request OR result) of a
+  capability-crossing variant needs for its OWN string/keyword leaves to be
+  copied through the Canonical ABI's cross-instance string-lowering glue --
+  `(inc (max-string-leaves-per-case layout)) * 65536` if that side ever
+  carries a string/keyword leaf in any case, `0` otherwise. New in ADR 0059:
+  factored out of `variant-capability-string-headroom`'s own combined
+  `[pages capacity needs?]` formula so REQUEST-side and RESULT-side headroom
+  can be computed independently. `variant-capability-wat` (application side)
+  sums BOTH sides' amounts, because its own memory arena is shared, in one
+  call, between whatever a caller pre-populates for the REQUEST's own
+  string bytes (this module's `cm32p2_realloc` is the one a caller/harness
+  must use to write them, exactly as every prior fixture in this ADR chain
+  already required) and this module's OWN RESULT-string headroom (consumed
+  afterward, when the crossing lowers the provider's result back into this
+  module's memory) -- both draw from the same bump arena sequentially, so
+  the declared capacity must cover both, not just the larger one.
+  `asymmetric-variant-capability-provider-wat` (provider side) uses only the
+  REQUEST-side amount from this function (for the glue's own copy-in), plus
+  a *separate*, fixed (not realloc'd) allocation for its own literal RESULT
+  string/keyword constants -- see `plan-result-string-data`'s own
+  `:arena-base`, not this function, for that side."
+  [layout]
+  (let [n (max-string-leaves-per-case layout)]
+    (if (pos? n) (* (inc n) 65536) 0)))
 
 (defn- bounded-bump-realloc-wat
   "A real bounded bump allocator (`$next`-tracked, alignment-respecting,
@@ -1423,22 +1498,50 @@
   not merely for symmetry; for the same-identity case it is a no-op
   (`request-layout` and `result-layout` are structurally `=`, confirmed by
   rebuilding and re-running the ADR 0055/0056/0057 fixtures unchanged
-  through this generalized function). The joined param signature and
-  string headroom are still sized from the REQUEST layout only, unchanged:
-  this module forwards the request's own joined payload values to the
-  import exactly as before, and (per `asymmetric-variant-capability-case?`'s
-  own docstring) the different-identity path never admits a string/keyword
-  leaf on either side, so request-only headroom sizing remains correct for
-  it too -- a genuinely wider future slice that combines asymmetry with
-  string/keyword crossing would need to revisit this, and is explicitly not
-  attempted here."
+  through this generalized function). The joined param signature is still
+  sized from the REQUEST layout only, unchanged: this module forwards the
+  request's own joined payload values to the import exactly as before.
+
+  ADR 0059 fixes the remaining half of the same coincidence ADR 0058 left
+  standing: memory-PAGE sizing (as opposed to the `$realloc` call's own
+  struct SIZE, already fixed by ADR 0058) was still `(variant-capability-
+  string-headroom request-layout)` alone -- correct for ADR 0055/0056/0057
+  (request-layout = result-layout there) and for ADR 0058's own scope
+  (neither side ever carried a string/keyword leaf), but wrong in general:
+  this module's OWN declared memory is the ONLY memory a caller/harness can
+  write a REQUEST string's bytes into (via this module's own exported
+  `cm32p2_realloc`, exactly as every prior string-bearing fixture in this
+  chain already required) *and* the memory this module's OWN `$realloc`
+  must have room in when the crossing later lowers a RESULT string's bytes
+  back into it (ADR 0057's own finding, restated in this function's own
+  docstring above) -- two genuinely different consumers of the SAME shared
+  arena within one call, now that a string/keyword leaf can appear on
+  EITHER side independently. `string-headroom-bytes` is computed separately
+  for `request-layout` and `result-layout` and SUMMED (not maxed): both
+  amounts are real, sequential draws against the one arena within a single
+  call (a caller populating a request string, THEN this module's own
+  result-string headroom later), so the declared capacity must cover both
+  at once, not merely the larger of the two. This is a strict widening,
+  never a regression: when neither side carries a string/keyword leaf both
+  summands are `0` and the formula reduces to exactly the prior one-page
+  result (confirmed by rebuilding and re-running the ADR 0055/0056/0057/
+  0058 no-string and scalar/record-only fixtures unchanged through this
+  function -- see Evidence)."
   [function schemas plan]
   (let [export (wit-name (:name function))
         capability (:capability plan)
         request-layout (canonical/layout (:request plan) schemas)
         result-layout (canonical/layout (:result plan) schemas)
         joined-types (vec (rest (:flat request-layout)))
-        [pages capacity _] (variant-capability-string-headroom request-layout)
+        request-headroom-bytes (string-headroom-bytes request-layout)
+        result-headroom-bytes (string-headroom-bytes result-layout)
+        needs-headroom? (or (pos? request-headroom-bytes) (pos? result-headroom-bytes))
+        pages (if needs-headroom?
+                (max 1 (quot (+ 8 request-headroom-bytes result-headroom-bytes
+                                (:size result-layout) 65535)
+                             65536))
+                1)
+        capacity (* pages 65536)
         payload-params (apply str
                               (map (fn [core-type] (str " (param " (core-type-name core-type) ")"))
                                    joined-types))
@@ -1546,7 +1649,7 @@
      "  (func (export \"cm32p2_initialize\") i32.const 8 global.set $next))\n")))
 
 (defn- constant-leaf-wat
-  "A deterministic literal WAT push instruction for one Canonical scalar leaf
+  "A deterministic literal WAT push instruction for one Canonical SCALAR leaf
   of an asymmetric provider's fixed result payload (ADR 0058), distinct per
   `(case-index, leaf-index)` pair so a real round trip can tell two
   different chosen result cases -- and two different leaves within the same
@@ -1556,7 +1659,12 @@
   value is never derived from any request payload leaf -- only from the
   chosen result case's own static index and the leaf's own position within
   it -- matching `asymmetric-variant-capability-provider-wat`'s own
-  'wiring-only, not semantic' framing."
+  'wiring-only, not semantic' framing. Scalar-only, unchanged by ADR 0059: a
+  string/keyword leaf cannot be a literal WAT push instruction at all (it is
+  a pointer+length pair into linear memory, not a single core value) and
+  uses `deterministic-constant-string`/`plan-result-string-data` instead --
+  see `asymmetric-result-case-store`, the caller that dispatches between the
+  two."
   [descriptor case-index leaf-index]
   (let [n (+ (* case-index 101) (* leaf-index 7) 3)]
     (case descriptor
@@ -1565,20 +1673,87 @@
       :f32 (str "f32.const " n)
       :f64 (str "f64.const " n))))
 
+(defn- deterministic-constant-string
+  "Deterministic literal UTF-8 content for one asymmetric provider's fixed
+  string/keyword RESULT leaf (new in ADR 0059), the string/keyword-leaf
+  counterpart to `constant-leaf-wat`'s own scalar-leaf constants and
+  distinct per `(case-index, leaf-index)` pair for the identical reason:
+  so a real round trip can tell two different chosen result cases, and two
+  different leaves within the same case, apart. Deliberately small (a short
+  fixed label, always well under either Kotoba byte bound --
+  `keyword-value-byte-limit`/`string-value-byte-limit`) because this
+  content is a compile-time literal this function itself generates and can
+  never grow past what this ADR chooses to emit; unlike a REQUEST leaf's
+  own bound, which a real caller controls and this ADR's new request-side
+  validation (`asymmetric-request-validation-chain`) checks for real, a
+  RESULT leaf's own bound is trivially satisfied by construction and is not
+  independently exercised as a trap -- see this ADR's own Evidence/Remaining
+  gaps for why that asymmetry is honest rather than an oversight."
+  [case-index leaf-index]
+  (str "kotoba/state-case-" case-index "-leaf-" leaf-index))
+
+(defn- plan-result-string-data
+  "`{:segments {[case-index leaf-index] {:pointer :length}} :data-wat
+  <string> :arena-base <int>}` for every RESULT case's own string/keyword
+  leaf (new in ADR 0059) -- walks `cases` (`(:cases result-layout)`) via
+  `variant-case-leaves` (unmodified) exactly as `asymmetric-result-case-
+  store` itself will, so `leaf-index` here and there always agree, and
+  assigns each string/keyword leaf a FIXED, sequential, 8-byte-aligned
+  data-segment address plus its own `deterministic-constant-string` bytes
+  -- embedded exactly like `string-expression-wat`'s own literal-string data
+  segments (a fixed address, since the content is a compile-time constant
+  that needs no runtime allocation at all, unlike a REQUEST leaf's bytes,
+  which genuinely must be realloc'd because they arrive from an unknown
+  caller). `:arena-base` is where this module's own dynamic bump allocator
+  ($next`'s initial value, and what `_post`/`cm32p2_initialize` reset it
+  back to) must start, strictly after every literal segment -- exactly
+  `prepare-leaves`'s own arena-base convention in `string-expression-wat`,
+  reused here for the same reason. A case set with no string/keyword leaf
+  anywhere (every ADR 0058 fixture) produces `{:segments {} :data-wat \"\"
+  :arena-base 8}`, identical to the fixed `i32.const 8` this function's
+  caller hard-coded before this ADR -- confirmed by rebuilding and
+  re-running the ADR 0058 fixtures through the changed function (see
+  Evidence)."
+  [cases]
+  (let [entries (for [[case-index case] (map-indexed vector cases)
+                       [leaf-index leaf] (map-indexed vector (variant-case-leaves (:layout case)))
+                       :when (:max-bytes leaf)]
+                   [case-index leaf-index])]
+    (loop [remaining entries offset 8 segments {} data-wat ""]
+      (if-let [[case-index leaf-index] (first remaining)]
+        (let [content (deterministic-constant-string case-index leaf-index)
+              bytes (vec (.getBytes ^String content "UTF-8"))]
+          (recur (next remaining) (+ offset (count bytes))
+                 (assoc segments [case-index leaf-index]
+                        {:pointer offset :length (count bytes)})
+                 (str data-wat "  (data (i32.const " offset ") \"" (wat-data bytes) "\")\n")))
+        {:segments segments :data-wat data-wat :arena-base (align-up offset 8)}))))
+
 (defn- asymmetric-result-case-store
   "The stores for one RESULT case's own fixed constant payload, reusing
-  `variant-case-leaves` (unmodified) to find each leaf's own relative offset
-  and descriptor -- exactly `variant-case-body`'s store half, with
-  `constant-leaf-wat` standing in for a request-derived value and no
-  validation at all (a compile-time constant is trivially in-bounds)."
-  [result-payload-offset case-index layout]
+  `variant-case-leaves` (unmodified) to find each leaf's own relative
+  offset, descriptor, and (new in ADR 0059) `:max-bytes` -- exactly
+  `variant-case-body`'s store half, with `constant-leaf-wat` standing in
+  for a scalar leaf's request-derived value and, new here, a FIXED
+  pointer+length pair (from `string-segments`, `plan-result-string-data`'s
+  own output) standing in for a string/keyword leaf's -- no validation at
+  all for either kind, since a compile-time constant (scalar OR the fixed
+  data-segment address of a compile-time literal string) is trivially
+  in-bounds by construction."
+  [result-payload-offset case-index layout string-segments]
   (let [leaves (variant-case-leaves layout)]
     (apply str
            (map-indexed
-            (fn [leaf-index {:keys [relative-offset descriptor]}]
-              (str "      local.get $ret " (constant-leaf-wat descriptor case-index leaf-index)
-                   " " (wasm-store descriptor)
-                   " offset=" (+ result-payload-offset relative-offset) "\n"))
+            (fn [leaf-index {:keys [relative-offset descriptor max-bytes]}]
+              (let [offset (+ result-payload-offset relative-offset)]
+                (if max-bytes
+                  (let [{:keys [pointer length]} (get string-segments [case-index leaf-index])]
+                    (str "      local.get $ret i32.const " pointer " i32.store offset=" offset "\n"
+                         "      local.get $ret i32.const " length " i32.store offset="
+                         (+ offset 4) "\n"))
+                  (str "      local.get $ret " (constant-leaf-wat descriptor case-index leaf-index)
+                       " " (wasm-store descriptor)
+                       " offset=" offset "\n"))))
             leaves))))
 
 (defn- asymmetric-provider-dispatch-chain
@@ -1589,12 +1764,16 @@
   result-cases))`, so every request case maps to some valid result case
   even when the two case counts differ (e.g. `state-v1`'s own 3 request
   cases vs. 5 result cases), and every possible request discriminant is
-  provably distinguishable in a round trip (`constant-leaf-wat` varies by
-  the chosen output case's own index). This is wiring-only, not a semantic
-  mapping: no request PAYLOAD leaf value is ever read here, only the
-  request's own discriminant (already range-checked by the caller before
-  this chain runs), to select purely which fixed result case gets written."
-  [request-case-count result-cases result-disc-size result-payload-offset]
+  provably distinguishable in a round trip (`constant-leaf-wat`/
+  `deterministic-constant-string` each vary by the chosen output case's own
+  index). This is wiring-only, not a semantic mapping: no request PAYLOAD
+  leaf value is ever read here, only the request's own discriminant
+  (already range-checked by the caller before this chain runs), to select
+  purely which fixed result case gets written. `string-segments` (new in
+  ADR 0059, `plan-result-string-data`'s own output) is threaded straight
+  through to `asymmetric-result-case-store`, unused by this function
+  itself."
+  [request-case-count result-cases result-disc-size result-payload-offset string-segments]
   (let [result-case-count (count result-cases)]
     (letfn [(build [index]
               (let [output-index (mod index result-case-count)
@@ -1602,7 +1781,7 @@
                     body (str "      local.get $ret i32.const " output-index " "
                               (variant-disc-store result-disc-size) " offset=0\n"
                               (asymmetric-result-case-store result-payload-offset output-index
-                                                            output-layout))]
+                                                            output-layout string-segments))]
                 (if (= index (dec request-case-count))
                   body
                   (str "    local.get $disc i32.const " index " i32.eq\n"
@@ -1611,35 +1790,84 @@
                        "    end\n"))))]
       (build 0))))
 
+(defn- asymmetric-request-validation-chain
+  "The nested `if`/`else` chain, dispatched on the REQUEST's own
+  discriminant, that VALIDATES (and never stores) the active REQUEST case's
+  own leaves against their Kotoba-declared bounds (`variant-case-
+  validation`) -- new in ADR 0059, needed for the first time now that a
+  REQUEST case admitted by `asymmetric-variant-capability-case?` can carry
+  a string/keyword leaf: `asymmetric-variant-capability-provider-wat` never
+  reads or stores any request payload VALUE (see its own docstring, `it
+  range-checks the request discriminant, never reads any request PAYLOAD
+  leaf`), so without this chain an oversized request string/keyword leaf
+  would cross the boundary entirely unchecked, breaking every prior ADR's
+  fail-closed byte-bound discipline for no reason other than this
+  provider's own dispatch having no other cause to touch the leaf's value.
+  Mirrors `variant-case-chain`'s own dispatch shape exactly, substituting
+  `variant-case-validation` for `variant-case-body` (validation only, no
+  store, so no `$ret`/result-area dependency at all -- this chain can run
+  entirely before `$ret` is even allocated)."
+  [request-cases joined-types capacity]
+  (letfn [(build [remaining index]
+            (let [leaves (variant-case-leaves (:layout (first remaining)))
+                  body (variant-case-validation joined-types capacity leaves)]
+              (if (= 1 (count remaining))
+                body
+                (str "    local.get $disc i32.const " index " i32.eq\n"
+                     "    if\n" body
+                     "    else\n" (build (rest remaining) (inc index))
+                     "    end\n"))))]
+    (build request-cases 0)))
+
 (defn asymmetric-variant-capability-provider-wat
   "Wiring-only provider core module for a `typed-cap-call` whose request and
   result are two genuinely DIFFERENT sealed variant identities (ADR 0058),
-  each independently admitted by `asymmetric-variant-capability-schema`
-  (scalar or sealed all-scalar record cases only -- string/keyword-bearing
-  cases are out of scope for this crossing, see that function's own
-  docstring for why). Unlike `variant-capability-provider-wat` (whose whole
-  semantic IS echoing the active request case verbatim into a result area
-  of the identical shape, only meaningful when request and result share one
-  schema), this provider cannot echo a request case into a result case of a
-  genuinely different, unrelated shape. It is a deliberately simple,
-  explicitly non-semantic wiring fixture instead, matching the task's own
-  framing exactly: it range-checks the request discriminant, never reads
-  any request PAYLOAD leaf, and writes one of the result variant's own
-  cases with a fixed compile-time-constant payload, chosen deterministically
-  from the request's own discriminant alone
-  (`asymmetric-provider-dispatch-chain`) -- this is NOT `state`'s real
-  semantics (no request payload value ever informs the result's own value,
-  only which case is chosen), exactly the same 'wiring only' framing every
-  prior capability-call ADR's own identity provider already carried, now
-  applied to a provider that (unlike an identity provider) cannot even in
-  principle be semantically neutral, because request and result are
-  different types. Because neither admitted case kind in this slice ever
-  carries a string/keyword leaf, the Canonical ABI's own cross-instance
-  string-copy glue never triggers for this crossing, so this module needs
-  none of `variant-capability-provider-wat`'s ADR 0057 headroom-sizing
-  machinery -- a fixed one page and the simplest bump realloc
-  (`bounded-bump-realloc-wat` with a flat 65536-byte capacity) suffice,
-  matching ADR 0055/0056's own pre-0057 precedent."
+  each independently admitted by `asymmetric-variant-capability-schema`,
+  which since ADR 0059 also admits ADR 0057's sealed flat string/keyword-
+  bearing record case (`asymmetric-variant-capability-case?`'s own
+  docstring records the reasoning). Unlike `variant-capability-provider-wat`
+  (whose whole semantic IS echoing the active request case verbatim into a
+  result area of the identical shape, only meaningful when request and
+  result share one schema), this provider cannot echo a request case into a
+  result case of a genuinely different, unrelated shape. It is a
+  deliberately simple, explicitly non-semantic wiring fixture instead,
+  matching the task's own framing exactly: it validates (ADR 0059) but
+  never reads for its own purposes any request PAYLOAD leaf, and writes one
+  of the result variant's own cases with a fixed compile-time-constant
+  payload, chosen deterministically from the request's own discriminant
+  alone (`asymmetric-provider-dispatch-chain`) -- this is NOT `state`'s
+  real semantics (no request payload value ever informs the result's own
+  value, only which case is chosen), exactly the same 'wiring only' framing
+  every prior capability-call ADR's own identity provider already carried,
+  now applied to a provider that (unlike an identity provider) cannot even
+  in principle be semantically neutral, because request and result are
+  different types.
+
+  ADR 0059's own new engineering, precisely: (1) `plan-result-string-data`
+  embeds one fixed `(data ...)` literal per string/keyword RESULT leaf
+  (across every result case, not only the ones this dispatch's own `mod`
+  arithmetic happens to reach, so this module stays correct regardless of
+  case-count-ratio reachability), with the module's own dynamic bump
+  allocator ($next`) starting strictly after that fixed region
+  (`:arena-base`, not the old hard-coded `8`) -- a compile-time literal
+  needs no runtime allocation, unlike a copied-in REQUEST string, so this is
+  a FIXED allocation, not routed through `$realloc` at all. (2) This
+  module's own memory/page count must still independently accommodate the
+  Canonical ABI's own cross-instance string-copy glue calling this module's
+  *exported* `cm32p2_realloc` once per string-like leaf in the ACTIVE
+  REQUEST case, before this module's own body runs at all -- exactly ADR
+  0057's own finding, now reached for the asymmetric path for the first
+  time -- so total capacity is `arena-base` (fixed literal region) PLUS
+  `(string-headroom-bytes request-layout)` (glue-driven copy-in headroom)
+  PLUS the result struct's own `:size`, generalizing the flat one-page/
+  65536-byte constant ADR 0058 used (a true no-op when neither `arena-base`
+  exceeds 8 nor the request carries a string leaf -- confirmed by
+  rebuilding and re-running the ADR 0058 fixtures unchanged through this
+  function). (3) `asymmetric-request-validation-chain` validates (but never
+  stores) the active REQUEST case's own leaves against their Kotoba bounds
+  -- see that function's own docstring for why this is necessary now,
+  unlike before ADR 0059 when no request case could ever carry a
+  string/keyword leaf at all."
   [entry request-descriptor result-descriptor schemas]
   (let [export (str "cm32p2|kotoba:application/" (:interface entry) "@1|" (:function entry))
         request-layout (canonical/layout request-descriptor schemas)
@@ -1651,24 +1879,36 @@
                              (fn [index core-type]
                                (str " (param $p" index " " (core-type-name core-type) ")"))
                              joined-types)))
+        {:keys [segments data-wat arena-base]} (plan-result-string-data (:cases result-layout))
+        request-headroom-bytes (string-headroom-bytes request-layout)
+        needs-request-validation? (pos? request-headroom-bytes)
+        required-bytes (+ arena-base request-headroom-bytes (:size result-layout))
+        pages (max 1 (quot (+ required-bytes 65535) 65536))
+        capacity (* pages 65536)
+        validation (when needs-request-validation?
+                     (asymmetric-request-validation-chain (:cases request-layout) joined-types capacity))
         dispatch (asymmetric-provider-dispatch-chain
                   (count (:cases request-layout)) (:cases result-layout)
-                  (:discriminant-size result-layout) (:payload-offset result-layout))]
+                  (:discriminant-size result-layout) (:payload-offset result-layout)
+                  segments)]
     (str
      "(module\n"
-     "  (memory (export \"cm32p2_memory\") 1 1)\n"
-     "  (global $next (mut i32) (i32.const 8))\n"
-     (bounded-bump-realloc-wat 65536)
+     "  (memory (export \"cm32p2_memory\") " pages " " pages ")\n"
+     "  (global $next (mut i32) (i32.const " arena-base "))\n"
+     (bounded-bump-realloc-wat capacity)
      "  (func (export \"" export "\")" params " (result i32)\n"
-     "    (local $ret i32)\n"
+     "    (local $ret i32)" (when needs-request-validation? " (local $end i32)") "\n"
      "    local.get $disc i32.const " (count (:cases request-layout)) " i32.ge_u if unreachable end\n"
+     validation
      "    i32.const 0 i32.const 0 i32.const " (:alignment result-layout)
      " i32.const " (:size result-layout) " call $realloc local.set $ret\n"
      dispatch
      "    local.get $ret)\n"
      "  (func (export \"" export "_post\") (param i32)\n"
-     "    i32.const 8 global.set $next)\n"
-     "  (func (export \"cm32p2_initialize\") i32.const 8 global.set $next))\n")))
+     "    i32.const " arena-base " global.set $next)\n"
+     "  (func (export \"cm32p2_initialize\") i32.const " arena-base " global.set $next)\n"
+     data-wat
+     ")\n")))
 
 (defn emit [kir target]
   (case (assert-supported! kir)

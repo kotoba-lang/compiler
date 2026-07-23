@@ -270,6 +270,44 @@ real `:keyword`/`:string` fields. `state-v1` is still not closed end to
 end: a string/keyword-bearing case crossing this specific (different-
 identity) boundary, and a real production `state` provider, both remain
 unattempted; no capability kit's `:wasm-aot` qualification changed.
+The different-identity (asymmetric) `typed-cap-call` crossing now also
+admits ADR 0057's sealed flat string/keyword-bearing record case on EITHER
+side (ADR 0059), closing exactly the gap ADR 0058's own "Remaining gaps"
+named first. Combined with ADR 0058's own different-identity admission,
+this reaches `state-v1.edn`'s own literal `:request`/`:result` EDN exactly
+for the first time in this ADR chain -- `descriptor`/`result-descriptor`/
+`schemas` derived programmatically (a pure structural re-nesting, not a
+hand transcription) from the real resource file, composed successfully,
+`wasm-tools validate` passed, and real Wasmtime 42.0.1 execution round-
+tripped `get`/`put`/`delete` requests (including multi-byte UTF-8 in both a
+keyword and a string leaf) to `found`/`missing`/`written` results (`found`
+and `written` correctly sharing one `entry` record type at different
+output-case indices), with both Kotoba byte bounds (512-byte keyword,
+65536-byte string) exercised as genuine Wasmtime traps on the request side
+for the first time on this boundary. Two real memory-sizing fixes were
+required, matching the task's own suspicion that the existing formula would
+not simply carry over: the application module's memory-page headroom is
+now the SUM (not the max, and no longer sized from the request side alone)
+of independently-computed request-side and result-side string headroom,
+since both are real sequential draws against the one shared arena within a
+single call; the provider module gains a genuinely new allocation kind
+(`plan-result-string-data`, fixed compile-time `(data ...)` segments for
+its own literal string/keyword RESULT constants, distinct from the
+REQUEST-side headroom it separately needs for the Canonical ABI's own
+cross-instance copy-in glue). A new request-side-only validation chain
+(`asymmetric-request-validation-chain`) was also added so an oversized
+request string/keyword leaf still traps even though this wiring-only
+provider never otherwise reads the value. `state-v1` is closed at the ABI-
+crossing layer only, not as a usable capability: a real production `state`
+provider remains entirely unattempted (this provider is, if anything,
+further from real semantics than ever -- its result content is a
+compile-time literal, not derived from any request value), and
+`component-composition.clj`'s own `:ref`-only discipline for a variant
+case's record payload still does not accept `state-v1.edn`'s own literal
+inline-`:record`-in-a-case representation directly (reached here only via a
+test-only structural converter into this codebase's established
+`:ref`+`schemas` convention); no capability kit's `:qualification` changed,
+and `resources/kotoba/lang/capability-kits/state-v1.edn` is not modified.
 
 ## Official sources
 
