@@ -1,5 +1,6 @@
 (ns kotoba.compiler.frontend-doseq-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [kotoba.compiler.core :as compiler]
             [kotoba.compiler.ir :as ir]))
 
@@ -117,3 +118,32 @@
                    (doseq [x [1]
                            y [1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17]]
                      0))"))))
+
+(deftest doseq-supports-explicit-pair-sequence-expressions
+  (is (thrown? clojure.lang.ExceptionInfo
+               (oracle
+                "(defn main []
+                   (doseq [x (list 1 2 3)]
+                     (if (= x 3) (quot 1 0) 0)))")))
+  (is (thrown? clojure.lang.ExceptionInfo
+               (oracle
+                "(defn main []
+                   (doseq [x (rest (list 0 1 2 3))]
+                     (if (= x 3) (quot 1 0) 0)))")))
+  (is (= 0
+         (oracle
+          "(defn main []
+             (doseq [x (cons 1 (list 2 3)) :while (< x 3)]
+               (if (= x 3) (quot 1 0) 0)))")))
+  (is (thrown? clojure.lang.ExceptionInfo
+               (oracle
+                "(defn main []
+                   (doseq [x (list 1 2) y [x]]
+                     (if (= x 2)
+                       (if (= y 2) (quot 1 0) 0)
+                       0)))")))
+  (let [tail (str/join " " (range 1 33))]
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (oracle
+                  (str "(defn main []"
+                       "  (doseq [x (cons 0 (list " tail "))] 0))"))))))
