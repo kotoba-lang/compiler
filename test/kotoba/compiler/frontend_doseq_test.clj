@@ -40,7 +40,15 @@
       (is (= "doseq requires one [unqualified-symbol collection] binding; modifiers and multiple bindings are not supported"
              (rejection-message source))))))
 
-(deftest doseq-rejects-dynamic-collections
-  (is (= "doseq collection must be a bounded vector literal"
-         (rejection-message
-          "(defn main [] (let [xs [1 2]] (doseq [x xs] x)))"))))
+(deftest doseq-admits-dynamic-bounded-vector-expressions
+  (is (= 0
+         (oracle
+          "(defn main []
+             (let [xs (if 1 [1 2 3] [])]
+               (doseq [x xs] (+ x 1))))")))
+  (is (thrown? clojure.lang.ExceptionInfo
+               (oracle
+                "(defn main []
+                   (let [xs (if 1 [1 2 3] [])]
+                     (doseq [x xs]
+                       (if (= x 3) (quot 1 0) 0))))"))))
