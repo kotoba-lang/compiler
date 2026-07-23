@@ -4,6 +4,7 @@
             [kotoba.compiler.backend.wasm :as wasm]
             [kotoba.compiler.canonical-abi :as canonical]
             [kotoba.compiler.component-wit :as component-wit]
+            [kotoba.compiler.value :as value]
             [kotoba.compiler.wasm-tools :as wasm-tools]))
 
 (defn- reject [message data]
@@ -1909,6 +1910,504 @@
      "  (func (export \"cm32p2_initialize\") i32.const " arena-base " global.set $next)\n"
      data-wat
      ")\n")))
+
+(def state-provider-table-capacity
+  "Slot count for `state-provider-wat`'s bounded in-memory key/value table --
+  deliberately far smaller than `kotoba.compiler.provider.state/max-entries`
+  (256, the pure-Clojure reference provider's own bound) for a first real
+  read/write/dispatch increment: growing capacity later is a straightforward,
+  mechanical follow-up (more slots, the identical per-slot layout/unrolled-
+  scan shape scales linearly), not a new semantic dimension, so narrowing it
+  here is an honest, deliberate scoping choice, not an oversight. `4` is
+  chosen, not `1`, because the task's own stateful-sequence evidence needs to
+  distinguish two genuinely different fail-closed shapes a 1-slot table could
+  not tell apart: 'rejects a second DISTINCT key once full' vs. 'rejects
+  every key unconditionally' -- and needs at least a few slots to also prove
+  no cross-key contamination among *multiple simultaneously stored* keys, not
+  only two."
+  4)
+
+(defn- field-by-name
+  "The `{:name :offset :layout}` entry of `record-layout`'s own `:fields`
+  (`kotoba.compiler.canonical-abi/record-layout`'s output) whose `:name`
+  matches `field-name` -- `variant-case-leaves` elsewhere in this namespace
+  deliberately drops field names (it only needs relative offset/descriptor
+  order for the wiring-only providers), but `state-provider-wat` needs to
+  address `entry`'s `key`/`value`/`version` and `error`'s `code`/`message`
+  fields BY NAME (the request/result shape is fixed and known, but which
+  field is which is not assumed from position alone)."
+  [record-layout field-name]
+  (or (some #(when (= field-name (:name %)) %) (:fields record-layout))
+      (reject "state provider record has no matching field" {:field field-name})))
+
+(def ^:private bytes-equal-wat
+  "One reusable `$bytes-equal` core function: real byte-CONTENT equality over
+  two `(pointer, length)` linear-memory ranges, via an actual bounded WASM
+  `loop` reading one byte at a time (`i32.load8_u`) and comparing it --
+  distinct from every existing helper in this namespace, all of which only
+  ever `memory.copy` bytes (moving them) or compare a SINGLE scalar leaf
+  (`i32`/`i64`/`f32`/`f64`/bool), never walk and compare byte CONTENT of a
+  runtime-length range. This is the genuinely new kind of Wasm logic
+  `state-provider-wat`'s own key-lookup scan needs (matching a request's
+  `key` against each occupied table slot's own stored key) that no prior ADR
+  in this chain needed: every earlier provider was either a wiring-only
+  identity/fixture (never inspecting payload bytes at all) or a fixed
+  compile-time-literal writer (ADR 0058/0059's asymmetric provider, which
+  reads only the request's own DISCRIMINANT, never a payload leaf's VALUE).
+  Length is checked first (a cheap reject before touching a single byte); the
+  loop itself walks both ranges in lockstep, using an early `return` the
+  moment a byte mismatches (0) or the whole range has matched (1) -- the only
+  function in this namespace that uses `return` mid-body rather than nested
+  `if`/`else`, a deliberate, narrow exception: unlike every other WAT emitter
+  here (whose top-level dispatch functions build a nested if/else chain over
+  a small, fixed, compile-time case count), this loop's own trip count is a
+  genuinely RUNTIME value (the key's byte length, up to
+  `value/keyword-value-byte-limit`), which nested if/else cannot express at
+  all -- `return` inside a `loop`/`if` is standard, well-defined WASM control
+  flow (the same 'push a value then diverge' shape `if unreachable end`
+  already uses pervasively in this namespace for traps, just diverging via
+  `return` instead of `unreachable`)."
+  (str
+   "  (func $bytes-equal (param $a i32) (param $alen i32)"
+   " (param $b i32) (param $blen i32) (result i32)\n"
+   "    (local $i i32)\n"
+   "    local.get $alen local.get $blen i32.ne if i32.const 0 return end\n"
+   "    i32.const 0 local.set $i\n"
+   "    loop $scan\n"
+   "      local.get $i local.get $alen i32.ge_u if i32.const 1 return end\n"
+   "      local.get $a local.get $i i32.add i32.load8_u\n"
+   "      local.get $b local.get $i i32.add i32.load8_u\n"
+   "      i32.ne if i32.const 0 return end\n"
+   "      local.get $i i32.const 1 i32.add local.set $i\n"
+   "      br $scan\n"
+   "    end\n"
+   "    i32.const 1)\n"))
+
+(defn- state-slot-layout
+  "Byte layout of one bounded key/value table slot for `state-provider-wat`,
+  computed once and reused by every reader/writer of the table: `occupied`
+  (i32 flag, 0/1), `version` (i64, matching
+  `kotoba.compiler.provider.state`'s own GLOBAL per-provider-instance
+  monotonic counter -- not a per-key counter, see `state-provider-wat`'s own
+  docstring for why this ADR preserves that exact, slightly surprising
+  convention rather than inventing a more conventional per-key one), then
+  `key-len`/`key-bytes` and `value-len`/`value-bytes`. Both byte buffers are
+  sized to the FULL Kotoba-declared bound
+  (`value/keyword-value-byte-limit`/`value/string-value-byte-limit`), not a
+  narrower internal cap: a request already admitted by the reused
+  `asymmetric-request-validation-chain` byte-bound check is therefore
+  GUARANTEED to fit its own slot, with no second, narrower, provider-private
+  fail-closed dimension the task did not ask for."
+  [capacity]
+  (let [occupied-offset 0
+        version-offset (align-up (+ occupied-offset 4) 8)
+        key-len-offset (+ version-offset 8)
+        key-bytes-offset (align-up (+ key-len-offset 4) 8)
+        key-bytes-size value/keyword-value-byte-limit
+        value-len-offset (+ key-bytes-offset key-bytes-size)
+        value-bytes-offset (align-up (+ value-len-offset 4) 8)
+        value-bytes-size value/string-value-byte-limit
+        slot-size (align-up (+ value-bytes-offset value-bytes-size) 8)]
+    {:occupied-offset occupied-offset
+     :version-offset version-offset
+     :key-len-offset key-len-offset
+     :key-bytes-offset key-bytes-offset
+     :key-bytes-size key-bytes-size
+     :value-len-offset value-len-offset
+     :value-bytes-offset value-bytes-offset
+     :value-bytes-size value-bytes-size
+     :slot-size slot-size
+     :table-base 8
+     :table-size (* capacity slot-size)
+     :capacity capacity}))
+
+(defn- state-scan-wat
+  "WAT computing `$match` (the occupied slot whose stored key byte-equals the
+  active request's own key, via `$bytes-equal`, or -1) and `$free` (the
+  lowest-indexed unoccupied slot, or -1). Unrolls one straight-line check per
+  slot -- `capacity` is small and fixed at COMPILE time, so a plain sequence
+  of `if`/`else` branches (matching every other dispatch chain in this
+  namespace, e.g. `variant-case-chain`/`asymmetric-provider-dispatch-chain`)
+  is simpler to hand-verify than a real indexed loop over the table itself;
+  `$bytes-equal`'s own loop is the only place this provider needs
+  RUNTIME-length iteration, since the table's own slot COUNT is always known
+  at compile time. Assumes `$match`/`$free` locals are already declared and
+  `$p0`/`$p1` hold the active request's own key pointer/length -- true for
+  `get`/`put`/`delete` alike in `state-v1`'s own shape, since key is always
+  the first joined position for every one of its three request cases."
+  [{:keys [capacity table-base slot-size occupied-offset key-len-offset key-bytes-offset]}]
+  (str
+   "    i32.const -1 local.set $match\n"
+   "    i32.const -1 local.set $free\n"
+   (apply str
+          (map (fn [index]
+                 (let [slot-addr (+ table-base (* index slot-size))]
+                   (str
+                    "    i32.const " (+ slot-addr occupied-offset) " i32.load\n"
+                    "    if\n"
+                    "      local.get $p1 i32.const " (+ slot-addr key-len-offset)
+                    " i32.load i32.eq\n"
+                    "      if\n"
+                    "        i32.const " (+ slot-addr key-bytes-offset)
+                    " local.get $p1 local.get $p0 local.get $p1 call $bytes-equal\n"
+                    "        if i32.const " index " local.set $match end\n"
+                    "      end\n"
+                    "    else\n"
+                    "      local.get $free i32.const -1 i32.eq\n"
+                    "      if i32.const " index " local.set $free end\n"
+                    "    end\n")))
+               (range capacity)))))
+
+(defn- state-record-fields
+  "`(nth schema 2)` (the `[[name type] ...]` field list) for `payload-type`
+  when it is a sealed flat scalar-or-string/keyword record
+  (`string-field-record-schema`), else nil -- `state-provider-shape`'s own
+  field-shape check, reused for every one of `state-v1`'s five record
+  shapes (`get`/`put`/`delete` request cases, `entry`/`error` result
+  records)."
+  [payload-type schemas]
+  (when-let [schema (string-field-record-schema payload-type schemas)]
+    (nth schema 2)))
+
+(defn- state-provider-shape
+  "True when `request-descriptor`/`result-descriptor` (against `schemas`) are
+  `state-v1`'s own literal shape EXACTLY -- not merely 'a 3-case request
+  crossing a 5-case result' structurally admitted by
+  `asymmetric-variant-capability-schema`, but the SPECIFIC case tags and
+  field names/types/order `resources/kotoba/lang/capability-kits/
+  state-v1.edn` itself declares: request cases `get`/`put`/`delete` (`get`
+  and `delete` each `{key: keyword}`, `put` `{key: keyword, value:
+  string}`), result cases `found`/`missing`/`written`/`deleted`/`error`
+  (`found` and `written` sharing ONE `entry` schema, `{key: keyword, value:
+  string, version: i64}`; `missing`/`deleted` bare `bool`; `error` `{code:
+  keyword, message: string}`). `state-provider-wat` is deliberately this
+  narrow -- a real provider for `state-v1`'s own shape specifically, not a
+  generic 'real provider for any asymmetric variant crossing' -- so this
+  check is intentionally strict, matching the task's own framing that this
+  is `state-v1`'s first real provider, not a new general capability."
+  [request-descriptor result-descriptor schemas]
+  (let [request-schema (get schemas (second request-descriptor))
+        result-schema (get schemas (second result-descriptor))]
+    (boolean
+     (when (and (vector? request-descriptor) (= :ref (first request-descriptor))
+                (vector? request-schema) (= :variant (first request-schema))
+                (= (second request-descriptor) (second request-schema))
+                (vector? result-descriptor) (= :ref (first result-descriptor))
+                (vector? result-schema) (= :variant (first result-schema))
+                (= (second result-descriptor) (second result-schema)))
+       (let [request-cases (nth request-schema 2)
+             result-cases (nth result-schema 2)]
+         (when (and (= 3 (count request-cases)) (= 5 (count result-cases))
+                    (= [:get :put :delete] (mapv first request-cases))
+                    (= [:found :missing :written :deleted :error] (mapv first result-cases)))
+           (let [[[_ get-payload] [_ put-payload] [_ delete-payload]] request-cases
+                 [[_ found-payload] [_ missing-payload]
+                  [_ written-payload] [_ deleted-payload] [_ error-payload]] result-cases
+                 found-schema (string-field-record-schema found-payload schemas)
+                 written-schema (string-field-record-schema written-payload schemas)]
+             (and (= (state-record-fields get-payload schemas) [[:key :keyword]])
+                  (= (state-record-fields put-payload schemas)
+                     [[:key :keyword] [:value :string]])
+                  (= (state-record-fields delete-payload schemas) [[:key :keyword]])
+                  found-schema (= found-schema written-schema)
+                  (= (nth found-schema 2)
+                     [[:key :keyword] [:value :string] [:version :i64]])
+                  (= missing-payload :bool)
+                  (= deleted-payload :bool)
+                  (= (state-record-fields error-payload schemas)
+                     [[:code :keyword] [:message :string]])))))))))
+
+(defn- state-string-field-store
+  "The two i32 stores writing one string/keyword field of `entry`/`error`'s
+  own in-memory shape at `ret`-relative `offset` (pointer then length, the
+  same layout every other emitter in this namespace already uses for a
+  string/keyword leaf) from `pointer-expr`/`length-expr`."
+  [offset pointer-expr length-expr]
+  (str "      local.get $ret " pointer-expr " i32.store offset=" offset "\n"
+       "      local.get $ret " length-expr " i32.store offset=" (+ offset 4) "\n"))
+
+(defn- state-get-body
+  "WAT for the ACTIVE `get` request case: `found(entry)` copied (by
+  reference, not by byte-copy -- see docstring below) from the matched
+  slot's own persistent storage when `$match` is not -1, `missing(false)`
+  otherwise (matching `kotoba.compiler.provider.state`'s own `(result
+  :missing false)` -- the reference always writes a literal `false`
+  payload, never derives it, so this provider matches that exactly rather
+  than inventing a different convention). The `found` case's `key`/`value`
+  pointer+length pair points DIRECTLY at the slot's own persistent buffer
+  (no extra `memory.copy` into scratch first): this is safe because the
+  slot lives BELOW `arena-base` (this module's own transient bump allocator
+  never touches it, by construction -- see `state-provider-wat`), so the
+  bytes stay valid at least through the remainder of this call, which is
+  all the Canonical ABI's own cross-instance result-copy glue needs (it
+  reads them immediately after this function returns, before any later
+  call could ever reuse the slot). The `found` case's own `key` LENGTH
+  reuses `$p1` (the REQUEST's own key length) rather than reloading it from
+  the slot: `state-scan-wat`'s own match condition already proved
+  `$p1` equals the slot's stored key length exactly (length-then-content
+  equality), so reloading would be a redundant, not a more correct, read."
+  [{:keys [disc-store payload-offset key-field value-field version-field
+           table-base slot-size key-bytes-offset value-bytes-offset value-len-offset
+           version-offset]}]
+  (str
+   "      local.get $match i32.const -1 i32.ne\n"
+   "      if\n"
+   "        local.get $match i32.const " slot-size " i32.mul i32.const " table-base
+   " i32.add local.set $slot-addr\n"
+   "        local.get $ret i32.const 0 " disc-store " offset=0\n"
+   (state-string-field-store (+ payload-offset (:offset key-field))
+                             (str "local.get $slot-addr i32.const " key-bytes-offset " i32.add")
+                             "local.get $p1")
+   (state-string-field-store (+ payload-offset (:offset value-field))
+                             (str "local.get $slot-addr i32.const " value-bytes-offset " i32.add")
+                             (str "local.get $slot-addr i32.load offset=" value-len-offset))
+   "      local.get $ret local.get $slot-addr i64.load offset=" version-offset
+   " i64.store offset=" (+ payload-offset (:offset version-field)) "\n"
+   "      else\n"
+   "        local.get $ret i32.const 1 " disc-store " offset=0\n"
+   "        local.get $ret i32.const 0 i32.store8 offset=" payload-offset "\n"
+   "      end\n"))
+
+(defn- state-put-body
+  "WAT for the ACTIVE `put` request case, matching
+  `kotoba.compiler.provider.state`'s own `:put` branch exactly: an EXISTING
+  key ($match not -1) is updated in place; a NEW key ($match is -1) is
+  written into the lowest free slot ($free) UNLESS the table is already full
+  ($free is also -1), in which case `error({code: \"state/capacity\",
+  message: \"state entry limit reached\"})` is written and the version
+  counter is deliberately left untouched (matching the reference's own
+  early-return-before-`swap!` capacity check). `version` is a GLOBAL,
+  per-provider-instance monotonic i64 (`$version`, a real WASM mutable
+  global -- persists across calls within one instance exactly like the
+  reference's own per-instance `atom`, and is untouched by both `_post`
+  and this module's own bump-allocator reset), pre-incremented on every
+  SUCCESSFUL write regardless of key -- reproducing
+  `kotoba.compiler.provider.state`'s own `(swap! next-version inc)`
+  convention verbatim, including its slightly surprising 'first write in a
+  fresh instance is version 2, not 1' consequence (the counter starts at 1
+  and is incremented BEFORE use, matching the reference's own `(atom (inc
+  (count initial)))` with an empty `initial`)."
+  [{:keys [disc-store payload-offset key-field value-field version-field
+           table-base slot-size occupied-offset key-len-offset key-bytes-offset
+           value-len-offset value-bytes-offset version-offset
+           error-code-pointer error-code-length error-message-pointer error-message-length
+           code-field message-field]}]
+  (str
+   "        local.get $match i32.const -1 i32.ne\n"
+   "        if\n"
+   "          local.get $match local.set $slot\n"
+   "          i32.const 0 local.set $full\n"
+   "        else\n"
+   "          local.get $free i32.const -1 i32.eq\n"
+   "          if\n"
+   "            i32.const 1 local.set $full\n"
+   "          else\n"
+   "            local.get $free local.set $slot\n"
+   "            i32.const 0 local.set $full\n"
+   "          end\n"
+   "        end\n"
+   "        local.get $full\n"
+   "        if\n"
+   "          local.get $ret i32.const 4 " disc-store " offset=0\n"
+   (state-string-field-store (+ payload-offset (:offset code-field))
+                             (str "i32.const " error-code-pointer)
+                             (str "i32.const " error-code-length))
+   (state-string-field-store (+ payload-offset (:offset message-field))
+                             (str "i32.const " error-message-pointer)
+                             (str "i32.const " error-message-length))
+   "        else\n"
+   "          local.get $slot i32.const " slot-size " i32.mul i32.const " table-base
+   " i32.add local.set $slot-addr\n"
+   "          local.get $slot-addr i32.const 1 i32.store offset=" occupied-offset "\n"
+   "          local.get $slot-addr i32.const " key-bytes-offset " i32.add"
+   " local.get $p0 local.get $p1 memory.copy\n"
+   "          local.get $slot-addr local.get $p1 i32.store offset=" key-len-offset "\n"
+   "          local.get $slot-addr i32.const " value-bytes-offset " i32.add"
+   " local.get $p2 local.get $p3 memory.copy\n"
+   "          local.get $slot-addr local.get $p3 i32.store offset=" value-len-offset "\n"
+   "          global.get $version i64.const 1 i64.add global.set $version\n"
+   "          local.get $slot-addr global.get $version i64.store offset=" version-offset "\n"
+   "          local.get $ret i32.const 2 " disc-store " offset=0\n"
+   (state-string-field-store (+ payload-offset (:offset key-field))
+                             (str "local.get $slot-addr i32.const " key-bytes-offset " i32.add")
+                             "local.get $p1")
+   (state-string-field-store (+ payload-offset (:offset value-field))
+                             (str "local.get $slot-addr i32.const " value-bytes-offset " i32.add")
+                             "local.get $p3")
+   "          local.get $ret global.get $version i64.store offset="
+   (+ payload-offset (:offset version-field)) "\n"
+   "        end\n"))
+
+(defn- state-delete-body
+  "WAT for the ACTIVE `delete` request case, matching
+  `kotoba.compiler.provider.state`'s own `:delete` branch exactly:
+  `deleted(true)` and the slot marked free when the key was present,
+  `deleted(false)` (never `missing`, never `error`) when it was already
+  absent -- the reference never rejects or special-cases deleting an absent
+  key, it always succeeds with a `deleted` result reporting whether there
+  was anything to delete, and this provider reproduces that precisely
+  (verified against `kotoba.compiler.provider.state`'s own `(result
+  :deleted present?)`, not assumed)."
+  [{:keys [disc-store payload-offset table-base slot-size occupied-offset]}]
+  (str
+   "      local.get $match i32.const -1 i32.ne\n"
+   "      if\n"
+   "        local.get $match i32.const " slot-size " i32.mul i32.const " table-base
+   " i32.add local.set $slot-addr\n"
+   "        local.get $slot-addr i32.const 0 i32.store offset=" occupied-offset "\n"
+   "        local.get $ret i32.const 3 " disc-store " offset=0\n"
+   "        local.get $ret i32.const 1 i32.store8 offset=" payload-offset "\n"
+   "      else\n"
+   "        local.get $ret i32.const 3 " disc-store " offset=0\n"
+   "        local.get $ret i32.const 0 i32.store8 offset=" payload-offset "\n"
+   "      end\n"))
+
+(defn state-provider-wat
+  "The first REAL (non-wiring-only) provider core module in this ADR chain:
+  a genuine, small, bounded, in-memory key/value store for `state-v1`'s own
+  literal request/result shape (`state-provider-shape`), with real dispatch
+  on the request's own discriminant, real reads of the request's own `key`
+  (and, for `put`, `value`) payload leaves, real persistent mutable state
+  across calls within one component instance (the bounded table plus the
+  `$version` global, both untouched by the transient bump-allocator reset
+  every prior provider in this chain already used for scratch memory), and a
+  real byte-CONTENT equality check over linear memory (`$bytes-equal`) to
+  match a request's key against each stored slot's own key -- a kind of Wasm
+  logic no prior ADR in this chain needed (see `bytes-equal-wat`'s own
+  docstring). Every EARLIER provider in this chain (ADR 0047 through 0059)
+  either echoed its input unchanged or, since ADR 0058, wrote a fixed
+  compile-time-literal constant chosen from the request's own DISCRIMINANT
+  alone, never its payload VALUES -- this provider is the first to actually
+  READ and ACT ON a request's own payload leaf content.
+
+  Reuses, UNCHANGED, exactly the machinery every prior provider in this
+  namespace already proved correct: `asymmetric-request-validation-chain`
+  (REQUEST-side byte-bound/pointer-range validation -- unlike ADR 0058/
+  0059's own asymmetric provider, which validates a leaf it otherwise never
+  reads, THIS provider's own dispatch genuinely needs the key/value bytes
+  to be in-bounds before `$bytes-equal`/`memory.copy` ever touch them, so
+  the same validation is necessary here for a different, more direct
+  reason), `string-headroom-bytes` (REQUEST-side memory-page sizing for the
+  Canonical ABI's own cross-instance string-copy-in glue), and
+  `bounded-bump-realloc-wat` (the transient scratch allocator, used here
+  ONLY for this call's own `$ret` struct and whatever the glue's copy-in
+  needs -- never for the persistent table, which lives in a FIXED region
+  strictly below `arena-base` this allocator's own `$next` starts at and is
+  reset back to by both `_post` and `cm32p2_initialize`, exactly the
+  existing convention, just with the persistent region now excluded from
+  what gets reset).
+
+  The one genuinely new piece of memory-sizing math: this module's total
+  capacity must additionally cover the FIXED, permanent table region
+  (`state-slot-layout`'s own `:table-size`, `capacity` slots) and a small
+  FIXED literal region for the one compile-time-constant string content
+  this provider ever writes without deriving it from a request value (the
+  `error`/`:state/capacity` code+message pair, embedded via `(data ...)`
+  exactly like ADR 0059's own `plan-result-string-data`/
+  `deterministic-constant-string` technique, narrowly reused here for just
+  this one case) -- both placed below `arena-base`, ADDED to (not replacing)
+  the existing REQUEST-headroom-plus-result-size sum ADR 0059's own
+  `asymmetric-variant-capability-provider-wat` already established.
+
+  What this provider deliberately does NOT do, matching the task's own
+  framing: it does not implement the reference's full 256-entry capacity
+  (`state-provider-table-capacity` narrows this to 4, an honest, separate,
+  mechanically-scalable narrowing -- see that def's own docstring); it caps
+  stored key/value bytes at the same FULL Kotoba bound the reference itself
+  enforces (512/65536), not a narrower internal limit, so no request that
+  passes Kotoba's own byte-bound validation can ever be rejected by this
+  provider's OWN storage for a reason a caller could not already predict
+  from `state-v1.edn` itself; and it is not native-AOT, not JIT, and not
+  reviewed for production/security hardening -- it is a real semantic
+  reference implementation reachable through a real `typed-cap-call`
+  boundary for the first time, not a production-hardened deployment
+  artifact (see this ADR's own 'Remaining gaps')."
+  ([entry request-descriptor result-descriptor schemas]
+   (state-provider-wat entry request-descriptor result-descriptor schemas
+                        state-provider-table-capacity))
+  ([entry request-descriptor result-descriptor schemas capacity]
+   (when-not (state-provider-shape request-descriptor result-descriptor schemas)
+     (reject "state provider requires state-v1's own literal request/result shape"
+             {:request request-descriptor :result result-descriptor}))
+   (let [export (str "cm32p2|kotoba:application/" (:interface entry) "@1|" (:function entry))
+         request-layout (canonical/layout request-descriptor schemas)
+         result-layout (canonical/layout result-descriptor schemas)
+         joined-types (vec (rest (:flat request-layout)))
+         params (apply str
+                       (cons " (param $disc i32)"
+                             (map-indexed
+                              (fn [index core-type]
+                                (str " (param $p" index " " (core-type-name core-type) ")"))
+                              joined-types)))
+         slot (state-slot-layout capacity)
+         {:keys [table-base table-size slot-size occupied-offset]} slot
+         literal-base (align-up (+ table-base table-size) 8)
+         error-code-bytes (vec (.getBytes "state/capacity" "UTF-8"))
+         error-message-bytes (vec (.getBytes "state entry limit reached" "UTF-8"))
+         error-code-pointer literal-base
+         error-message-pointer (+ error-code-pointer (count error-code-bytes))
+         arena-base (align-up (+ error-message-pointer (count error-message-bytes)) 8)
+         request-headroom-bytes (string-headroom-bytes request-layout)
+         result-size (:size result-layout)
+         required-bytes (+ arena-base request-headroom-bytes result-size)
+         pages (max 1 (quot (+ required-bytes 65535) 65536))
+         capacity-bytes (* pages 65536)
+         result-cases (:cases result-layout)
+         found-layout (:layout (nth result-cases 0))
+         error-layout (:layout (nth result-cases 4))
+         payload-offset (:payload-offset result-layout)
+         disc-store (variant-disc-store (:discriminant-size result-layout))
+         ctx (merge slot
+                    {:disc-store disc-store
+                     :payload-offset payload-offset
+                     :key-field (field-by-name found-layout :key)
+                     :value-field (field-by-name found-layout :value)
+                     :version-field (field-by-name found-layout :version)
+                     :code-field (field-by-name error-layout :code)
+                     :message-field (field-by-name error-layout :message)
+                     :error-code-pointer error-code-pointer
+                     :error-code-length (count error-code-bytes)
+                     :error-message-pointer error-message-pointer
+                     :error-message-length (count error-message-bytes)})
+         scan (state-scan-wat slot)
+         needs-request-validation? (pos? request-headroom-bytes)
+         validation (when needs-request-validation?
+                      (asymmetric-request-validation-chain
+                       (:cases request-layout) joined-types capacity-bytes))]
+     (str
+      "(module\n"
+      "  (memory (export \"cm32p2_memory\") " pages " " pages ")\n"
+      "  (global $next (mut i32) (i32.const " arena-base "))\n"
+      "  (global $version (mut i64) (i64.const 1))\n"
+      (bounded-bump-realloc-wat capacity-bytes)
+      bytes-equal-wat
+      "  (func (export \"" export "\")" params " (result i32)\n"
+      "    (local $ret i32) (local $match i32) (local $free i32)"
+      " (local $slot i32) (local $slot-addr i32) (local $full i32)"
+      (when needs-request-validation? " (local $end i32)") "\n"
+      "    local.get $disc i32.const 3 i32.ge_u if unreachable end\n"
+      validation
+      scan
+      "    i32.const 0 i32.const 0 i32.const " (:alignment result-layout)
+      " i32.const " result-size " call $realloc local.set $ret\n"
+      "    local.get $disc i32.const 0 i32.eq\n"
+      "    if\n"
+      (state-get-body ctx)
+      "    else\n"
+      "      local.get $disc i32.const 1 i32.eq\n"
+      "      if\n"
+      (state-put-body ctx)
+      "      else\n"
+      (state-delete-body ctx)
+      "      end\n"
+      "    end\n"
+      "    local.get $ret)\n"
+      "  (func (export \"" export "_post\") (param i32)\n"
+      "    i32.const " arena-base " global.set $next)\n"
+      "  (func (export \"cm32p2_initialize\") i32.const " arena-base " global.set $next)\n"
+      "  (data (i32.const " error-code-pointer ") \"" (wat-data error-code-bytes) "\")\n"
+      "  (data (i32.const " error-message-pointer ") \"" (wat-data error-message-bytes) "\")\n"
+      ")\n"))))
 
 (defn emit [kir target]
   (case (assert-supported! kir)
