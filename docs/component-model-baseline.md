@@ -308,6 +308,58 @@ inline-`:record`-in-a-case representation directly (reached here only via a
 test-only structural converter into this codebase's established
 `:ref`+`schemas` convention); no capability kit's `:qualification` changed,
 and `resources/kotoba/lang/capability-kits/state-v1.edn` is not modified.
+The first REAL (non-wiring-only) provider in this ADR chain now exists
+(ADR 0060): `kotoba.compiler.component-core/state-provider-wat` is a
+genuine, small (4-slot, deliberately far smaller than the pure-Clojure
+reference's 256), bounded, in-memory key/value store for `state-v1`'s own
+literal shape, with real dispatch on the request's own discriminant, real
+reads of the request's own `key`/`value` payload leaves, real persistent
+mutable state across calls within one component instance (a bounded table
+plus a real WASM mutable global for the version counter, both untouched by
+the transient bump-allocator reset every prior provider already used), and
+a real byte-CONTENT equality check over linear memory (`$bytes-equal`, a
+genuine bounded WASM `loop` -- the only function in this namespace that
+uses `loop` or early `return`, since matching a request's key against a
+runtime-length range of stored bytes cannot be expressed by the nested
+`if`/`else` case dispatch every other emitter in this namespace uses).
+`get`/`put`/`delete` semantics were verified against
+`src/kotoba/compiler/provider/state.cljc`'s own reference implementation
+and its own test, not assumed, including its slightly surprising
+conventions (a GLOBAL, not per-key, monotonic version counter; `delete`
+always succeeds and reports `deleted(true/false)`, never `missing`/
+`error`, even for an absent key). Composed against the STANDARD, UNCHANGED
+application-side `variant-capability-wat` for `state-v1`'s own literal
+shape, real Wasmtime 42.0.1 execution round-tripped `get`/`put`/`delete`
+single calls (including multi-byte UTF-8 and both Kotoba byte-bound traps,
+reusing the unmodified `asymmetric-request-validation-chain`). Because
+`wasmtime run --invoke` instantiates a composed component fresh on every
+process invocation, proving REAL cross-call persistence needed a
+different evidence shape than any prior ADR: a small, hand-written,
+test-only "driver" application component
+(`test/kotoba/compiler/component_composition_test.clj`'s own
+`state-driver-wat`) issues 14 sequential calls to the real provider from
+within ONE exported function and ONE Wasmtime invocation, folding a
+pass/fail bit per step into a returned bitmask -- real execution returned
+`16383` (all 14 checks passed: get-before-put missing, put/get/put proving
+persistence and a real incrementing version counter, cross-key isolation,
+delete and re-delete of an absent key, filling the 4-slot table, a NEW key
+rejected with `error{code: "state/capacity"}` once full, and an EXISTING
+key still succeeding once full), with a deliberate negative control
+(one expected value corrupted) returning `16379` (exactly the corrupted
+step's own bit cleared), confirming the harness genuinely discriminates
+failure. `state-provider-wat`'s own admission (`state-provider-shape`) is
+deliberately narrow to `state-v1`'s own literal case tags/field names/
+types/order, not a generic "real provider for any asymmetric variant
+crossing" -- a structurally-close-but-not-identical shape (ADR 0058's own
+all-`:i64` `demo/state-request`/`demo/state-result`) is rejected before
+any WAT is even generated. Full 256-entry capacity, native-AOT, JIT,
+production/security hardening of this provider, every other capability's
+real provider semantics, and a compiled Kotoba application's own ability to
+issue a multi-step capability sequence (the driver's own multi-call shape
+is test-only, not reachable through the standard KIR/`typed-cap-call`
+admission pipeline) all remain closed; no capability kit's `:qualification`
+changed, and `resources/kotoba/lang/capability-kits/state-v1.edn` is not
+modified.
 
 ## Official sources
 

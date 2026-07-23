@@ -485,6 +485,48 @@
         (doseq [path [component embedded core world]] (Files/deleteIfExists path))
         (Files/deleteIfExists dir)))))
 
+(defn package-state-provider
+  "Build the first REAL (non-wiring-only) provider artifact in this ADR
+  chain, backed by `kotoba.compiler.component-core/state-provider-wat` -- the
+  real-semantics counterpart to `package-variant-asymmetric-provider`, for
+  `state-v1`'s own literal request/result shape specifically (checked by
+  `state-provider-wat` itself, via `component-core/state-provider-shape`,
+  before any WAT is generated at all). Reuses `asymmetric-variant-wit`
+  UNCHANGED for the WIT text: the WIT SHAPE this provider exports is
+  IDENTICAL to ADR 0058/0059's own wiring-only asymmetric provider's own
+  (same package/world/interface, same `func(request: T) -> U` signature) --
+  only the WASM BODY differs, real bounded-table dispatch/storage/byte-
+  comparison logic in place of a fixed compile-time constant. `capacity`
+  (default `component-core/state-provider-table-capacity`, `4`) is exposed so
+  a test/evidence fixture can build a SMALLER table (e.g. to reach the
+  capacity-exhaustion fail-closed path in fewer `put`s) without touching the
+  production default."
+  ([capability-name request-descriptor result-descriptor schemas]
+   (package-state-provider capability-name request-descriptor result-descriptor
+                            schemas component-core/state-provider-table-capacity))
+  ([capability-name request-descriptor result-descriptor schemas capacity]
+   (let [entry (capability capability-name)
+         wit (asymmetric-variant-wit entry request-descriptor result-descriptor schemas)
+         dir (Files/createTempDirectory "kotoba-state-provider-" (make-array FileAttribute 0))
+         world (.resolve dir "provider.wit") core (.resolve dir "provider.wasm")
+         embedded (.resolve dir "embedded.wasm") component (.resolve dir "provider.component.wasm")]
+     (try
+       (Files/writeString world wit (make-array java.nio.file.OpenOption 0))
+       (Files/write core (wasm-tools/parse-wat
+                          (component-core/state-provider-wat
+                           entry request-descriptor result-descriptor schemas capacity))
+                    (make-array java.nio.file.OpenOption 0))
+       (wasm-tools/run-command! ["wasm-tools" "component" "embed" (str world) (str core)
+                                 "--encoding" "utf8" "-o" (str embedded)])
+       (wasm-tools/run-command! ["wasm-tools" "component" "new" (str embedded)
+                                 "--reject-legacy-names" "-o" (str component)])
+       {:format :wasm-component-provider/v1 :capability capability-name
+        :descriptor request-descriptor :result-descriptor result-descriptor
+        :schemas schemas :bytes (Files/readAllBytes component)}
+       (finally
+         (doseq [path [component embedded core world]] (Files/deleteIfExists path))
+         (Files/deleteIfExists dir))))))
+
 (defn compose-closed
   "Compose one application with provider definitions and reject any remaining
   instance import. `wasm-tools compose --no-imports` is the closure gate."
