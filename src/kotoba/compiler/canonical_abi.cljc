@@ -152,6 +152,14 @@
                              :encoding string-encoding
                              :max-bytes value/keyword-value-byte-limit
                              :validation [:checked-pointer-range :valid-utf8]}
+    (= descriptor :symbol) {:descriptor :symbol
+                            :size 8
+                            :alignment 4
+                            :flat [:i32 :i32]
+                            :encoding string-encoding
+                            :max-bytes value/symbol-value-byte-limit
+                            :validation [:checked-pointer-range :valid-utf8
+                                         :valid-symbol-source]}
     (and (vector? descriptor) (= :ref (first descriptor)))
     (let [schema (get schemas (second descriptor))]
       (if (and (vector? schema) (= :variant (first schema)))

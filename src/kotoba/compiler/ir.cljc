@@ -74,7 +74,7 @@
      document-bool-value document-i64-value document-f64-value
      i32-wrap u32-wrap i32-wrapping-add i32-wrapping-mul i32-xor
      i32-shift-left i32-shift-right u32-shift-right xorshift32
-     keyword-from-string keyword-name})
+     keyword-from-string keyword-name symbol})
 
 ;; The two field kinds this backend's own runtime value representation is
 ;; ALREADY bit-identical for: every existing x86-64.cljc/aarch64.cljc
@@ -476,6 +476,12 @@
       (catch #?(:clj Exception :cljs :default) error
         (trap! :invalid-keyword-value {:position position :message (ex-message error)})))
 
+    :symbol
+    (try
+      (value/bounded-symbol! runtime-value value/symbol-value-byte-limit)
+      (catch #?(:clj Exception :cljs :default) error
+        (trap! :invalid-symbol-value {:position position :message (ex-message error)})))
+
     :map
     (try
       (value/bounded-map! runtime-value)
@@ -867,6 +873,15 @@
         (value/bounded-string!
          (name (eval-expr (first args) env functions fuel heap call-stack cap-call))
          value/string-value-byte-limit)
+
+        (= op 'symbol)
+        (let [text (value/bounded-string!
+                    (eval-expr (first args) env functions fuel heap call-stack cap-call)
+                    value/symbol-value-byte-limit)]
+          (when (or (empty? text)
+                    (re-find #"[\s\[\]{}()\"',;`~^\\]" text))
+            (trap! :invalid-symbol-source {}))
+          (value/bounded-symbol! (symbol text) value/symbol-value-byte-limit))
 
         (= op 'xml-path-count)
         (xml/path-count
@@ -1886,6 +1901,7 @@
                 (throw (ex-info "argument must be a signed i64" {:phase :ir :arg arg})))
          :string (value/bounded-string! arg value/string-value-byte-limit)
          :keyword (value/bounded-keyword! arg value/keyword-value-byte-limit)
+         :symbol (value/bounded-symbol! arg value/symbol-value-byte-limit)
          :map (value/bounded-map! arg)
          :bool (when-not (boolean? arg)
                  (throw (ex-info "argument must be a boolean" {:phase :ir :arg arg})))

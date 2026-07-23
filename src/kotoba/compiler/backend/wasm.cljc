@@ -766,6 +766,9 @@
                     (= op 'keyword-from-string)
                     (concat (i32-const (descriptor-id :keyword)) (emit* (first args) env)
                             [0x10 (get intrinsic-indices 'typed-keyword-from-string)])
+                    (= op 'symbol)
+                    (concat (i32-const (descriptor-id :symbol)) (emit* (first args) env)
+                            [0x10 (get intrinsic-indices 'typed-symbol-from-string)])
                     (= op 'vector-new)
                     (emit-builder :vector-i64 -1 args (repeat (count args) :i64) env)
                     (= op 'vector-count)
@@ -1226,6 +1229,7 @@
                                           document-keyword-value document-bool-value
                                           document-i64-value document-f64-value})
         has-keyword-from-string? (uses-operation? functions '#{keyword-from-string})
+        has-symbol-from-string? (uses-operation? functions '#{symbol})
         typed-imports (when (and typed? (typed/requires-host-runtime? kir))
                         (vec (concat
                          [['typed-literal "kotoba:typed" "literal" [0x60 1 0x7f 1 0x6f]]
@@ -1323,6 +1327,9 @@
                             ['typed-document-f64-value "kotoba:typed" "document-f64-value" [0x60 2 0x7f 0x6f 1 0x6f]]])
                          (when has-keyword-from-string?
                            [['typed-keyword-from-string "kotoba:typed" "keyword-from-string"
+                             [0x60 2 0x7f 0x6f 1 0x6f]]])
+                         (when has-symbol-from-string?
+                           [['typed-symbol-from-string "kotoba:typed" "symbol-from-string"
                              [0x60 2 0x7f 0x6f 1 0x6f]]])
                          (when has-xml?
                            [['xml-path-count "kotoba:typed" "xml-path-count" [0x60 2 0x6f 0x6f 1 0x7e]]

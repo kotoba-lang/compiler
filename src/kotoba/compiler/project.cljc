@@ -86,6 +86,7 @@
     (= type :i64) 0
     (= type :string) ""
     (= type :keyword) :kotoba.stub/value
+    (= type :symbol) '(symbol "kotoba.stub/value")
     (= type :map) {}
     (= type :bool) false
     (= type :option-i64) '(option-none)

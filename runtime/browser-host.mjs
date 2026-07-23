@@ -1,7 +1,7 @@
 const MAX_MODULE_BYTES = 1024 * 1024;
 const PAIR_CAPACITY = 4096;
 const TYPED_SECTION = "kotoba.typed";
-const TYPED_ABI_VERSION = 11;
+const TYPED_ABI_VERSION = 12;
 const COMPATIBILITY_SECTION = "kotoba.compatibility";
 const COMPATIBILITY_VERSION = 1;
 const MAX_TYPED_DESCRIPTORS = 64;
@@ -88,6 +88,7 @@ const ALLOWED_IMPORTS = new Set([
   "kotoba:typed/document-i64-value/function",
   "kotoba:typed/document-f64-value/function",
   "kotoba:typed/keyword-from-string/function",
+  "kotoba:typed/symbol-from-string/function",
   "kotoba:typed/cap-call/function",
   "kotoba:typed/xml-path-count/function",
   "kotoba:typed/xml-name-count/function",
@@ -200,7 +201,8 @@ function parseTypedMetadata(module) {
     if (tag === 15) return Object.freeze(["ref", text()]);
     if (tag === 16 && version >= 10) return Object.freeze(["string-index"]);
     if (tag === 17 && version >= 10) return Object.freeze(["disjoint-set-i64"]);
-    if (tag === 18 && version === 11) return Object.freeze(["document"]);
+    if (tag === 18 && version >= 11) return Object.freeze(["document"]);
+    if (tag === 19 && version >= 12) return "symbol";
     if (tag === 4) return Object.freeze(["option", descriptor(depth + 1)]);
     if (tag === 5) return Object.freeze(["result", descriptor(depth + 1), descriptor(depth + 1)]);
     if (tag === 7) {
@@ -228,7 +230,8 @@ function parseTypedMetadata(module) {
     reject("invalid-typed-metadata", "unknown typed ABI descriptor tag");
   };
   const version = byte();
-  if (version !== 5 && version !== 6 && version !== 7 && version !== 8 && version !== 9 && version !== 10 && version !== TYPED_ABI_VERSION)
+  if (version !== 5 && version !== 6 && version !== 7 && version !== 8 &&
+      version !== 9 && version !== 10 && version !== 11 && version !== TYPED_ABI_VERSION)
     reject("unsupported-typed-abi", "unsupported Wasm typed ABI version");
   const count = uleb();
   if (count > MAX_TYPED_DESCRIPTORS)
@@ -671,7 +674,7 @@ function createTypedRuntime(abi, typedCapCall, allow) {
         return Number.isNaN(left) && Number.isNaN(right) ? 0 : Number.isNaN(left) ? 1 : -1;
       return left < right ? -1 : left > right ? 1 : 0;
     }
-    if (descriptor === "i64" || descriptor === "string" || descriptor === "keyword")
+    if (descriptor === "i64" || descriptor === "string" || descriptor === "keyword" || descriptor === "symbol")
       return left < right ? -1 : left > right ? 1 : 0;
     if (descriptor === "bool") return left === right ? 0 : left ? 1 : -1;
     const kind = descriptor[0];
@@ -744,6 +747,12 @@ function createTypedRuntime(abi, typedCapCall, allow) {
       if (descriptor === "keyword") {
         if (typeof value !== "string" || !value.startsWith(":") || utf8Length(value) > 512)
           reject("invalid-typed-value", "typed keyword is invalid");
+        return value;
+      }
+      if (descriptor === "symbol") {
+        if (typeof value !== "string" || value.length === 0 ||
+            /[\s\[\]{}()"',;`~^\\]/u.test(value) || utf8Length(value) > 512)
+          reject("invalid-typed-value", "typed symbol is invalid");
         return value;
       }
       if (descriptor === "bool") {
@@ -903,6 +912,13 @@ function createTypedRuntime(abi, typedCapCall, allow) {
       const result = `:${value}`;
       if (utf8Length(result) > 512) reject("invalid-typed-value", "keyword is oversized");
       return result;
+    },
+    "symbol-from-string"(descriptorId, value) {
+      if (descriptorAt(descriptorId) !== "symbol" || typeof value !== "string" ||
+          value.length === 0 || /[\s\[\]{}()"',;`~^\\]/u.test(value) ||
+          utf8Length(value) > 512)
+        reject("invalid-typed-value", "symbol source text is invalid");
+      return value;
     },
     "keyword-name"(descriptorId, value) {
       const descriptor = descriptorAt(descriptorId);
