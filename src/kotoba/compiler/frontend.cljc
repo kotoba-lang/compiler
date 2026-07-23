@@ -594,6 +594,33 @@
                         (lower remaining))))))]
     (lower args)))
 
+(defn- desugar-condp
+  "Lowers the portable `(condp predicate dispatch test result ... default?)`
+  subset to a single dispatch binding and left-to-right nested `if` calls.
+  The predicate must be a statically resolvable, unqualified two-argument
+  function symbol. Clojure's `:>>` extension is deliberately outside this
+  bounded slice. With no default, a miss traps like `case`."
+  [args form]
+  (when (< (count args) 2)
+    (reject! "condp requires a predicate and dispatch expression" form))
+  (let [[predicate dispatch & clauses] args]
+    (when-not (and (symbol? predicate) (nil? (namespace predicate)))
+      (reject! "condp predicate must be an unqualified function symbol" form))
+    (when (some #{:>>} clauses)
+      (reject! "condp :>> clauses are not supported by this portable profile" form))
+    (let [default? (odd? (count clauses))
+          default (if default? (last clauses) '(quot 1 0))
+          pairs (partition 2 (if default? (butlast clauses) clauses))
+          tmp (gensym "condp__")]
+      (list 'let [tmp (desugar-expr dispatch)]
+            (reduce (fn [fallback [test result]]
+                      (list 'if
+                            (list predicate (desugar-expr test) tmp)
+                            (desugar-expr result)
+                            fallback))
+                    (desugar-expr default)
+                    (reverse pairs))))))
+
 (defn- desugar-cond-thread [args form last?]
   (when (or (empty? args) (odd? (count (rest args))))
     (reject! (str (if last? "cond->>" "cond->")
@@ -1080,6 +1107,7 @@
         some-> (desugar-some-thread args form false)
         some->> (desugar-some-thread args form true)
         cond (desugar-cond args form)
+        condp (desugar-condp args form)
         cond-> (desugar-cond-thread args form false)
         cond->> (desugar-cond-thread args form true)
         dotimes (desugar-dotimes args form)
