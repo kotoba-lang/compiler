@@ -483,7 +483,7 @@
          :schemas schemas
          :schema-identities (when schemas (schema/identities schemas))}))))
 
-(declare desugar-expr form-free-symbols replace-recur)
+(declare desugar-expr desugar-do form-free-symbols replace-recur)
 
 ;; ADR-2607150000: bound (via `binding`) around each top-level defn's
 ;; desugaring pass in `analyze`, to an atom `loop`'s desugar-expr case
@@ -623,6 +623,22 @@
     (reject! (if last? "->> requires an initial value" "-> requires an initial value") form))
   (desugar-expr (reduce #(thread-form %1 %2 last?) (first args) (rest args))))
 
+(defn- desugar-some-thread [args form last?]
+  (when (empty? args)
+    (reject! (if last? "some->> requires an initial option" "some-> requires an initial option") form))
+  (letfn [(lower [option-form steps]
+            (if (empty? steps)
+              (desugar-expr option-form)
+              (let [tmp (gensym "some-thread__")
+                    option-type [:option :i64]
+                    payload (list 'option-value-of option-type tmp 0)
+                    threaded (thread-form payload (first steps) last?)]
+                (list 'let [tmp (desugar-expr option-form)]
+                      (list 'if (list 'option-some?-of option-type tmp)
+                            (lower threaded (rest steps))
+                            (list 'option-none-of option-type))))))]
+    (lower (first args) (rest args))))
+
 (defn- desugar-binding-if [args form when?]
   (let [[binding & bodies] args]
     (when-not (and (vector? binding) (= 2 (count binding)))
@@ -640,6 +656,26 @@
       (desugar-expr
        (list 'let [tmp value]
              (list 'if tmp (list 'let [pattern tmp] then-form) else-form))))))
+
+(defn- desugar-binding-some [args form when?]
+  (let [[binding & bodies] args]
+    (when-not (and (vector? binding) (= 2 (count binding)))
+      (reject! (if when? "when-some requires one binding pair"
+                           "if-some requires one binding pair") form))
+    (when (if when? (empty? bodies) (not (<= 1 (count bodies) 2)))
+      (reject! (if when? "when-some requires at least one body expression"
+                           "if-some requires then and optional else expressions") form))
+    (let [[pattern value] binding
+          tmp (gensym "binding-some__")
+          then-form (if when?
+                      (if (= 1 (count bodies)) (first bodies) (desugar-do bodies))
+                      (first bodies))
+          else-form (if when? 0 (if (= 2 (count bodies)) (second bodies) 0))]
+      (desugar-expr
+       (list 'let [tmp value]
+             (list 'if (list 'option-some?-of [:option :i64] tmp)
+                   (list 'let [pattern (list 'option-value-of [:option :i64] tmp 0)] then-form)
+                   else-form))))))
 
 (defn- desugar-case [args form]
   (when (empty? args) (reject! "case requires a dispatch expression" form))
@@ -1017,11 +1053,15 @@
         or (desugar-or args)
         -> (desugar-thread args form false)
         ->> (desugar-thread args form true)
+        some-> (desugar-some-thread args form false)
+        some->> (desugar-some-thread args form true)
         cond (desugar-cond args form)
         cond-> (desugar-cond-thread args form)
         case (desugar-case args form)
         if-let (desugar-binding-if args form false)
         when-let (desugar-binding-if args form true)
+        if-some (desugar-binding-some args form false)
+        when-some (desugar-binding-some args form true)
         when (do (when (empty? args)
                    (reject! "when requires a test expression" form))
                  (let [[test & body] args
