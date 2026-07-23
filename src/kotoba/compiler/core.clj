@@ -43,11 +43,13 @@
 ;; implement, PLUS -- as of the second native increment (ADR 0063) -- a
 ;; sealed, all-scalar-cased `variant-new`/`variant-match` pair, used only in
 ;; the analogous one exact nested construction+dispatch shape those same two
-;; files implement. Every other typed feature (options, results, general/
-;; nested/escaping records or variants, typed maps/vectors/sets) has zero
-;; native backend codegen and must keep producing the same "requires
-;; kotoba-script web target" rejection it always has. This is a content
-;; check, not a blanket per-backend allowance:
+;; files implement, PLUS a sealed `typed-cap-call :i64 :i64` boundary which
+;; is bit-identical to the existing native capability callback ABI. Every
+;; other typed feature (options, results, general/nested/escaping records or
+;; variants, typed maps/vectors/sets) has zero native backend codegen and
+;; must keep producing the same "requires kotoba-script web target"
+;; rejection it always has. This is a content check, not a blanket
+;; per-backend allowance:
 ;; :kotoba.hir/v3 covers ALL typed features uniformly, so admitting the
 ;; format for native without inspecting which features are actually used
 ;; would silently let unsupported ops reach the backend and crash confusingly
@@ -105,7 +107,7 @@
                                (ir/only-cljs-provider-typed-features? hir)))
                      (not (and (contains? #{:x86_64-kotoba-v1 :aarch64-kotoba-v1} backend)
                                (ir/only-string-and-scalar-record-typed-features? hir))))
-            (throw (ex-info "typed values currently require the kotoba-script web target, typed Wasm/CLJS target, or (native targets) string-only or sealed-scalar-record typed features"
+            (throw (ex-info "typed values currently require the kotoba-script web target, typed Wasm/CLJS target, or a qualified native string/scalar-record/i64-capability slice"
                             {:phase :target :target target :backend backend
                              :value-profile :kotoba.value/typed-v1})))
         _ (when (and (nil? (:entry hir))

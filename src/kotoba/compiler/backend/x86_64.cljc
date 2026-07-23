@@ -512,6 +512,14 @@
         (= op 'cap-call)
         (emit-cap-call (first args) (second args) env ctx)
 
+        (= op 'typed-cap-call)
+        (let [[cap-id request-type result-type request] args]
+          (when-not (= :i64 request-type result-type)
+            (throw (ex-info "native typed capability ABI supports only i64 request/result"
+                            {:phase :x86-64 :request-type request-type
+                             :result-type result-type})))
+          (emit-cap-call cap-id request env ctx))
+
         (= op 'record-get)
         (let [[type value-form field] args]
           (emit-record-get-of-new type value-form field env ctx))

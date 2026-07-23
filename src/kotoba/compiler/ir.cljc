@@ -209,6 +209,18 @@
                          (every? #(and (vector? %) (= 3 (count %)) (symbol? (second %))) branches)
                          (walk value)
                          (every? (fn [[_ _binder body]] (walk body)) branches)))
+                  ;; Native capability callback ABI is currently one i64
+                  ;; request word -> one i64 result word. Preserve the sealed
+                  ;; descriptors in KIR for verification, but erase them only
+                  ;; at this already type-checked machine-code boundary.
+                  (= op 'typed-cap-call)
+                  (let [[cap-id request-type result-type request] args]
+                    (and (= 4 (count args))
+                         #?(:clj (integer? cap-id)
+                            :cljs (or (i64/bigint-value? cap-id) (integer? cap-id)))
+                         (<= 0 cap-id 255)
+                         (= :i64 request-type result-type)
+                         (walk request)))
                   :else
                   (and (not (contains? non-string-typed-ops op))
                        (every? walk args))))

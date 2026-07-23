@@ -135,6 +135,9 @@
       (bounded-sum (list* 1 (lowered-cost value env)
                           (map (fn [[_tag binder body]] (lowered-cost body (assoc env binder 1)))
                                branches))))
+    (and (seq? form) (= 'typed-cap-call (first form)))
+    (let [[_ _cap-id _request-type _result-type request] form]
+      (bounded-sum [1 (lowered-cost request env)]))
     :else
     (let [[op & args] form]
       (if (= op 'let)
@@ -224,6 +227,17 @@
             (reject! "runtime KIR capability call rejected" {}))
           (vswap! facts update :effects conj [:cap/call cap-id])
           (verify-expr! value locals signatures (inc depth) nodes facts))
+
+        (= op 'typed-cap-call)
+        (let [[cap-id request-type result-type request :as call-args] args]
+          (when-not (and (= 4 (count call-args))
+                         #?(:clj (integer? cap-id)
+                            :cljs (or (i64/bigint-value? cap-id) (integer? cap-id)))
+                         (<= 0 cap-id 255)
+                         (= :i64 request-type result-type))
+            (reject! "runtime KIR typed capability call rejected" {}))
+          (vswap! facts update :effects conj [:cap/call cap-id])
+          (verify-expr! request locals signatures (inc depth) nodes facts))
 
         (contains? arithmetic op)
         (do
