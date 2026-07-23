@@ -3,6 +3,7 @@
             [kotoba.compiler.atomic-output-test]
             [kotoba.compiler.aiueos-target-test]
             [kotoba.compiler.accelerator-test]
+            [kotoba.compiler.application-syntax-test]
             [kotoba.compiler.cli-test]
             [kotoba.compiler.core-test]
             [kotoba.compiler.coverage-test]
@@ -56,6 +57,7 @@
   (let [{:keys [fail error]} (t/run-tests 'kotoba.compiler.atomic-output-test
                                           'kotoba.compiler.aiueos-target-test
                                           'kotoba.compiler.accelerator-test
+                                          'kotoba.compiler.application-syntax-test
                                           'kotoba.compiler.cli-test
                                           'kotoba.compiler.core-test
                                           'kotoba.compiler.coverage-test

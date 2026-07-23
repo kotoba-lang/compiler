@@ -9,12 +9,15 @@
 (defn- oracle [source]
   (:oracle-value (compile-kir source)))
 
+(defn- execute [source]
+  (ir/execute (compile-kir source) 'main []))
+
 (deftest bounded-case-is-single-evaluation-literal-dispatch
   (is (= 20 (oracle "(defn choose [x] (case x 1 10 2 20 30))
                      (defn main [] (choose 2))")))
   (is (= 7 (oracle "(defn main [] (case :ready :hold 3 :ready 7 9))")))
   (is (= 23 (oracle "(defn main [] (case :ready (:hold :ready) 23 9))")))
-  (is (thrown? ArithmeticException
+  (is (thrown? clojure.lang.ExceptionInfo
                (oracle "(defn main [] (case 8 1 10 2 20))")))
   (doseq [bad ["(defn main [] (case))"
                "(defn main [] (case 1 (+ 0 1) 2))"
@@ -29,6 +32,26 @@
   (doseq [bad ["(defn main [] (if-let [x] x 0))"
                "(defn main [] (if-let [x 1]))"
                "(defn main [] (when-let [x 1]))"]]
+    (is (thrown? clojure.lang.ExceptionInfo (compiler/check-source bad)))))
+
+(deftest option-binding-and-threading-sugar
+  (is (= 9 (oracle "(defn main [] (if-some [x (option-some-of [:option :i64] 9)] x 0))")))
+  (is (= 4 (oracle "(defn main [] (if-some [x (option-none-of [:option :i64])] 9 4))")))
+  (is (= 6 (oracle "(defn main [] (when-some [x (option-some-of [:option :i64] 2)] (+ x 1) (+ x 4)))")))
+  (is (= [[:option :i64] true 12]
+         (execute "(defn inc-some [x] [:option :i64] (option-some-of [:option :i64] (+ x 1)))
+                  (defn double-some [x] [:option :i64] (option-some-of [:option :i64] (* x 2)))
+                  (defn main [] [:option :i64] (some-> (option-some-of [:option :i64] 5) inc-some double-some))")))
+  (is (= [[:option :i64] true 14]
+         (execute "(defn add-some [n x] [:option :i64] (option-some-of [:option :i64] (+ n x)))
+                  (defn main [] [:option :i64] (some->> (option-some-of [:option :i64] 5) (add-some 9)))")))
+  (is (= [[:option :i64] false]
+         (execute "(defn trap-some [x] [:option :i64] (option-some-of [:option :i64] (quot 1 0)))
+                  (defn main [] [:option :i64] (some-> (option-none-of [:option :i64]) trap-some))")))
+  (doseq [bad ["(defn main [] (if-some [x] x 0))"
+               "(defn main [] (if-some [x (some 1)]))"
+               "(defn main [] (when-some [x (some 1)]))"
+               "(defn main [] :option-i64 (some-> (some 1) [inc]))"]]
     (is (thrown? clojure.lang.ExceptionInfo (compiler/check-source bad)))))
 
 (deftest threading-is-pure-call-insertion
@@ -50,7 +73,8 @@
         kir (compile-kir source)
         printed (pr-str kir)]
     (is (= 8 (:oracle-value kir)))
-    (doseq [surface ["(not= " "(-> " "(->> " "(case " "(if-let " "(when-let "]]
+    (doseq [surface ["(not= " "(-> " "(->> " "(some-> " "(some->> "
+                     "(case " "(if-let " "(when-let " "(if-some " "(when-some "]]
       (is (not (.contains printed surface)))))
   (testing "ordered comparison still rejects zero operands"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"at least one operand"
