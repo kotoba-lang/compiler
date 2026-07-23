@@ -743,6 +743,11 @@
                     (concat (i32-const (descriptor-id :string))
                             (emit* (first args) env) (emit* (second args) env)
                             [0x10 (get intrinsic-indices 'typed-string-concat)])
+                    (= op 'string-substring)
+                    (concat (i32-const (descriptor-id :string))
+                            (emit* (first args) env) (emit* (second args) env)
+                            (emit* (nth args 2) env)
+                            [0x10 (get intrinsic-indices 'typed-string-substring)])
                     (= op 'string-replace-all)
                     (concat (i32-const (descriptor-id :string))
                             (emit* (first args) env) (emit* (second args) env)
@@ -1203,6 +1208,7 @@
                                                string-index-contains string-index-get
                                                string-index-assoc})
         has-string-concat? (uses-operation? functions '#{string-concat})
+        has-string-substring? (uses-operation? functions '#{string-substring})
         has-string-replace? (uses-operation? functions '#{string-replace-all})
         has-string-contains? (uses-operation? functions '#{string-contains?})
         has-string-fold-case? (uses-operation? functions '#{string-fold-case})
@@ -1241,6 +1247,9 @@
                          (when has-string-concat?
                            [['typed-string-concat "kotoba:typed" "string-concat"
                              [0x60 3 0x7f 0x6f 0x6f 1 0x6f]]])
+                         (when has-string-substring?
+                           [['typed-string-substring "kotoba:typed" "string-substring"
+                             [0x60 4 0x7f 0x6f 0x7e 0x7e 1 0x6f]]])
                          (when has-string-replace?
                            [['typed-string-replace-all "kotoba:typed" "string-replace-all"
                              [0x60 4 0x7f 0x6f 0x6f 0x6f 1 0x6f]]])

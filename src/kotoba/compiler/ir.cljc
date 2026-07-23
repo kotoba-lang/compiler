@@ -753,6 +753,11 @@
         (let [[left right] (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
           (value/bounded-string! (str left right) value/string-value-byte-limit))
 
+        (= op 'string-substring)
+        (let [[input start end]
+              (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
+          (value/utf8-substring! input start end))
+
         (= op 'string-replace-all)
         (let [[input needle replacement]
               (mapv #(eval-expr % env functions fuel heap call-stack cap-call) args)]
