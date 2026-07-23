@@ -777,13 +777,14 @@
                               bounded)))))]
       (let [groups (parse-groups)
             group-count (count groups)]
-        (when-not (<= 1 group-count 2)
-          (reject! "doseq supports one binding, or two bindings capped at 16 items each"
+        (when-not (<= 1 group-count 3)
+          (reject! "doseq supports at most three collection bindings"
                    form))
         (let [lowered
               (reduce (fn [inner group]
                         (lower-group group [inner]
                                      (cond
+                                       (= 3 group-count) 4
                                        (= 2 group-count) 16
                                        (:pair-sequence? group) 32
                                        :else value/vector-literal-item-limit)))
