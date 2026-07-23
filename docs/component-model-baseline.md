@@ -236,6 +236,40 @@ closed end to end: its request and result are two *different* variant
 identities, while every capability-call ADR including this one has only
 proven the *same*-identity case, and a real production `state` provider
 remains unattempted.
+A `typed-cap-call` may now use two INDEPENDENTLY admitted but genuinely
+DIFFERENT sealed variant identities as its request and result (ADR 0058),
+closing exactly the different-identity gap ADR 0055/0056/0057 each named,
+in the same words, as still unattempted -- provided each side's every case
+is a bare Canonical scalar or a sealed all-scalar record (ADR 0055/0056's
+own case-kind union; ADR 0057's string/keyword-bearing record case is
+deliberately not admitted for this specific, asymmetric boundary yet, for
+the same "don't widen two dimensions in one step" discipline every prior
+step in this chain followed). The application-side WAT emitter
+(`variant-capability-wat`) needed a genuine bug fix, not a rename: it
+previously sized its result-area allocation from the REQUEST layout alone,
+correct only by coincidence when request and result were, by construction,
+the same schema; it now sizes that allocation from the RESULT layout
+independently, confirmed a no-op for every ADR 0055/0056/0057 same-identity
+fixture by rebuilding and re-running them through the changed function.
+The provider needed a genuinely new kind of implementation, not merely a
+widened admission check: unlike every prior capability-call ADR's provider
+(which echoes the active request case's own payload into a result area of
+the identical shape), an asymmetric provider cannot echo a request case
+into an unrelated result shape at all -- the new
+`asymmetric-variant-capability-provider-wat` instead reads only the
+request's own discriminant (never any request payload leaf) and writes one
+of the result variant's own cases with a fixed, deterministically-chosen
+compile-time constant, an explicitly non-semantic wiring fixture matching
+the task's own framing. Concrete evidence spans a small 2-case/2-case
+scalar pair, a record-cased pair, and -- reaching further than any prior
+ADR in this chain -- `demo/state-request`/`demo/state-result`, matching
+`state-v1.edn`'s own literal case names, case count (3 request cases vs. 5
+result cases), and record-field names exactly, narrower than the real
+`state-v1` only in using `:i64` fields as a structural stand-in for its
+real `:keyword`/`:string` fields. `state-v1` is still not closed end to
+end: a string/keyword-bearing case crossing this specific (different-
+identity) boundary, and a real production `state` provider, both remain
+unattempted; no capability kit's `:wasm-aot` qualification changed.
 
 ## Official sources
 

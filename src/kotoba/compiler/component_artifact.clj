@@ -20,7 +20,8 @@
   (let [lowering (component-core/assert-supported! kir)]
     (when (and (seq (:imports wit))
                (not (contains? #{:scalar-capability-call :record-capability-call
-                                  :variant-capability-call}
+                                  :variant-capability-call
+                                  :different-variant-capability-call}
                                 lowering)))
       (reject "component capability imports require Canonical provider lowering"
               {:imports (:imports wit)}))
