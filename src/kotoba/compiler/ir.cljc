@@ -108,6 +108,32 @@
                (nth type 2))
        (= (count (nth type 2)) (count (distinct (map first (nth type 2)))))))
 
+;; ADR 0063: the second native value-representation increment (right after
+;; ADR 0062's record). A native sealed variant admits the SAME narrow
+;; per-case payload universe records already admit (`:i64`/`:bool` only, no
+;; `:f64` -- identical reasoning as `native-scalar-record-field-types`'s own
+;; comment: native f32/f64 is a separate, orthogonal, pre-existing gate this
+;; increment does not touch). A "tag-only" (unit-like) case is realized
+;; WITHOUT any new type-system concept: every case still declares a real
+;; `:i64`/`:bool` payload type and every `variant-new` call still supplies a
+;; real payload expression (this frontend's shared, target-independent
+;; `variant-new`/`variant-match` grammar, unchanged by this ADR, always
+;; requires exactly one payload per case) -- a case is "tag-only" purely by
+;; the codegen/test convention of never binding or reading that case's own
+;; payload word in its branch body, matching this backend's own "every
+;; value, including an unused one, is still a uniform 8-byte word" stance
+;; already established by ADR 0062. See docs/adr/0063-* for why this ADR
+;; deliberately does NOT introduce a genuine zero-payload marker type.
+(defn- native-scalar-variant-type? [type]
+  (and (vector? type) (= 3 (count type)) (= :variant (first type))
+       (keyword? (second type)) (some? (namespace (second type)))
+       (vector? (nth type 2)) (seq (nth type 2))
+       (every? (fn [case-entry]
+                 (and (vector? case-entry) (= 2 (count case-entry)) (keyword? (first case-entry))
+                      (contains? native-scalar-record-field-types (second case-entry))))
+               (nth type 2))
+       (= (count (nth type 2)) (count (distinct (map first (nth type 2)))))))
+
 (defn only-string-and-scalar-record-typed-features? [hir]
   (letfn [(walk [form]
             (cond
@@ -152,6 +178,37 @@
                          (keyword? field)
                          (some #(= field (first %)) (nth type 2))
                          (walk value)))
+                  ;; Construction: the tag must be a declared case (frontend
+                  ;; already enforces this too, unconditionally, via
+                  ;; `infer-expression-type`'s own "variant constructor tag
+                  ;; is not declared" check -- re-derived here regardless,
+                  ;; matching every other op-family's own independent-check
+                  ;; discipline in this file); the payload is walked.
+                  (= op 'variant-new)
+                  (let [[type tag payload] args]
+                    (and (= 3 (count args))
+                         (native-scalar-variant-type? type)
+                         (keyword? tag)
+                         (some #(= tag (first %)) (nth type 2))
+                         (walk payload)))
+                  ;; Dispatch: mirrors `record-get`'s own admission shape --
+                  ;; the codegen backends independently require `value` to
+                  ;; be a directly-nested, same-schema `variant-new`
+                  ;; (`emit-variant-match-of-new`, cross-checked again by
+                  ;; `kotoba.compiler.verifier`'s own `variant-match` case),
+                  ;; not enforced here; this layer only confirms every
+                  ;; declared case has exactly one, exhaustively-ordered
+                  ;; branch and keeps walking both the value and every
+                  ;; branch body.
+                  (= op 'variant-match)
+                  (let [[type value branches] args]
+                    (and (= 3 (count args))
+                         (native-scalar-variant-type? type)
+                         (vector? branches)
+                         (= (mapv first (nth type 2)) (mapv first branches))
+                         (every? #(and (vector? %) (= 3 (count %)) (symbol? (second %))) branches)
+                         (walk value)
+                         (every? (fn [[_ _binder body]] (walk body)) branches)))
                   :else
                   (and (not (contains? non-string-typed-ops op))
                        (every? walk args))))

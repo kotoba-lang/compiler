@@ -1,6 +1,10 @@
 (ns kotoba.compiler.native-executor-test
-  (:require [clojure.test :refer [deftest is]]
+  (:require [clojure.edn :as edn]
+            [clojure.string :as str]
+            [clojure.test :refer [deftest is]]
             [kotoba.compiler.atomic-output :as atomic-output]
+            [kotoba.compiler.backend.aarch64 :as aarch64]
+            [kotoba.compiler.backend.x86-64 :as x86-64]
             [kotoba.compiler.core :as compiler]
             [kotoba.compiler.native-executor :as executor]
             [kotoba.compiler.runtime-identity :as runtime-identity]
@@ -542,3 +546,192 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
                           #"record-get is only supported directly over a matching record-new construction on the native backend"
                           (compiler/compile-source source (target))))))
+
+;; ADR 0063: the second native (x86-64/aarch64) value-representation
+;; increment, immediately following ADR 0062's record -- a sealed variant
+;; whose cases carry a bare `:i64`, a bare `:bool` (both `true` and `false`,
+;; the SAME both-directions proof ADR 0062's own record `:bool` field
+;; established), or nothing meaningfully read at all (a tag-only/"unit"-like
+;; case whose branch body never references its own bound payload symbol --
+;; see `native.scalar-variant-type?`'s own doc comment in `ir.cljc` for why
+;; this ADR does not introduce a genuine zero-payload marker type). Real
+;; native-process evidence matching every other deftest in this file: the
+;; variant has NO independent runtime representation -- `(variant-match
+;; schema (variant-new schema tag payload) branches)` is rewritten into TWO
+;; synthetic stack slots (discriminant, payload) on the same `emit-let`/
+;; `load-let` machinery this file's own `let`-sequencing deftests above
+;; already prove correct, and dispatch is a REAL runtime compare-and-branch
+;; chain over the stored discriminant, never a compile-time selection -- see
+;; `emit-variant-dispatch` in both `backend/x86-64.cljc` and
+;; `backend/aarch64.cljc`.
+(def ^:private native-variant-schema
+  '[:variant :native/traffic-signal [[:count :i64] [:enabled :bool] [:disabled :bool] [:idle :bool]]])
+
+(deftest native-scalar-variant-construction-and-dispatch-round-trips-through-real-kexe-loader
+  (let [schema (pr-str native-variant-schema)
+        source (str
+                "(defn check-count [n]
+                   (variant-match " schema " (variant-new " schema " :count n)
+                     [[:count v (= v n)] [:enabled v 0] [:disabled v 0] [:idle v 0]]))
+                 (defn check-enabled []
+                   (variant-match " schema " (variant-new " schema " :enabled true)
+                     [[:count v 0] [:enabled v (if v 1 0)] [:disabled v 0] [:idle v 0]]))
+                 (defn check-disabled []
+                   (variant-match " schema " (variant-new " schema " :disabled false)
+                     [[:count v 0] [:enabled v 0] [:disabled v (if v 0 1)] [:idle v 0]]))
+                 (defn check-idle []
+                   (variant-match " schema " (variant-new " schema " :idle false)
+                     [[:count v 0] [:enabled v 0] [:disabled v 0] [:idle v 1]]))
+                 (defn main [] (+ (check-count 42) (+ (check-enabled) (+ (check-disabled) (check-idle)))))")
+        {:keys [envelope trust]} (signed source {:allow #{}})
+        {:keys [trust options]} (execution-options trust)
+        result (executor/execute envelope trust {:allow #{}} {:args []} options)]
+    (is (= 4 (get-in result [:evidence :result]))
+        "all four checks passed (1 each): the :i64-payload case (:count)
+         round-trips a genuinely runtime, parameter-derived value through
+         construction+dispatch; the :bool-payload case round-trips TRUE
+         (:enabled) and, separately, FALSE (:disabled); and the tag-only
+         case (:idle) dispatches to the exact correct branch WITHOUT that
+         branch ever reading its own bound payload symbol -- all four
+         through a REAL native process (not a JVM-side oracle-value check),
+         and each construction site emits the SAME full compare-and-branch
+         chain over all four declared cases regardless of which one that
+         particular site happens to construct (see `emit-variant-dispatch`'s
+         own doc comment)")))
+
+;; ADR 0063 fail-closed requirement (first vector, mirroring ADR 0062's own
+;; first vector exactly): a variant case payload type this increment does
+;; not admit (`:string`, disjoint from `ir/native-scalar-variant-type?`'s
+;; `:i64`/`:bool` universe) is rejected at COMPILE TIME with the expected
+;; native-admission error message, confirmed to be the native-specific gate
+;; and not an unrelated generic type error by additionally confirming the
+;; IDENTICAL source compiles successfully on `:wasm32-kotoba-v1` (whose
+;; typed backend admits arbitrary typed values, including a string-cased
+;; variant, unconditionally -- see `core.clj`'s own comment on why
+;; `:wasm32-kotoba-v1`/`:js-kotoba-v1` need no content-based ir check at
+;; all).
+(deftest native-variant-with-an-unsupported-case-payload-type-is-rejected-at-compile-time
+  (let [schema (pr-str '[:variant :native/string-case-variant [[:s :string]]])
+        source (str
+                "(defn project-s [] :string
+                   (variant-match " schema " (variant-new " schema " :s \"x\") [[:s v v]]))
+                 (defn main [] 0)")]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"typed values currently require the kotoba-script web target, typed Wasm/CLJS target, or \(native targets\) string-only or sealed-scalar-record typed features"
+                          (compiler/compile-source source (target))))
+    (is (= :wasm/v1 (:format (compiler/compile-source source :wasm32-kotoba-v1))))))
+
+;; ADR 0063 fail-closed requirement (second vector, mirroring ADR 0062's own
+;; second vector exactly): `variant-match`'s value operand must be a
+;; DIRECTLY-nested, same-schema `variant-new` -- `emit-variant-match-of-new`
+;; has no runtime variant representation to fall back on, so anything else
+;; must be rejected with a clear compiler error, not silently miscompiled.
+;; This source passes ordinary frontend type checking (both `if` branches
+;; construct the SAME variant schema and case, so the `if` expression's own
+;; inferred type is that schema, same as a bare `variant-new` would be)
+;; specifically so it reaches the native backend's OWN narrow-shape check
+;; rather than being rejected earlier by an unrelated generic type error.
+(deftest native-variant-match-over-a-computed-non-nested-value-is-rejected-at-compile-time
+  (let [schema (pr-str native-variant-schema)
+        source (str
+                "(defn project [flag n]
+                   (variant-match " schema "
+                     (if (= flag 1)
+                       (variant-new " schema " :count n)
+                       (variant-new " schema " :count n))
+                     [[:count v v] [:enabled v 0] [:disabled v 0] [:idle v 0]]))
+                 (defn main [] 0)")]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"variant-match is only supported directly over a matching variant-new construction on the native backend"
+                          (compiler/compile-source source (target))))))
+
+;; ADR 0063 fail-closed requirement (third vector -- REAL native-process
+;; trap evidence, not just a compile-time rejection): an out-of-range/
+;; unrecognized variant discriminant must never silently do something
+;; undefined. Reading `emit-variant-dispatch`'s own doc comment: this
+;; repository's own pipeline provably CANNOT ever produce such a value --
+;; frontend's shared, unchanged `variant-new` grammar rejects an undeclared
+;; tag at compile time (`infer-expression-type`'s existing "variant
+;; constructor tag is not declared" check); this backend's own codegen
+;; independently re-derives the tag-to-ordinal lookup a second time and
+;; throws if it does not resolve; `kotoba.compiler.verifier`'s OWN
+;; independent re-derivation (the new `variant-new`/`variant-match` cases in
+;; `verify-expr!` added by this ADR) enforces the identical narrow shape a
+;; THIRD time; and -- unique to this repository's native track -- BOTH
+;; `kotoba.compiler.signing/sign` and `signing/verify` unconditionally
+;; re-run `verifier/verify-artifact!` (confirmed by reading `signing.clj`),
+;; and `signing/verify` runs on EVERY execution (`native-executor/execute`
+;; calls it, not just once at compile time) -- so there is no way, at any
+;; layer, INCLUDING a hand-crafted artifact that bypasses `frontend/analyze`
+;; entirely, to reach real `kexe-loader` execution with a variant
+;; discriminant the type system did not itself validate as a declared
+;; case's ordinal.
+;;
+;; Given that, this deftest does not attempt to smuggle a bad discriminant
+;; through the compile/sign/execute pipeline (that pipeline's own defense in
+;; depth makes it impossible by design, which is itself the point). Instead
+;; it directly exercises `emit-variant-dispatch`'s own defensive UD2/BRK
+;; fallback -- present in the compiled machine code as insurance, matching
+;; this codebase's own `kernel-load-u8`/`kgraph-entity-at` defense-in-depth
+;; style and the WASM Component Model track's own `variant-wat` discriminant
+;; range check -- by calling the PRIVATE dispatch primitive directly (the
+;; SAME technique this file already uses for other internals, e.g.
+;; `@#'executor/run-process` above) with a literal ordinal (99) no admitted
+;; `.kotoba` program could ever produce for a 3-case dispatch, wraps the
+;; result in a minimal hand-assembled function (bypassing `emit-function`/
+;; `emit-program`/`frontend/analyze`/`verifier/verify-artifact!` entirely),
+;; and runs the resulting bytes through the SAME measured, real `kexe-
+;; loader` native process every other deftest in this file uses -- proving
+;; the fallback trap is REAL, present, byte-correct machine code, not merely
+;; a code comment's claim.
+(defn- raw-out-of-range-dispatch-code []
+  (if (= (target) :aarch64-kotoba-v1)
+    (let [emit-variant-dispatch (deref #'aarch64/emit-variant-dispatch)
+          fuel-charge (deref #'aarch64/fuel-charge)
+          insn (deref #'aarch64/insn)
+          branch-specs [{:binder '_a :body 10} {:binder '_b :body 20} {:binder '_c :body 30}]
+          body (emit-variant-dispatch 99 0 branch-specs {} 0)]
+      ;; Mirrors `emit-function`'s own n=0-parameter prologue/epilogue
+      ;; exactly (register-frame = 16*(quot 1 2) = 0, so no save/restore
+      ;; frame at all): fuel-charge; stp fp,lr,[sp,#-16]!; mov fp,sp; <body>;
+      ;; ldp fp,lr,[sp],#16; ret.
+      (vec (concat fuel-charge (insn 0xa9bf7bfd) (insn 0x910003fd)
+                   body
+                   (insn 0xa8c17bfd) (insn 0xd65f03c0))))
+    (let [emit-variant-dispatch (deref #'x86-64/emit-variant-dispatch)
+          fuel-charge (deref #'x86-64/fuel-charge)
+          le32 (deref #'x86-64/le32)
+          branch-specs [{:binder '_a :body 10} {:binder '_b :body 20} {:binder '_c :body 30}]
+          body (emit-variant-dispatch 99 0 branch-specs {}
+                                      {:param-count 0 :pad? true :temp-depth 0
+                                       :function-name 'raw-dispatch-trap :tail? true})]
+      ;; Mirrors `emit-function`'s own n=0-parameter prologue/epilogue
+      ;; exactly (pad? = (even? 0) = true, frame-bytes = 8*(0+1) = 8):
+      ;; fuel-charge; push rax (alignment padding); <body>; add rsp,8; ret.
+      (vec (concat fuel-charge [0x50] body [0x48 0x81 0xc4] (le32 8) [0xc3])))))
+
+(deftest variant-dispatch-fallback-traps-on-a-discriminant-no-admitted-program-can-ever-produce
+  (let [{:keys [loader-path]} @measured-runtime
+        host-os ((deref #'executor/host-os))
+        run-process (deref #'executor/run-process)
+        runtime-environment (deref #'executor/runtime-environment)
+        delete-tree! (deref #'executor/delete-tree!)
+        isa (if (= (target) :aarch64-kotoba-v1) "aarch64" "x86_64")
+        code (raw-out-of-range-dispatch-code)
+        directory (java.nio.file.Files/createTempDirectory
+                   "kotoba-raw-native-" (make-array java.nio.file.attribute.FileAttribute 0))
+        code-file (java.io.File. (.toFile directory) "program.bin")]
+    (try
+      (atomic-output/write-bytes! (.getPath code-file) (byte-array (map unchecked-byte code)))
+      (let [command [loader-path (.getPath code-file) "0" "0" isa "-"]
+            process (run-process command (runtime-environment host-os)
+                                 {:timeout-ms 5000 :output-limit 65536})
+            report (edn/read-string (str/trim (:stdout process)))]
+        (is (= :trap (:status report))
+            "the dispatch chain's defensive fallback (UD2 on x86-64, BRK on
+             aarch64) fired as real, executed machine code for a
+             discriminant (99) outside the declared [0,3) case range --
+             fail-closed, not silently undefined -- confirmed via the SAME
+             real `kexe-loader` native process every other deftest in this
+             file uses"))
+      (finally (delete-tree! (.toFile directory))))))

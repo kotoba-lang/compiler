@@ -40,10 +40,14 @@
 ;; (ADR 0062) -- a sealed, all-scalar (`:i64`/`:bool` fields only)
 ;; `record-new`/`record-get` pair, used only in the one exact nested
 ;; construction+projection shape `backend/x86-64.cljc`/`backend/aarch64.cljc`
-;; implement. Every other typed feature (options, results, variants, general
-;; records, typed maps/vectors/sets) has zero native backend codegen and must
-;; keep producing the same "requires kotoba-script web target" rejection it
-;; always has. This is a content check, not a blanket per-backend allowance:
+;; implement, PLUS -- as of the second native increment (ADR 0063) -- a
+;; sealed, all-scalar-cased `variant-new`/`variant-match` pair, used only in
+;; the analogous one exact nested construction+dispatch shape those same two
+;; files implement. Every other typed feature (options, results, general/
+;; nested/escaping records or variants, typed maps/vectors/sets) has zero
+;; native backend codegen and must keep producing the same "requires
+;; kotoba-script web target" rejection it always has. This is a content
+;; check, not a blanket per-backend allowance:
 ;; :kotoba.hir/v3 covers ALL typed features uniformly, so admitting the
 ;; format for native without inspecting which features are actually used
 ;; would silently let unsupported ops reach the backend and crash confusingly

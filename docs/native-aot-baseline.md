@@ -51,6 +51,44 @@ than one `record-get` call all remain closed; there is still no native
 provider/capability mechanism of any kind, and no capability kit's
 qualification is affected by ADR 0062.
 
+A sealed, all-scalar-cased (`:i64`/`:bool` payloads only) variant now has
+the analogous executable, real-native-process-proven construction+dispatch
+slice, on BOTH x86-64 and aarch64 (ADR 0063, the second native
+value-representation increment). Like the record, a variant has no
+independent runtime representation: `(variant-match type (variant-new type
+tag payload) branches)` is rewritten at codegen time into TWO synthetic
+8-byte stack slots (discriminant ordinal, payload) on the SAME
+`emit-let`/`load-let` machinery -- but unlike the record's field
+projection (a plain depth-relative load, no branching at all), dispatch is
+a genuine runtime compare-and-branch chain over the stored discriminant (a
+sequence of `cmp`/`je` on x86-64, `cmp`/`b.eq` on aarch64, one pair per
+declared case, in order), falling through to a defensive `UD2`/`BRK` trap
+if no case matches. This trap is provably unreachable from any program this
+repository's own pipeline will ever admit, sign, or execute -- confirmed by
+reading `signing.clj`: BOTH `sign` and `verify` (the latter invoked on
+EVERY execution, not merely once at compile time) unconditionally re-run
+the full `verifier/verify-artifact!`, on top of frontend's own unconditional
+declared-tag check and this backend's own independently re-derived tag
+lookup -- so proving the trap fires as real machine code required directly
+exercising the dispatch-chain primitive with a hand-fed out-of-range
+ordinal, bypassing the compile/sign/verify pipeline entirely (this is a
+genuine, discovered defense-in-depth property of this repository's own
+security architecture, not a workaround). A "tag-only" case needed no new
+type-system concept: it still declares a real, uniformly-represented
+`:i64`/`:bool` payload at construction, and is "tag-only" purely by the
+convention that its dispatch branch body never reads that payload back. A
+variant value never crosses a function boundary, and `variant-match`'s
+value operand must be a directly-nested, same-schema `variant-new`,
+mirroring the record's own restrictions exactly (which also means the
+SPECIFIC case constructed at any one call site in this increment is always
+statically known, even though the compare-and-branch machinery itself does
+not special-case around that -- see the ADR's own Decision for the
+distinction). Records/variants nested inside each other, string/keyword-
+bearing cases, f64 payloads, a genuinely dynamic dispatch site, a genuine
+zero-payload marker type, and case counts beyond a handful all remain
+closed; there is still no native provider/capability mechanism of any
+kind, and no capability kit's qualification is affected by ADR 0063.
+
 ## Relationship to the Wasm Component Model track
 
 The Wasm Component Model track (`docs/component-model-baseline.md`)
@@ -66,6 +104,7 @@ native backends do not run Canonical ABI lowering, WIT generation, or
 component composition at all), and this doc's own running summary should
 not be read as claiming native parity with any of that progress. Native
 AOT reaching that same level of capability-kit qualification would need,
-at minimum, native records with string/keyword fields, native variants,
-and a native provider/capability-linking mechanism -- none of which exist
-yet, all separately gapped by ADR 0062's own "Remaining gaps" section.
+at minimum, native records/variants with string/keyword fields, records
+and variants nested inside each other, and a native provider/capability-
+linking mechanism -- none of which exist yet, all separately gapped by
+ADR 0062's and ADR 0063's own "Remaining gaps" sections.
