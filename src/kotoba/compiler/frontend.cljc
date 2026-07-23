@@ -611,6 +611,19 @@
           (desugar-expr (first args))
           (partition 2 (rest args))))
 
+(defn- desugar-dotimes [args form]
+  (let [[binding & body] args]
+    (when-not (and (vector? binding) (= 2 (count binding))
+                   (symbol? (first binding)) (nil? (namespace (first binding))))
+      (reject! "dotimes requires [unqualified-symbol count]" form))
+    (let [[index count-form] binding
+          limit (gensym "dotimes-limit__")
+          iteration (list* 'do (concat body [(list 'recur (list '+ index 1))]))]
+      (desugar-expr
+       (list 'let [limit count-form]
+             (list 'loop [index 0]
+                   (list 'if (list '< index limit) iteration 0)))))))
+
 (defn- thread-form [value step last?]
   (cond
     (symbol? step) (list step value)
@@ -1069,6 +1082,7 @@
         cond (desugar-cond args form)
         cond-> (desugar-cond-thread args form false)
         cond->> (desugar-cond-thread args form true)
+        dotimes (desugar-dotimes args form)
         case (desugar-case args form)
         if-let (desugar-binding-if args form false)
         when-let (desugar-binding-if args form true)
