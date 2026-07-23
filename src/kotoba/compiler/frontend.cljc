@@ -657,19 +657,23 @@
                    (symbol? (first binding)) (nil? (namespace (first binding))))
       (reject! "doseq requires one [unqualified-symbol collection] binding; modifiers and multiple bindings are not supported"
                form))
-    (let [[item collection] binding]
-      (when-not (vector? collection)
-        (reject! "doseq collection must be a bounded vector literal" form))
-      (let [values (gensym "doseq-values__")
-            iterations
-            (map-indexed
-             (fn [index _]
-               (list 'let [item (list 'vector-at values index)]
-                     (list* 'do (concat body [0]))))
-             collection)]
-        (desugar-expr
-         (list 'let [values collection]
-               (list* 'do (concat iterations [0]))))))))
+    (let [[item collection] binding
+          values (gensym "doseq-values__")
+          length (gensym "doseq-length__")
+          iterations
+          (map (fn [index]
+                 (list 'if (list '< index length)
+                       (list 'let [item (list 'vector-at values index)]
+                             (list* 'do (concat body [0])))
+                       0))
+               (range value/vector-literal-item-limit))
+          blocks (map #(list* 'do (concat % [0]))
+                      (partition-all 16 iterations))
+          unrolled (list* 'do (concat blocks [0]))]
+      (desugar-expr
+       (list 'let [values collection]
+             (list 'let [length (list 'vector-count values)]
+                   unrolled))))))
 
 (defn- thread-form [value step last?]
   (cond
