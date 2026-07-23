@@ -349,11 +349,15 @@
                                   record-case-kir (wit/emit record-case-kir))]
         (is (= :variant-capability-call (:canonical-lowering record-case-artifact)))
         (is (= :wasm-component/v1 (:format record-case-artifact)))))
-    ;; A case wrapping a sealed *string/keyword-bearing* record (the ADR
-    ;; 0053 shape) remains fail-closed -- ADR 0056 only widened admission to
-    ;; the all-scalar record case; string/keyword data crossing a
-    ;; capability-call boundary at all is a separate, still-unattempted gap
-    ;; (see ADR 0056's own 'Remaining gaps').
+    ;; ADR 0057: a case wrapping a sealed *string/keyword-bearing* record
+    ;; (the ADR 0053 shape) is now admitted for a capability-call boundary
+    ;; too -- ADR 0056 only widened admission to the all-scalar record case;
+    ;; string/keyword data crossing a capability-call boundary at all was a
+    ;; separate, unattempted gap both ADR 0055 and ADR 0056 named as
+    ;; remaining. `demo/cap-entry` is exactly `state-v1`'s own real `entry`
+    ;; shape (`key: keyword, value: string, version: i64`).
+    ;; `component_composition_test.clj` proves the same shape through a real
+    ;; composed component and Wasmtime execution.
     (let [string-case-schemas
           {:demo/cap-entry [:record :demo/cap-entry
                             [[:key :keyword] [:value :string] [:version :i64]]]
@@ -366,9 +370,51 @@
                               (assoc-in [:functions 0 :body]
                                         (list 'typed-cap-call 8 [:ref :demo/cap-string-outcome]
                                               [:ref :demo/cap-string-outcome] 'request)))]
+      (is (true? (component/assert-scalar-slice! string-case-kir (wit/emit string-case-kir))))
+      (let [string-case-artifact (component/package
+                                  (component-core/emit string-case-kir :wasm32-wasi-kotoba-v1)
+                                  string-case-kir (wit/emit string-case-kir))]
+        (is (= :variant-capability-call (:canonical-lowering string-case-artifact)))
+        (is (= :wasm-component/v1 (:format string-case-artifact)))))
+    ;; A case wrapping an ADR 0051 one-level-nested record (a field whose own
+    ;; type is itself a sealed record, rather than a scalar or string/
+    ;; keyword leaf) remains fail-closed: `variant-capability-case?` only
+    ;; admits a bare scalar, a sealed all-scalar record, or a sealed flat
+    ;; string/keyword-bearing record as a case payload, never one level
+    ;; deeper.
+    (let [nested-case-schemas
+          {:demo/cap-inner [:record :demo/cap-inner [[:count :i64]]]
+           :demo/cap-nested-entry [:record :demo/cap-nested-entry
+                                   [[:inner [:ref :demo/cap-inner]] [:label :string]]]
+           :demo/cap-nested-outcome [:variant :demo/cap-nested-outcome
+                                     [[:found [:ref :demo/cap-nested-entry]] [:missing :bool]]]}
+          nested-case-kir (-> kir
+                              (assoc :schemas nested-case-schemas)
+                              (assoc-in [:functions 0 :param-types] [[:ref :demo/cap-nested-outcome]])
+                              (assoc-in [:functions 0 :result] [:ref :demo/cap-nested-outcome])
+                              (assoc-in [:functions 0 :body]
+                                        (list 'typed-cap-call 8 [:ref :demo/cap-nested-outcome]
+                                              [:ref :demo/cap-nested-outcome] 'request)))]
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
-                            (component/assert-scalar-slice! string-case-kir
-                                                            (wit/emit string-case-kir)))))
+                            (component/assert-scalar-slice! nested-case-kir
+                                                            (wit/emit nested-case-kir)))))
+    ;; A bare `:string`/`:keyword` case payload (not wrapped in a record)
+    ;; remains fail-closed -- only a record *field* carries string/keyword
+    ;; data across this boundary in this slice.
+    (let [bare-string-case-schemas
+          {:demo/cap-label-outcome [:variant :demo/cap-label-outcome
+                                    [[:label :string] [:missing :bool]]]}
+          bare-string-case-kir (-> kir
+                                   (assoc :schemas bare-string-case-schemas)
+                                   (assoc-in [:functions 0 :param-types]
+                                             [[:ref :demo/cap-label-outcome]])
+                                   (assoc-in [:functions 0 :result] [:ref :demo/cap-label-outcome])
+                                   (assoc-in [:functions 0 :body]
+                                             (list 'typed-cap-call 8 [:ref :demo/cap-label-outcome]
+                                                   [:ref :demo/cap-label-outcome] 'request)))]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
+                            (component/assert-scalar-slice! bare-string-case-kir
+                                                            (wit/emit bare-string-case-kir)))))
     ;; Different request/result variant identities remain fail-closed,
     ;; matching `record-capability-call`'s own same-identity discipline (ADR
     ;; 0048).

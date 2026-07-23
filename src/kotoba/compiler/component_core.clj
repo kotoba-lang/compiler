@@ -308,32 +308,28 @@
       {:capability capability :request request-type :result result})))
 
 (defn- variant-capability-case?
-  "True when `payload-type` is a shape ADR 0056 admits as one variant case's
+  "True when `payload-type` is a shape admitted as one variant case's
   payload *when that variant is used as a `typed-cap-call` request/result*:
   a bare Canonical scalar (`i64`/`f32`/`f64`/`bool`, ADR 0055's original
-  scope) or a sealed all-scalar record (the ADR 0052 shape, via
-  `sealed-scalar-record`). Widens ADR 0055's own `scalar-only-variant-case?`
-  (renamed here) by exactly the record-case kind ADR 0055 found blocked at
-  the `wac plug` layer and recorded as a currently-blocked path, not a
-  permanent one: `wac plug` (pinned 0.9.0 during ADR 0055) failed encoding
-  any record-referencing-variant crossing a capability boundary with `type
-  not valid to be used as import`, reproduced across four independent
-  variations; `wac` 0.10.0 (bytecodealliance/wac#205, 'Alias `use`'d types
-  during composition instead of re-encoding them locally') fixes exactly
-  this failure mode -- confirmed here by an independent reproduction of ADR
-  0055's own failing shape against both the pinned 0.9.0 (fails identically)
-  and 0.10.1 (composes, validates, and round-trips through real Wasmtime
-  execution) before this predicate was widened. Still deliberately narrower
-  than `record-or-scalar-variant-case?` (ADR 0054), which also admits a
-  sealed string/keyword-bearing record case (ADR 0053) for an
-  *identity-export* variant: string/keyword data crossing a capability-call
-  boundary at all is a separate, unattempted gap (no case kind has ever
-  exercised it, not even a plain record `typed-cap-call`, ADR 0048) and is
-  not what the `wac plug` fix resolves -- widening to that case kind remains
-  future work, not something this ADR's own reproduction touched."
+  scope), a sealed all-scalar record (the ADR 0052 shape, ADR 0056), or --
+  new in ADR 0057 -- a sealed flat string/keyword-bearing record (the ADR
+  0053 shape, via `string-field-record-schema`). This closes the exact gap
+  both ADR 0055 and ADR 0056 named as remaining and unattempted: string/
+  keyword data crossing a capability-call boundary at all. It does *not*
+  admit a bare `:string`/`:keyword` case payload directly (a case whose own
+  payload type is `:string`/`:keyword` with no record wrapper) -- only a
+  record field carries string/keyword data across this boundary in this
+  slice, matching `state-v1`'s own actual shape (every one of its non-bool
+  cases wraps a record, never a bare string). `record-capability-call` (a
+  bare record, not wrapped in a variant, as the whole request/result) is
+  untouched and still admits scalar fields only -- widening that path is a
+  separate, still-unattempted slice this ADR does not attempt, deliberately,
+  because `state-v1`'s own request/result are both variants, never a bare
+  record."
   [payload-type schemas]
   (or (contains? #{:i64 :f32 :f64 :bool} payload-type)
-      (boolean (sealed-scalar-record payload-type schemas))))
+      (boolean (sealed-scalar-record payload-type schemas))
+      (boolean (string-field-record-schema payload-type schemas))))
 
 (defn- variant-capability-schema
   "Schema of `descriptor` when it is a sealed variant whose every case's
@@ -1218,43 +1214,116 @@
      "    i32.const 8 global.set $next)\n"
      "  (func (export \"cm32p2_initialize\") i32.const 8 global.set $next))\n")))
 
+(defn- variant-capability-string-headroom
+  "`[pages capacity needs-string-headroom?]` for a capability-crossing
+  variant layout, the capability-call twin of `variant-wat`'s own generous-
+  not-tight sizing formula (same `max-string-leaves-per-case` computation,
+  keyed off the *widest single case*, since only one case's own payload is
+  ever active per call). New in ADR 0057: every capability-crossing variant
+  WAT module before this ADR (`variant-capability-wat`/
+  `variant-capability-provider-wat`) fixed its memory at exactly one page
+  and never needed headroom, because `variant-capability-case?` admitted no
+  string/keyword-bearing leaf. Now that it does, both the application module
+  (which must hold a copy of the result's string bytes once the provider's
+  result crosses back) and the provider module (which must hold a copy of
+  the request's string bytes once they cross in, *and* leave room for its
+  own result struct) need the same string-aware sizing `string-field-record-
+  wat`/`variant-wat` already established, reused here rather than
+  re-derived."
+  [variant-layout]
+  (let [case-leaves (mapv (fn [case] (variant-case-leaves (:layout case))) (:cases variant-layout))
+        max-string-leaves-per-case (reduce max 0 (map #(count (filter :max-bytes %)) case-leaves))
+        needs-string-headroom? (pos? max-string-leaves-per-case)
+        pages (if needs-string-headroom?
+                (max 1 (quot (+ 8 (* (inc max-string-leaves-per-case) 65536)
+                                (:size variant-layout) 65535)
+                             65536))
+                1)]
+    [pages (* pages 65536) needs-string-headroom?]))
+
+(defn- bounded-bump-realloc-wat
+  "A real bounded bump allocator (`$next`-tracked, alignment-respecting,
+  capacity-trapping, old-content-preserving on grow) as a standalone
+  `cm32p2_realloc` export body -- exactly `variant-wat`'s own realloc,
+  factored out so `variant-capability-wat` and
+  `variant-capability-provider-wat` can each use it too (new in ADR 0057:
+  neither previously needed more than one, single-purpose allocation per
+  call, so a plain unbounded bump pointer, or in the provider's case a fixed
+  constant address, was enough; a string/keyword-bearing case now means the
+  Canonical ABI's own cross-instance string-copy machinery calls this
+  export an *additional*, unpredictable number of times -- once per string-
+  like leaf actually crossing, before this module's own body even runs --
+  so both callers now need a real allocator that composes safely with those
+  extra calls instead of colliding with them, and a capacity bound so an
+  oversized string traps rather than silently corrupting memory past the
+  module's declared page count)."
+  [capacity]
+  (str
+   "  (func $realloc (export \"cm32p2_realloc\")\n"
+   "    (param $old-ptr i32) (param $old-size i32)\n"
+   "    (param $align i32) (param $new-size i32) (result i32)\n"
+   "    (local $ptr i32) (local $end i32) (local $copy-size i32)\n"
+   "    local.get $new-size i32.eqz if i32.const 0 return end\n"
+   "    local.get $align i32.eqz if unreachable end\n"
+   "    local.get $align i32.const 8 i32.gt_u if unreachable end\n"
+   "    local.get $align local.get $align i32.const 1 i32.sub i32.and if unreachable end\n"
+   "    global.get $next local.get $align i32.const 1 i32.sub i32.add\n"
+   "    i32.const 0 local.get $align i32.sub i32.and local.tee $ptr\n"
+   "    local.get $new-size i32.add local.tee $end local.get $ptr i32.lt_u\n"
+   "    if unreachable end\n"
+   "    local.get $end i32.const " capacity " i32.gt_u if unreachable end\n"
+   "    local.get $end global.set $next\n"
+   "    local.get $old-ptr i32.eqz if else\n"
+   "      local.get $old-size local.get $new-size i32.lt_u\n"
+   "      if (result i32) local.get $old-size else local.get $new-size end\n"
+   "      local.set $copy-size\n"
+   "      local.get $ptr local.get $old-ptr local.get $copy-size memory.copy\n"
+   "    end local.get $ptr)\n"))
+
 (defn- variant-capability-wat
   "Application-side standard32 core module for a direct `typed-cap-call`
   whose request/result is one sealed variant admitted by
-  `variant-capability-schema`. Unchanged since ADR 0055 -- widening the
-  admitted case set to include a sealed all-scalar record (ADR 0056)
-  required no change here, because this module only ever forwards the
-  variant's already-flattened joined core values (`canonical/layout`'s
-  `:flat`), which is already case-kind agnostic. The joined component-flat signature
-  (`$disc` plus one core param per joined payload position, exactly
-  `variant-wat`'s own signature -- `canonical/layout`'s `:flat` on the
-  variant descriptor) is unchanged from the identity-export case; the only
-  difference is that this module never itself un-joins or stores a case's
-  payload -- it allocates the variant's Canonical result area (`realloc`
-  sized to the variant layout's own `:size`/`:alignment`, exactly as
-  `variant-wat` does for its own self-allocated result), forwards the
-  discriminant and every joined payload value plus that result pointer to
-  the imported provider function unchanged, and returns the same pointer.
-  This is `record-capability-wat`'s exact division of labor (forward flat
-  values plus a caller-allocated result pointer to an import that has no
-  core result, matching the Canonical ABI's own indirect-result convention
-  for a >1-flat-value result) generalized from a record's flat field list to
-  a variant's joined `:flat` case-value list. Unlike `record-capability-wat`
-  (which validates bool fields on the *application* side before crossing),
-  disc-range-checking and per-case validation for a variant can only be done
-  correctly by whichever side actually knows which case is active, which is
-  exactly the side that performs the case-dispatch store -- here, the
-  provider (`variant-capability-provider-wat`), which reuses `variant-wat`'s
-  own case-chain (disc range check plus in-branch bool validation)
-  unmodified. The application module therefore performs no validation of its
-  own; it is a thin pass-through, exactly mirroring `scalar-capability-wat`'s
-  own no-validation precedent for a single scalar leaf, now applied to every
-  joined position of a variant."
+  `variant-capability-schema`. The joined component-flat signature (`$disc`
+  plus one core param per joined payload position, exactly `variant-wat`'s
+  own signature -- `canonical/layout`'s `:flat` on the variant descriptor)
+  is unchanged from the identity-export case; this module never itself
+  un-joins or stores a case's payload -- it allocates the variant's
+  Canonical result area (`realloc` sized to the variant layout's own
+  `:size`/`:alignment`, exactly as `variant-wat` does for its own
+  self-allocated result), forwards the discriminant and every joined
+  payload value plus that result pointer to the imported provider function
+  unchanged, and returns the same pointer. This is `record-capability-wat`'s
+  exact division of labor (forward flat values plus a caller-allocated
+  result pointer to an import that has no core result, matching the
+  Canonical ABI's own indirect-result convention for a >1-flat-value
+  result) generalized from a record's flat field list to a variant's
+  joined `:flat` case-value list. Unlike `record-capability-wat` (which
+  validates bool fields on the *application* side before crossing),
+  disc-range-checking and per-case validation for a variant can only be
+  done correctly by whichever side actually knows which case is active,
+  which is exactly the side that performs the case-dispatch store -- here,
+  the provider (`variant-capability-provider-wat`), which reuses
+  `variant-wat`'s own case-chain (disc range check plus in-branch bool and
+  string/keyword-bounds validation) unmodified. The application module
+  therefore performs no validation of its own; it is a thin pass-through,
+  exactly mirroring `scalar-capability-wat`'s own no-validation precedent
+  for a single scalar leaf, now applied to every joined position of a
+  variant, string/keyword pointer+length pairs included -- new in ADR 0057
+  is only that this module's own memory/`$realloc` must now tolerate the
+  *additional* realloc calls the Canonical ABI's own cross-instance string
+  lowering makes when copying a result string's bytes back into this
+  module's memory (`variant-capability-string-headroom`/
+  `bounded-bump-realloc-wat`, the same string-aware sizing and bounded
+  allocator `variant-wat` already uses for its own single-module string
+  leaves); the WAT emitted for a case with no string-like leaf at all is
+  otherwise unchanged in shape from ADR 0055/0056 (still one page, still
+  the same bump-pointer body, now just capacity-checked)."
   [function schemas plan]
   (let [export (wit-name (:name function))
         capability (:capability plan)
         variant-layout (canonical/layout (:request plan) schemas)
         joined-types (vec (rest (:flat variant-layout)))
+        [pages capacity _] (variant-capability-string-headroom variant-layout)
         payload-params (apply str
                               (map (fn [core-type] (str " (param " (core-type-name core-type) ")"))
                                    joined-types))
@@ -1273,16 +1342,11 @@
      "(module\n"
      "  (import \"cm32p2|kotoba:application/" (:interface capability) "@1\" \""
      (:function capability) "\" (func $provider" import-params " (param i32)))\n"
-     "  (memory (export \"cm32p2_memory\") 1 1)\n"
+     "  (memory (export \"cm32p2_memory\") " pages " " pages ")\n"
      "  (global $next (mut i32) (i32.const 8))\n"
-     "  (func $realloc (export \"cm32p2_realloc\")\n"
-     "    (param i32 i32) (param $align i32) (param $size i32) (result i32)\n"
-     "    (local $ptr i32)\n"
-     "    global.get $next local.get $align i32.const 1 i32.sub i32.add\n"
-     "    i32.const 0 local.get $align i32.sub i32.and local.tee $ptr\n"
-     "    local.get $size i32.add global.set $next local.get $ptr)\n"
+     (bounded-bump-realloc-wat capacity)
      "  (func (export \"cm32p2||" export "\")" params " (result i32)\n"
-     "    (local $ret i32)\n"
+     "    (local $ret i32) (local $end i32)\n"
      "    i32.const 0 i32.const 0 i32.const " (:alignment variant-layout)
      " i32.const " (:size variant-layout) " call $realloc local.set $ret\n"
      arguments
@@ -1293,7 +1357,7 @@
 
 (defn variant-capability-provider-wat
   "Wiring-only provider core module for one sealed variant admitted by
-  `variant-capability-schema` (ADR 0055/0056) -- public so
+  `variant-capability-schema` (ADR 0055/0056/0057) -- public so
   `kotoba.compiler.component-composition` can build a provider artifact for
   it (mirroring `kotoba.compiler.component-composition/record-provider-wat`,
   which duplicates `record-capability-wat`'s own store shape locally rather
@@ -1305,19 +1369,40 @@
   `component-wit/contract`'s own `:capabilities` entries and
   `component-composition`'s local `capability` lookup already use).
   Reuses `variant-wat`'s exact case-chain (disc range check, then in-branch
-  bool validation and store for the active case, including a sealed
-  all-scalar record's own field stores at the correct union offset since
-  ADR 0056 widened admission -- string/keyword leaves still cannot appear
-  here because `variant-capability-schema` excludes them) unchanged, the
-  only difference being that the result
-  pointer is the fixed minimal address `record-provider-wat`'s own
-  precedent already uses (`i32.const 8`, no dynamic allocation) rather than
-  a bump-allocated one, since this provider's own memory is never grown
-  beyond its own fixed-size union layout."
+  bool and, since ADR 0057 widened admission, string/keyword-bounds
+  validation and store for the active case) unchanged.
+
+  New in ADR 0057: the result pointer is no longer the fixed minimal
+  address ADR 0055/0056's identity-only providers used (`i32.const 8`, no
+  dynamic allocation) -- it is now allocated through this module's own
+  `cm32p2_realloc` (`bounded-bump-realloc-wat`), exactly the way every
+  other struct-producing WAT emitter in this namespace already allocates
+  its own result area. This is not a cosmetic change: once a case's payload
+  can carry a string/keyword leaf, the Canonical ABI's own cross-instance
+  string-copy machinery calls this module's *exported* `cm32p2_realloc`
+  itself -- once per string-like leaf in the active request case -- to copy
+  each leaf's bytes into this module's memory *before* this module's own
+  function body runs at all. A fixed constant-address realloc (correct only
+  when it is ever the sole allocation in a call, true for every case shape
+  ADR 0055/0056 admitted) would silently collide: the incoming string
+  bytes and this function's own result struct would land at the identical
+  address, corrupting whichever was written second. Routing the result
+  struct through the same bump allocator the string copies already use
+  keeps every allocation in one call sequential and non-overlapping,
+  regardless of call order between this module's own body and the
+  generated glue -- a plain consequence of a bump allocator's own
+  construction, not case-specific logic. A case with no string-like leaf at
+  all is unaffected in behavior: with no extra realloc call preceding it,
+  the bump allocator's first call still returns the same fixed address 8
+  ADR 0055/0056 hard-coded, for the same alignment reason `variant-wat`'s
+  own realloc already establishes (8 is a multiple of every alignment this
+  codebase's Canonical ABI layouts produce, so the bump math's first result
+  is always exactly 8)."
   [entry descriptor schemas]
   (let [export (str "cm32p2|kotoba:application/" (:interface entry) "@1|" (:function entry))
         variant-layout (canonical/layout descriptor schemas)
         joined-types (vec (rest (:flat variant-layout)))
+        [pages capacity needs-string-headroom?] (variant-capability-string-headroom variant-layout)
         params (apply str
                       (cons " (param $disc i32)"
                             (map-indexed
@@ -1326,21 +1411,24 @@
                              joined-types)))
         case-chain (variant-case-chain (:cases variant-layout)
                                        (:payload-offset variant-layout)
-                                       joined-types 65536)]
+                                       joined-types capacity)]
     (str
      "(module\n"
-     "  (memory (export \"cm32p2_memory\") 1 1)\n"
+     "  (memory (export \"cm32p2_memory\") " pages " " pages ")\n"
+     "  (global $next (mut i32) (i32.const 8))\n"
+     (bounded-bump-realloc-wat capacity)
      "  (func (export \"" export "\")" params " (result i32)\n"
-     "    (local $ret i32)\n"
-     "    i32.const 8 local.set $ret\n"
+     "    (local $ret i32)" (when needs-string-headroom? " (local $end i32)") "\n"
+     "    i32.const 0 i32.const 0 i32.const " (:alignment variant-layout)
+     " i32.const " (:size variant-layout) " call $realloc local.set $ret\n"
      "    local.get $disc i32.const " (count (:cases variant-layout)) " i32.ge_u if unreachable end\n"
      "    local.get $ret local.get $disc "
      (variant-disc-store (:discriminant-size variant-layout)) " offset=0\n"
      case-chain
      "    local.get $ret)\n"
-     "  (func (export \"" export "_post\") (param i32))\n"
-     "  (func (export \"cm32p2_realloc\") (param i32 i32 i32 i32) (result i32) i32.const 8)\n"
-     "  (func (export \"cm32p2_initialize\")))\n")))
+     "  (func (export \"" export "_post\") (param i32)\n"
+     "    i32.const 8 global.set $next)\n"
+     "  (func (export \"cm32p2_initialize\") i32.const 8 global.set $next))\n")))
 
 (defn emit [kir target]
   (case (assert-supported! kir)

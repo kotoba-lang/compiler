@@ -173,12 +173,27 @@
 (def ^:private variant-case-wit-type
   {:i64 "s64" :f32 "f32" :f64 "f64" :bool "bool"})
 
+(def ^:private record-field-wit-type
+  "WIT spelling for one record *field* type admitted inside a variant
+  provider's referenced record -- `variant-case-wit-type` widened by
+  `:string`/`:keyword`, both spelled WIT `string` (ADR 0057, mirroring
+  `kotoba.compiler.component-wit/type-text`'s own long-standing `:string`/
+  `:keyword` -> `string` mapping and `kotoba.compiler.component-core/
+  string-field-record-schema`'s field-type set). Kept distinct from
+  `variant-case-wit-type` because a *bare* case payload (the case itself,
+  not a field inside a record case) still admits only a Canonical scalar in
+  this slice -- no case kind's own payload type is directly `:string`/
+  `:keyword`, only a record field nested inside a record case may be."
+  (assoc variant-case-wit-type :string "string" :keyword "string"))
+
 (defn- variant-record-case-schema
   "Schema of `payload-type` when it is `[:ref name]` to a sealed record whose
-  fields are each a bare Canonical scalar (the ADR 0052 shape) -- the
+  fields are each a bare Canonical scalar (the ADR 0052 shape) or a bounded
+  `string`/`keyword` leaf (the ADR 0053 shape, admitted as a capability-call
+  variant case's record payload for the first time in ADR 0057) -- the
   provider-side admission twin of
-  `kotoba.compiler.component-core/sealed-scalar-record` (private there;
-  duplicated here narrowly rather than reaching across the namespace
+  `kotoba.compiler.component-core/string-field-record-schema` (private
+  there; duplicated here narrowly rather than reaching across the namespace
   boundary, matching this file's own established precedent --
   `record-provider-wat` already duplicates `record-capability-wat`'s store
   shape locally for the same reason)."
@@ -188,7 +203,7 @@
       (when (and (vector? schema) (= :record (first schema))
                  (= (second payload-type) (second schema))
                  (seq (nth schema 2))
-                 (every? (comp variant-case-wit-type second) (nth schema 2)))
+                 (every? (comp record-field-wit-type second) (nth schema 2)))
         schema))))
 
 (defn- variant-referenced-record-schemas
@@ -202,33 +217,38 @@
 
 (defn- variant-case-payload-wit
   "WIT type text for one variant case's payload: a bare scalar's WIT spelling,
-  or a sealed all-scalar record case's own WIT type name."
+  or a sealed all-scalar or string/keyword-bearing record case's own WIT
+  type name."
   [payload-type schemas]
   (or (get variant-case-wit-type payload-type)
       (when-let [schema (variant-record-case-schema payload-type schemas)]
         (wit-name (second schema)))
-      (reject "provider variant case is not scalar or a sealed all-scalar record"
+      (reject "provider variant case is not scalar or a sealed admitted record"
               {:payload-type payload-type})))
 
 (defn- variant-wit
   "Deterministic WIT package/world text for one sealed variant provider whose
-  every case's payload is a bare Canonical scalar (ADR 0055) or a sealed
-  all-scalar record (ADR 0056, the ADR 0052 record shape) -- the
-  provider-side counterpart to `record-wit`. ADR 0055 deliberately did not
-  admit a case wrapping a record (unlike the identity-export variant path,
-  ADR 0052/0054): a record-referencing-variant provider built this same way
-  was tried against `wac plug` (pinned 0.9.0 at the time) and failed encoding
-  with `type not valid to be used as import` for every shape tried,
-  independent of case count, case mix, and `types`-interface declaration
-  order. ADR 0056 confirmed `wac` 0.10.0 (bytecodealliance/wac#205) fixes
-  exactly that failure mode and widened this function to declare the
-  referenced record type(s) inside the same `interface types {...}` block as
-  the variant, mirroring `record-wit`'s own record-declaration style, rather
-  than the single-type-only footprint ADR 0055 scoped down to. A case
-  wrapping a sealed *string/keyword-bearing* record (ADR 0053's shape)
-  remains unadmitted here -- string/keyword data crossing a capability-call
-  boundary at all is a separate, still-unattempted gap this ADR does not
-  close (see ADR 0056's own 'Remaining gaps')."
+  every case's payload is a bare Canonical scalar (ADR 0055), a sealed
+  all-scalar record (ADR 0056, the ADR 0052 record shape), or -- new in ADR
+  0057 -- a sealed flat string/keyword-bearing record (the ADR 0053 shape)
+  -- the provider-side counterpart to `record-wit`. ADR 0055 deliberately
+  did not admit a case wrapping a record (unlike the identity-export
+  variant path, ADR 0052/0054): a record-referencing-variant provider built
+  this same way was tried against `wac plug` (pinned 0.9.0 at the time) and
+  failed encoding with `type not valid to be used as import` for every
+  shape tried, independent of case count, case mix, and `types`-interface
+  declaration order. ADR 0056 confirmed `wac` 0.10.0
+  (bytecodealliance/wac#205) fixes exactly that failure mode and widened
+  this function to declare the referenced record type(s) inside the same
+  `interface types {...}` block as the variant, mirroring `record-wit`'s
+  own record-declaration style, rather than the single-type-only footprint
+  ADR 0055 scoped down to. ADR 0056 still left a case wrapping a sealed
+  *string/keyword-bearing* record (ADR 0053's shape) unadmitted, recording
+  it as a separate, still-unattempted gap: string/keyword data crossing a
+  capability-call boundary at all, independent of the `wac plug` defect ADR
+  0056 fixed. ADR 0057 closes exactly that gap for a record *case*'s own
+  field (not a bare case payload -- see `record-field-wit-type`'s
+  docstring)."
   [entry descriptor schemas]
   (let [schema (get schemas (second descriptor))
         [_ identity cases] schema
@@ -243,7 +263,7 @@
                              (or (contains? variant-case-wit-type payload-type)
                                  (variant-record-case-schema payload-type schemas)))
                            cases))
-      (reject "provider variant requires scalar or sealed all-scalar record cases"
+      (reject "provider variant requires scalar, sealed all-scalar record, or sealed string/keyword-bearing record cases"
               {:descriptor descriptor :schema schema}))
     (str "package kotoba:application@1.0.0;\n\n"
          "interface types {\n"
@@ -253,7 +273,7 @@
                             (apply str
                                    (map (fn [[field type]]
                                           (str "    " (wit-name field) ": "
-                                               (get variant-case-wit-type type) ",\n"))
+                                               (get record-field-wit-type type) ",\n"))
                                         fields))
                             "  }\n"))
                      record-schemas))

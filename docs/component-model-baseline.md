@@ -198,6 +198,44 @@ records are string/keyword-bearing) remain unclosed by this ADR for that
 reason; a real production `state` provider also remains unattempted (every
 provider in this ADR chain, like every prior one, is a wiring-only identity
 fixture); no capability kit's `:wasm-aot` qualification changed.
+A sealed variant whose every case is a bare Canonical scalar, a sealed
+all-scalar record (ADR 0052), *or* -- new here -- a sealed flat record
+whose fields are each a Canonical scalar or a bounded `string`/`keyword`
+leaf (the ADR 0053 shape) now crosses a real `typed-cap-call` capability
+boundary too (ADR 0057), closing the exact gap ADR 0055's and ADR 0056's
+own "Remaining gaps" both named as separately unattempted: string/keyword
+data crossing a capability-call boundary at all. `demo/cap-outcome`
+(`found: cap-entry`/`missing: bool`), the concrete evidence fixture, uses
+`cap-entry = {key: keyword, value: string, version: i64}` -- `state-v1`'s
+own real `entry` record verbatim, not a narrower structural stand-in --
+composed with a real identity provider and run under real Wasmtime 42.0.1
+execution, round-tripping the full `i64` range, multi-byte UTF-8 in both a
+keyword and a string leaf in the same call, and both Kotoba byte bounds
+(512-byte keyword, 65536-byte string) exercised as genuine traps for the
+first time across a cross-component boundary rather than only within one
+module. Unlike ADR 0056's own "zero lines of WAT-emission code changed"
+finding, this ADR required real new engineering: once a case can carry a
+string/keyword leaf, the Canonical ABI's own generated cross-instance
+string-lowering glue calls a module's *exported* `cm32p2_realloc` itself,
+an unpredictable extra number of times, before that module's own function
+body runs -- the provider's previous fixed-constant-address result
+allocation (correct only when it was ever the sole allocation in a call)
+would have silently collided with those glue-driven calls, corrupting
+data; both the application and provider modules now route their result
+allocation through a real, capacity-bounded bump allocator sized with
+string headroom (reusing `variant-wat`'s own single-module allocator
+pattern), confirmed not to regress the ADR 0055/0056 no-string fixtures by
+rebuilding and re-running both through real Wasmtime execution after the
+change. A bare `:string`/`:keyword` case payload with no record wrapper, a
+case wrapping an ADR 0051 one-level-nested record, `record-capability-call`
+(a bare record, not variant-wrapped) with string/keyword fields,
+lists/tuples/options/results, different request/result variant identities,
+and every production provider's real semantics all remain closed; no
+capability kit's `:wasm-aot` qualification changed. `state-v1` is still not
+closed end to end: its request and result are two *different* variant
+identities, while every capability-call ADR including this one has only
+proven the *same*-identity case, and a real production `state` provider
+remains unattempted.
 
 ## Official sources
 

@@ -123,17 +123,18 @@
     (is (= [0 97 115 109 13 0 1 0]
            (mapv #(bit-and (int %) 0xff) (take 8 (:bytes closed)))))))
 
-(deftest variant-with-string-keyword-record-case-boundary-remains-sealed
-  ;; A case wrapping a sealed *string/keyword-bearing* record (the ADR 0053
-  ;; shape) remains fail-closed for a capability-call boundary -- ADR 0056
-  ;; only widened admission to the all-scalar record case ADR 0052 already
-  ;; proved for identity-export; string/keyword data crossing a
-  ;; capability-call boundary at all is a separate, still-unattempted gap
-  ;; (see ADR 0056's 'Remaining gaps'), not something the `wac` fix touches.
-  ;; `component-core/emit` rejects it at admission (before any encoding is
-  ;; attempted), and `package-variant-identity-provider` independently
-  ;; rejects it too, so the boundary fails closed at both layers rather than
-  ;; surfacing only as a downstream `wac` encoding error.
+(deftest variant-with-string-keyword-record-case-closes-the-application-world
+  ;; ADR 0057: a case wrapping a sealed *string/keyword-bearing* record (the
+  ;; ADR 0053 shape) now crosses a `typed-cap-call` boundary too, closing
+  ;; the exact gap both ADR 0055 and ADR 0056 recorded as separately
+  ;; unattempted (string/keyword data crossing a capability-call boundary at
+  ;; all, independent of the `wac plug` defect ADR 0056 fixed).
+  ;; `demo/cap-entry` is `state-v1`'s own real `entry` shape exactly
+  ;; (`key: keyword, value: string, version: i64`); `demo/cap-outcome`
+  ;; (`found: entry`/`missing: bool`) is a structural slice of `state-v1`'s
+  ;; own `result` shape, deliberately narrower only in using the same
+  ;; identity as both request and result (matching ADR 0055/0056's own
+  ;; same-identity discipline for a wiring-only identity provider).
   (let [descriptor [:ref :demo/cap-outcome]
         schemas {:demo/cap-entry [:record :demo/cap-entry
                                   [[:key :keyword] [:value :string] [:version :i64]]]
@@ -142,9 +143,44 @@
         kir {:format :kotoba.kir/v4 :exports ['invoke] :schemas schemas
              :functions [{:name 'invoke :params ['request]
                           :param-types [descriptor] :result descriptor
+                          :body (list 'typed-cap-call 8 descriptor descriptor 'request)}]}
+        world (wit/emit kir)
+        application (artifact/package
+                     (component-core/emit kir :wasm32-wasi-kotoba-v1) kir world)
+        provider (composition/package-variant-identity-provider
+                  :state/transact descriptor schemas)
+        closed (composition/compose-closed application [provider])]
+    (is (= :variant-capability-call (:canonical-lowering application)))
+    (is (= :wasm-component-provider/v1 (:format provider)))
+    (is (= :wasm-component-closed/v1 (:format closed)))
+    (is (= [{:capability :state/transact :descriptor descriptor}]
+           (:providers closed)))
+    (is (= [0 97 115 109 13 0 1 0]
+           (mapv #(bit-and (int %) 0xff) (take 8 (:bytes closed)))))))
+
+(deftest variant-with-nested-record-case-boundary-remains-sealed
+  ;; A case wrapping an ADR 0051 one-level-nested record (a field whose own
+  ;; type is itself a sealed record, rather than a scalar or a string/
+  ;; keyword leaf) remains fail-closed for a capability-call boundary -- ADR
+  ;; 0057 widened admission to exactly the ADR 0053 flat string/keyword-
+  ;; bearing record shape, not one level deeper. `component-core/emit`
+  ;; rejects it at admission (before any encoding is attempted), and
+  ;; `package-variant-identity-provider` independently rejects it too, so
+  ;; the boundary fails closed at both layers rather than surfacing only as
+  ;; a downstream `wac` encoding error.
+  (let [descriptor [:ref :demo/cap-nested-outcome]
+        schemas {:demo/cap-inner [:record :demo/cap-inner [[:count :i64]]]
+                 :demo/cap-nested-entry [:record :demo/cap-nested-entry
+                                         [[:inner [:ref :demo/cap-inner]] [:label :string]]]
+                 :demo/cap-nested-outcome [:variant :demo/cap-nested-outcome
+                                           [[:found [:ref :demo/cap-nested-entry]]
+                                            [:missing :bool]]]}
+        kir {:format :kotoba.kir/v4 :exports ['invoke] :schemas schemas
+             :functions [{:name 'invoke :params ['request]
+                          :param-types [descriptor] :result descriptor
                           :body (list 'typed-cap-call 8 descriptor descriptor 'request)}]}]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
                           (component-core/emit kir :wasm32-wasi-kotoba-v1)))
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"scalar or sealed all-scalar record cases"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"scalar, sealed all-scalar record, or sealed string/keyword-bearing record cases"
                           (composition/package-variant-identity-provider
                            :state/transact descriptor schemas)))))
