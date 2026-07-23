@@ -460,3 +460,85 @@
          the literal \"foobar\" is true) -- proves string=? correctly compares
          a runtime string-pool handle (concat's own output, negative-encoded
          offset) against a code-region literal handle (non-negative offset)")))
+
+;; ADR 0062: the first native (x86-64/aarch64) value-representation
+;; increment -- a sealed, all-scalar (`:i64`/`:bool` fields only, no
+;; `:f64`; see `ir/only-string-and-scalar-record-typed-features?`'s own
+;; doc comment for why) record, construction + field projection only, real
+;; native-process evidence matching every other deftest in this file (no
+;; synthetic byte-level check). The record schema itself has no independent
+;; runtime representation at all: `(record-get schema (record-new schema
+;; ...) field)` desugars to the SAME `let`/`load-let` stack machinery this
+;; file's own `let`-sequencing deftests above already prove correct -- see
+;; `emit-record-get-of-new` in both `backend/x86-64.cljc` and
+;; `backend/aarch64.cljc`.
+(def ^:private native-record-schema
+  '[:record :native/scalar-record [[:a :i64] [:b :i64] [:c :bool]]])
+
+(deftest native-scalar-record-construction-and-field-projection-round-trips-through-real-kexe-loader
+  (let [schema (pr-str native-record-schema)
+        source (str
+                "(defn checks [a b]
+                   (+ (= (record-get " schema " (record-new " schema " a b true) :a) a)
+                      (+ (= (record-get " schema " (record-new " schema " a b true) :b) b)
+                         (+ (if (record-get " schema " (record-new " schema " a b true) :c) 1 0)
+                            (if (record-get " schema " (record-new " schema " a b false) :c) 0 1)))))
+                 (defn main [] (checks 11 22))")
+        {:keys [envelope trust]} (signed source {:allow #{}})
+        {:keys [trust options]} (execution-options trust)
+        result (executor/execute envelope trust {:allow #{}} {:args []} options)]
+    (is (= 4 (get-in result [:evidence :result]))
+        "all four checks passed (1 each): field :a projects back the i64
+         constructor argument unchanged, field :b likewise for its own
+         (different) argument -- proving fields are not aliased or
+         off-by-one -- and field :c (the :bool field) projects back TRUE
+         when constructed with a literal `true` and FALSE when constructed
+         with a literal `false`, through a REAL native process (not a
+         JVM-side oracle-value check)")))
+
+;; ADR 0062 fail-closed requirement: a record field type this native
+;; increment does not admit (`:string`, disjoint from
+;; `ir/native-scalar-record-field-types` = `#{:i64 :bool}`) must be
+;; rejected at COMPILE TIME with a clear error, never silently miscompiled.
+;; The function's own declared result type is annotated `:string` (matching
+;; the field it projects) so this negative vector exercises ONLY the
+;; native-target record-field-type gate, not an unrelated generic
+;; function-result type mismatch that would fire even before that gate is
+;; reached.
+(deftest native-record-with-an-unsupported-field-type-is-rejected-at-compile-time
+  (let [schema (pr-str '[:record :native/string-field-record [[:s :string]]])
+        source (str
+                "(defn project-s [] :string
+                   (record-get " schema " (record-new " schema " \"x\") :s))
+                 (defn main [] 0)")]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"typed values currently require the kotoba-script web target, typed Wasm/CLJS target, or \(native targets\) string-only or sealed-scalar-record typed features"
+                          (compiler/compile-source source (target))))
+    ;; Confirms the rejection is native-specific admission, not a generic
+    ;; type error: the identical source compiles fine on the Wasm target,
+    ;; which already supports string-bearing records (ADR 0053).
+    (is (= :wasm/v1 (:format (compiler/compile-source source :wasm32-kotoba-v1))))))
+
+;; ADR 0062 fail-closed requirement (second vector): `record-get`'s value
+;; operand must be a DIRECTLY-nested, same-schema `record-new` --
+;; `emit-record-get-of-new` has no runtime record representation to fall
+;; back on, so anything else must be rejected with a clear compiler error,
+;; not silently miscompiled. This source passes ordinary frontend type
+;; checking (both `if` branches construct the SAME record schema, so the
+;; `if` expression's own inferred type is that schema, same as a bare
+;; `record-new` would be) specifically so it reaches the native backend's
+;; OWN narrow-shape check rather than being rejected earlier by an
+;; unrelated generic type error.
+(deftest native-record-get-over-a-computed-non-nested-value-is-rejected-at-compile-time
+  (let [schema (pr-str native-record-schema)
+        source (str
+                "(defn project-a [flag a b]
+                   (record-get " schema "
+                     (if (= flag 1)
+                       (record-new " schema " a b true)
+                       (record-new " schema " a b false))
+                     :a))
+                 (defn main [] 0)")]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"record-get is only supported directly over a matching record-new construction on the native backend"
+                          (compiler/compile-source source (target))))))

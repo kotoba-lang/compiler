@@ -21,14 +21,21 @@
 ;; `kotoba.compiler.nbb.cli` (nbb-native fast path) -- both admit
 ;; `:kotoba.hir/v3` (typed) HIR onto the x86_64/aarch64 native backends
 ;; ONLY when the actual features used are limited to string literals +
-;; `string-byte-length`/`string=?`/`string-concat` (the only typed
-;; features those backends implement); every other typed feature (maps,
-;; options, results, variants, records, typed sets, heterogeneous
-;; vectors, ...) still requires the kotoba-script web target or typed
-;; Wasm target. A blanket per-backend allowance would silently let
-;; unsupported ops reach the backend and crash confusingly instead of
-;; rejecting cleanly -- so admission has to inspect which features are
-;; actually used, not just the HIR format tag.
+;; `string-byte-length`/`string=?`/`string-concat` (the pre-existing typed
+;; native slice) PLUS -- as of the first native record increment -- a
+;; SEALED, ALL-SCALAR (`:i64`/`:bool` fields only, no `:f64`: see
+;; `native-scalar-record-field-types`'s own comment for why f64 is
+;; deliberately excluded even though it's part of the WASM-track ADR 0043
+;; this slice models) `record-new`/`record-get` pair used in the one exact
+;; nested shape `backend/x86-64.cljc`'s and `backend/aarch64.cljc`'s own
+;; `emit-record-get-of-new` implement: `record-get`'s value operand must be
+;; a directly-nested, SAME-schema `record-new`. Every other typed feature
+;; (maps, options, results, variants, general/escaping/nested records,
+;; typed sets, heterogeneous vectors, ...) still requires the kotoba-script
+;; web target or typed Wasm target. A blanket per-backend allowance would
+;; silently let unsupported ops reach the backend and crash confusingly
+;; instead of rejecting cleanly -- so admission has to inspect which
+;; features are actually used, not just the HIR format tag.
 (def non-string-typed-ops
   '#{string-replace-all string-contains? string-fold-case
      f32-to-bits f32-from-bits f64-to-f32-rounded f32-to-f64-exact
@@ -69,15 +76,85 @@
      i32-shift-left i32-shift-right u32-shift-right xorshift32
      keyword-from-string keyword-name})
 
-(defn only-string-typed-features? [hir]
+;; The two field kinds this backend's own runtime value representation is
+;; ALREADY bit-identical for: every existing x86-64.cljc/aarch64.cljc
+;; comparison/setcc sequence already carries `:bool` as a plain 0/1 word
+;; (see e.g. x86-64.cljc's `contains? '#{= < > <= >=}` case), and `:i64`
+;; needs no conversion at all -- there is no narrower-than-8-bytes packing
+;; anywhere else in either file. `:f64` is deliberately NOT admitted here
+;; even though it's part of ADR 0043 (the WASM Component Model analog this
+;; native slice is modeled on): `kotoba.compiler.core/compile-source*`'s
+;; own f32/f64 gate unconditionally rejects ANY `:f32`/`:f64` usage on
+;; native targets today (`ir/uses-f32?`/`ir/uses-f64?`), independent of
+;; records -- admitting f64 record fields here would silently also have to
+;; widen THAT orthogonal, pre-existing gate, which is exactly the "don't
+;; widen two dimensions in one step" pattern this compiler's own component
+;; ADR chain (0058/0059) explicitly avoids. Native f64 record fields remain
+;; a separately-gapped follow-up, not attempted by this increment.
+(def ^:private native-scalar-record-field-types #{:i64 :bool})
+
+;; Structural shape check only (`[:record :qualified/kw [[:field :type] ...]]`)
+;; -- deliberately does not re-derive `kotoba.compiler.frontend`'s own
+;; `record-type?`/`validate-value-type!` (that generic check already ran
+;; before `ir/lower` produced this HIR), just narrows it further to the
+;; scalar-only field-type universe this native increment implements.
+(defn- native-scalar-record-type? [type]
+  (and (vector? type) (= 3 (count type)) (= :record (first type))
+       (keyword? (second type)) (some? (namespace (second type)))
+       (vector? (nth type 2)) (seq (nth type 2))
+       (every? (fn [field]
+                 (and (vector? field) (= 2 (count field)) (keyword? (first field))
+                      (contains? native-scalar-record-field-types (second field))))
+               (nth type 2))
+       (= (count (nth type 2)) (count (distinct (map first (nth type 2)))))))
+
+(defn only-string-and-scalar-record-typed-features? [hir]
   (letfn [(walk [form]
             (cond
               (or (string? form) (integer? form) (symbol? form)) true
-              (or (keyword? form) (boolean? form)) false
+              ;; A literal `true`/`false` is the ONLY way to produce a
+              ;; genuine `:bool`-typed VALUE anywhere in this frontend's
+              ;; type system today (confirmed by reading
+              ;; `frontend.cljc/infer-expression-type`: every comparison,
+              ;; including `=`, always returns `:i64`, never `:bool` -- see
+              ;; `emit-record-get-of-new`'s own doc comment in both native
+              ;; backends). Admitting it is the minimum needed to construct
+              ;; a `:bool` record field at all; it is a plain 0/1 scalar
+              ;; with no side effects, so admitting it in any expression
+              ;; position (not only inside `record-new`) costs nothing extra
+              ;; to verify and needs no narrower gating. `:keyword` remains
+              ;; rejected -- this increment implements no native keyword
+              ;; representation.
+              (boolean? form) true
+              (keyword? form) false
               (seq? form)
               (let [[op & args] form]
-                (and (not (contains? non-string-typed-ops op))
-                     (every? walk args)))
+                (cond
+                  ;; Construction: every field value is walked; the type
+                  ;; descriptor itself (args' first element) is compile-time
+                  ;; sealed data, never walked as an expression.
+                  (= op 'record-new)
+                  (let [[type & values] args]
+                    (and (native-scalar-record-type? type)
+                         (= (count values) (count (nth type 2)))
+                         (every? walk values)))
+                  ;; Projection: the codegen backends require `value` to be
+                  ;; a directly-nested, same-schema `record-new` -- that
+                  ;; EXACT narrower shape is enforced by
+                  ;; `emit-record-get-of-new` and (independently)
+                  ;; `kotoba.compiler.verifier`'s own `record-get` case, not
+                  ;; here, so this admission layer only needs to confirm
+                  ;; the schema/field are well-formed and keep walking.
+                  (= op 'record-get)
+                  (let [[type value field] args]
+                    (and (= 3 (count args))
+                         (native-scalar-record-type? type)
+                         (keyword? field)
+                         (some #(= field (first %)) (nth type 2))
+                         (walk value)))
+                  :else
+                  (and (not (contains? non-string-typed-ops op))
+                       (every? walk args))))
               :else true))]
     (every? (fn [{:keys [param-types result body]}]
               (and (every? #{:i64 :string} param-types)

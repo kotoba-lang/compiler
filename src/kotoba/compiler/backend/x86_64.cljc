@@ -279,6 +279,58 @@
           (vec (concat code body-code
                        (when (pos? n) (concat [0x48 0x81 0xc4] (le32 (* 8 n)))))))))))
 
+;; A native scalar record has NO independent runtime representation at all --
+;; no pointer, no heap-arena allocation (unlike `pair`, which IS heap-backed
+;; via a host call), no new host ABI offset, no kexe_loader.c change. This
+;; increment's ENTIRE admitted shape is `(record-get type (record-new type
+;; v0 v1 ... vN-1) field)` -- a `record-get` immediately, directly nested
+;; over a matching `record-new` -- which is REWRITTEN here into exactly the
+;; `emit-let`/`load-let` machinery an ordinary `(let [f0 v0 f1 v1 ... fN-1
+;; vN-1] fI)` already uses: one synthetic 8-byte stack slot per field,
+;; pushed once each in source order (so a side-effecting field expression
+;; still runs exactly once, per the ADR-2607198300 `let`-sequencing fix),
+;; read back via the SAME depth-relative `load-let` arithmetic. This lands
+;; on the same "packed, 8-byte-per-field, offsets 0, 8, 16, ..." layout ADR
+;; 0043 chose for its own WASM linear-memory encoding, just realized on the
+;; native SysV stack frame instead: every value in this backend (including
+;; a `:bool`) is already a uniform 8-byte machine word, so there is no
+;; narrower packing to do. Because it degrades to a plain `let`, this is
+;; provably correct via machinery already proven by every existing `let`
+;; test in `native_executor_test.clj`; it needs zero new machine
+;; instructions of its own.
+;;
+;; Deliberately narrow, matching ADR 0043/0044/0045's own discipline: a
+;; bare `record-new` (used anywhere other than as `record-get`'s direct
+;; operand), a `record-get` over anything else (a parameter, a `let`-bound
+;; name, an `if`, a different-schema construction, a mismatched field
+;; count), and `record-assoc`/`record-equal`/nested records are all
+;; rejected here with a clear `ex-info`, not silently miscompiled -- no
+;; record value can ever escape past this one call, so no new host arena,
+;; no new function-boundary ABI (records never appear in `param-types`
+;; or `result`), and no lifetime question to answer.
+(defn- emit-record-get-of-new [type value-form field env ctx]
+  (when-not (seq? value-form)
+    (throw (ex-info "record-get is only supported directly over a matching record-new construction on the native backend"
+                    {:phase :x86-64 :type type})))
+  (let [[record-op record-type & field-exprs] value-form
+        fields (nth type 2)
+        field-index (first (keep-indexed (fn [i [name _]] (when (= name field) i)) fields))]
+    (when-not (= 'record-new record-op)
+      (throw (ex-info "record-get is only supported directly over a matching record-new construction on the native backend"
+                      {:phase :x86-64 :type type})))
+    (when-not (= type record-type)
+      (throw (ex-info "record-get's schema must be identical to its record-new operand's schema"
+                      {:phase :x86-64 :expected type :actual record-type})))
+    (when-not (= (count fields) (count field-exprs))
+      (throw (ex-info "record-new does not supply exactly one value per declared field"
+                      {:phase :x86-64 :type type})))
+    (when (nil? field-index)
+      (throw (ex-info "record-get references an undeclared field"
+                      {:phase :x86-64 :type type :field field})))
+    (let [names (mapv #(symbol (str "$record-field-" %)) (range (count fields)))
+          bindings (vec (mapcat vector names field-exprs))]
+      (emit-let bindings (nth names field-index) env ctx))))
+
 (defn emit-expr [form env {:keys [param-count pad? temp-depth] :as ctx}]
   (cond
     ;; `integer?` alone does not reliably recognize a cljs `bigint` (see
@@ -286,6 +338,15 @@
     ;; `kotoba.compiler.backend.wasm`'s identical dispatch guard.
     #?(:clj (integer? form) :cljs (or (i64/bigint-value? form) (integer? form)))
     (into [0x48 0xb8] (le64 form))
+    ;; A literal `true`/`false` -- the only source of a genuine `:bool`
+    ;; VALUE in this frontend's type system (see
+    ;; `emit-record-get-of-new`'s own doc comment above) -- is just the i64
+    ;; word 1/0, encoded through the SAME `le64` path an ordinary integer
+    ;; literal uses; this backend has never distinguished a narrower bool
+    ;; width from a full 8-byte word anywhere else. MUST be checked before
+    ;; the generic `:else`, which would otherwise try to sequentially
+    ;; destructure a bare boolean (`(let [[op & args] true])`) and throw.
+    (boolean? form) (into [0x48 0xb8] (le64 (if form 1 0)))
     (string? form) (emit-string-literal form ctx)
     (symbol? form)
     (let [binding (get env form)]
@@ -319,6 +380,14 @@
 
         (= op 'cap-call)
         (emit-cap-call (first args) (second args) env ctx)
+
+        (= op 'record-get)
+        (let [[type value-form field] args]
+          (emit-record-get-of-new type value-form field env ctx))
+
+        (= op 'record-new)
+        (throw (ex-info "record-new is only supported as the direct operand of a matching record-get on the native backend"
+                        {:phase :x86-64}))
 
         (contains? '#{pair pair-first pair-second
                       kgraph-assert! kgraph-get kgraph-count kgraph-entity-at

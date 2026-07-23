@@ -42,6 +42,23 @@
   '{xml-path-count 2 xml-name-count 2 xml-name-text 3 xml-path-text 3 xml-path-attr 4})
 (def ^:private decimal-operations '{decimal-f64-parse 1 decimal-f64x3-parse 1})
 (def ^:private string-literal-byte-limit 4096)
+(def ^:private max-record-fields 32)
+
+;; Independently re-derived from `kotoba.compiler.ir/native-scalar-record-type?`
+;; ON PURPOSE -- this verifier is a from-scratch re-check of the embedded
+;; KIR, so it must never call into the compiler code being verified (same
+;; reasoning already documented at every other op-family in this file: none
+;; of `arithmetic`/`heap-operations`/`kgraph-operations`/... share a helper
+;; with the emitters/admission they cross-check either).
+(defn- native-scalar-record-type? [type]
+  (and (vector? type) (= 3 (count type)) (= :record (first type))
+       (keyword? (second type)) (some? (namespace (second type)))
+       (vector? (nth type 2)) (seq (nth type 2)) (<= (count (nth type 2)) max-record-fields)
+       (every? (fn [field]
+                 (and (vector? field) (= 2 (count field)) (keyword? (first field))
+                      (contains? #{:i64 :bool} (second field))))
+               (nth type 2))
+       (= (count (nth type 2)) (count (distinct (map first (nth type 2)))))))
 
 ;; Mirrors `kotoba.compiler.backend.wasm`'s `utf8` -- `.getBytes` is
 ;; JVM-only, cljs has no `String`/`Charset`; `TextEncoder` is the
@@ -72,7 +89,24 @@
     #?(:clj (integer? form) :cljs (or (i64/bigint-value? form) (integer? form)))
     1
     (string? form) 1
+    ;; A bare literal `true`/`false` (only reachable via a record field
+    ;; value, see `verify-expr!`'s own comment below) -- costed the same
+    ;; flat 1 as any other scalar literal.
+    (boolean? form) 1
     (symbol? form) (get env form 1)
+    ;; `record-new`/`record-get`'s FIRST argument is a compile-time type
+    ;; descriptor VECTOR (e.g. `[:record :kw [[:field :type] ...]]`), not a
+    ;; KIR expression -- the generic `:else` branch below would otherwise
+    ;; recurse `lowered-cost` into it as an ordinary arg and crash trying to
+    ;; sequentially destructure a bare keyword (`(let [[op & args] :kw])`
+    ;; throws, keywords are not seqable), so both ops are special-cased here
+    ;; to skip the descriptor and cost only the actual value expressions.
+    (and (seq? form) (= 'record-new (first form)))
+    (let [[_ _type & values] form]
+      (bounded-sum (cons 1 (map #(lowered-cost % env) values))))
+    (and (seq? form) (= 'record-get (first form)))
+    (let [[_ _type value _field] form]
+      (bounded-sum [1 (lowered-cost value env)]))
     :else
     (let [[op & args] form]
       (if (= op 'let)
@@ -118,6 +152,14 @@
     (symbol? form)
     (when-not (contains? locals form)
       (reject! "runtime KIR contains an unbound symbol" {:symbol form}))
+
+    ;; A bare literal `true`/`false` -- the only source of a genuine
+    ;; `:bool`-typed VALUE in this frontend's type system (every comparison,
+    ;; including `=`, always yields `:i64`; see `ir/only-string-and-scalar-
+    ;; record-typed-features?`'s own comment), reachable only as a
+    ;; `record-new` field value under this increment's admission. Always
+    ;; valid; no bound to check.
+    (boolean? form) nil
 
     (string? form)
     (when-not (<= (utf8-byte-count form) string-literal-byte-limit)
@@ -166,6 +208,31 @@
           (when-not (= 2 (count args))
             (reject! "runtime KIR comparison arity rejected" {:operation op}))
           (doseq [arg args] (verify-expr! arg locals signatures (inc depth) nodes facts)))
+
+        (= op 'record-new)
+        (let [[type & values] args
+              fields (when (native-scalar-record-type? type) (nth type 2))]
+          (when-not (and fields (= (count fields) (count values)))
+            (reject! "runtime KIR record construction rejected" {:operation op}))
+          (doseq [arg values] (verify-expr! arg locals signatures (inc depth) nodes facts)))
+
+        ;; The codegen backends (`emit-record-get-of-new` in both
+        ;; `backend/x86-64.cljc` and `backend/aarch64.cljc`) require `value`
+        ;; to be a directly-nested, same-schema `record-new` -- this
+        ;; independent re-check enforces the EXACT same narrow shape (rather
+        ;; than relying solely on `verify-runtime!`'s `(emit program)`
+        ;; re-invocation to fail closed on anything looser), matching this
+        ;; file's own "treat embedded KIR as hostile" posture for every
+        ;; other op-family above.
+        (= op 'record-get)
+        (let [[type value field] args]
+          (when-not (and (= 3 (count args))
+                        (native-scalar-record-type? type)
+                        (keyword? field)
+                        (some #(= field (first %)) (nth type 2))
+                        (seq? value) (= 'record-new (first value)) (= type (second value)))
+            (reject! "runtime KIR record projection rejected" {:operation op}))
+          (verify-expr! value locals signatures (inc depth) nodes facts))
 
         (contains? heap-operations op)
         (do
