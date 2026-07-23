@@ -381,6 +381,91 @@
                request-schema result-schema capability)
       {:capability capability :request request-type :result result})))
 
+(defn- asymmetric-variant-capability-case?
+  "True when `payload-type` is a shape admitted as one variant case's payload
+  for the *different-identity* `typed-cap-call` crossing (ADR 0058): a bare
+  Canonical scalar (`i64`/`f32`/`f64`/`bool`) or a sealed all-scalar record
+  (the ADR 0052 shape) -- exactly ADR 0055's and ADR 0056's own case-kind
+  union. Deliberately narrower than `variant-capability-case?` (the same-
+  identity path, which additionally admits ADR 0057's string/keyword-
+  bearing record case): a string/keyword leaf crossing a capability boundary
+  at all already required real new allocator engineering for the SAME-
+  identity path (ADR 0057's capacity-bounded bump allocator, needed because
+  the Canonical ABI's own cross-instance string-copy glue calls a module's
+  exported `cm32p2_realloc` an unpredictable extra number of times before
+  that module's own body runs). Combining that risk with a genuinely
+  different request/result identity -- which itself requires new
+  engineering (the provider can no longer echo the request case verbatim
+  into the result area, since the two shapes are unrelated; both sides'
+  result-area sizing must be driven by the RESULT layout rather than a
+  layout shared with the request) -- in one step would not be the smallest
+  honest increment this chain's own discipline follows (ADR 0055 -> 0056 ->
+  0057 each widened by exactly one new dimension, never two at once). Also,
+  practically: because this case-kind set never carries a string/keyword
+  leaf, the different-identity crossing never triggers the Canonical ABI's
+  cross-instance string-copy glue at all, so neither side of this crossing
+  needs any string-aware memory sizing -- a plain fixed one-page module and
+  the simplest bump allocator suffice, exactly ADR 0055/0056's own pre-0057
+  precedent."
+  [payload-type schemas]
+  (or (contains? #{:i64 :f32 :f64 :bool} payload-type)
+      (boolean (sealed-scalar-record payload-type schemas))))
+
+(defn- asymmetric-variant-capability-schema
+  "Schema of `descriptor` when it is a sealed variant whose every case's
+  payload independently satisfies `asymmetric-variant-capability-case?` --
+  the different-identity twin of `variant-capability-schema`, kept as a
+  separate function for the same reason `variant-capability-schema` itself
+  is kept separate from `variant-case-schema`: so the same-identity path's
+  own admitted case set never silently narrows if this one changes, and
+  vice versa."
+  [descriptor schemas]
+  (let [schema (cond
+                 (and (vector? descriptor) (= :ref (first descriptor)))
+                 (get schemas (second descriptor))
+                 (and (vector? descriptor) (= :variant (first descriptor))) descriptor)]
+    (when (and (vector? schema)
+               (= :variant (first schema))
+               (seq (nth schema 2))
+               (= schema (get schemas (second schema)))
+               (every? (fn [[_ payload-type]]
+                         (asymmetric-variant-capability-case? payload-type schemas))
+                       (nth schema 2)))
+      schema)))
+
+(defn- different-variant-capability-call
+  "Admission for a direct `typed-cap-call` whose request and result are two
+  INDEPENDENTLY admitted (`asymmetric-variant-capability-schema`) but
+  DIFFERENT sealed variant identities (ADR 0058) -- widening
+  `variant-capability-call`'s own same-identity discipline (ADR 0048/0055)
+  along the one dimension every capability-call ADR through 0057 explicitly
+  named as still unattempted. `state-v1`'s own request
+  (`kotoba.state/request`) and result (`kotoba.state/result`) are exactly
+  this shape: two different variant identities, never the same type twice.
+  Structurally identical to `variant-capability-call` except (1) it checks
+  `(not= request-type result)` instead of `(= request-type result)`, so the
+  two admission functions are mutually exclusive by construction and never
+  both admit the same function, and (2) each side is checked against the
+  narrower `asymmetric-variant-capability-schema` (see that function's own
+  docstring for why the case-kind set is narrower here)."
+  [function schemas]
+  (let [{:keys [params param-types result body]} function
+        request-type (first param-types)
+        [_ id body-request-type body-result-type request] (when (seq? body) body)
+        capability (some #(when (= id (:id %)) %) (:capabilities component-wit/contract))
+        request-schema (asymmetric-variant-capability-schema request-type schemas)
+        result-schema (asymmetric-variant-capability-schema result schemas)]
+    (when (and (= 1 (count params))
+               (= 1 (count param-types))
+               (seq? body)
+               (= 'typed-cap-call (first body))
+               (= request (first params))
+               (= body-request-type request-type)
+               (= body-result-type result)
+               (not= request-type result)
+               request-schema result-schema capability)
+      {:capability capability :request request-type :result result})))
+
 (defn assert-supported! [kir]
   (let [exports (exported-functions kir)]
     (cond
@@ -393,6 +478,10 @@
       (and (= 1 (count (:functions kir)))
            (= 1 (count exports))
            (variant-capability-call (first exports) (:schemas kir))) :variant-capability-call
+      (and (= 1 (count (:functions kir)))
+           (= 1 (count exports))
+           (different-variant-capability-call (first exports) (:schemas kir)))
+      :different-variant-capability-call
       (every? scalar-function? exports) :scalar
       (and (= 1 (count (:functions kir)))
            (= 1 (count exports))
@@ -1317,13 +1406,39 @@
   allocator `variant-wat` already uses for its own single-module string
   leaves); the WAT emitted for a case with no string-like leaf at all is
   otherwise unchanged in shape from ADR 0055/0056 (still one page, still
-  the same bump-pointer body, now just capacity-checked)."
+  the same bump-pointer body, now just capacity-checked).
+
+  ADR 0058 generalizes this function to a REQUEST layout and a (possibly
+  different) RESULT layout, computed independently from `(:request plan)`
+  and `(:result plan)`, rather than one shared `variant-layout` computed
+  from the request alone and silently reused for the result area too. This
+  is a genuine bug fix, not a cosmetic rename: the result area this module
+  allocates and hands to the provider as an out-pointer must be sized to
+  hold a RESULT-shaped value (the provider writes a result into it), which
+  for every ADR 0055/0056/0057 fixture happened to be correct only because
+  their request and result were, by construction, the identical schema --
+  sizing it from the request layout was silently relying on that
+  coincidence. For the different-identity case (ADR 0058) request and
+  result layouts genuinely differ, so this fix is required for correctness,
+  not merely for symmetry; for the same-identity case it is a no-op
+  (`request-layout` and `result-layout` are structurally `=`, confirmed by
+  rebuilding and re-running the ADR 0055/0056/0057 fixtures unchanged
+  through this generalized function). The joined param signature and
+  string headroom are still sized from the REQUEST layout only, unchanged:
+  this module forwards the request's own joined payload values to the
+  import exactly as before, and (per `asymmetric-variant-capability-case?`'s
+  own docstring) the different-identity path never admits a string/keyword
+  leaf on either side, so request-only headroom sizing remains correct for
+  it too -- a genuinely wider future slice that combines asymmetry with
+  string/keyword crossing would need to revisit this, and is explicitly not
+  attempted here."
   [function schemas plan]
   (let [export (wit-name (:name function))
         capability (:capability plan)
-        variant-layout (canonical/layout (:request plan) schemas)
-        joined-types (vec (rest (:flat variant-layout)))
-        [pages capacity _] (variant-capability-string-headroom variant-layout)
+        request-layout (canonical/layout (:request plan) schemas)
+        result-layout (canonical/layout (:result plan) schemas)
+        joined-types (vec (rest (:flat request-layout)))
+        [pages capacity _] (variant-capability-string-headroom request-layout)
         payload-params (apply str
                               (map (fn [core-type] (str " (param " (core-type-name core-type) ")"))
                                    joined-types))
@@ -1347,8 +1462,8 @@
      (bounded-bump-realloc-wat capacity)
      "  (func (export \"cm32p2||" export "\")" params " (result i32)\n"
      "    (local $ret i32) (local $end i32)\n"
-     "    i32.const 0 i32.const 0 i32.const " (:alignment variant-layout)
-     " i32.const " (:size variant-layout) " call $realloc local.set $ret\n"
+     "    i32.const 0 i32.const 0 i32.const " (:alignment result-layout)
+     " i32.const " (:size result-layout) " call $realloc local.set $ret\n"
      arguments
      "    local.get $ret call $provider local.get $ret)\n"
      "  (func (export \"cm32p2||" export "_post\") (param i32)\n"
@@ -1430,6 +1545,131 @@
      "    i32.const 8 global.set $next)\n"
      "  (func (export \"cm32p2_initialize\") i32.const 8 global.set $next))\n")))
 
+(defn- constant-leaf-wat
+  "A deterministic literal WAT push instruction for one Canonical scalar leaf
+  of an asymmetric provider's fixed result payload (ADR 0058), distinct per
+  `(case-index, leaf-index)` pair so a real round trip can tell two
+  different chosen result cases -- and two different leaves within the same
+  case -- apart, rather than every leaf silently sharing one constant (which
+  would make the evidence weaker at distinguishing 'stored the right value
+  at the right offset' from 'stored one lucky constant everywhere'). This
+  value is never derived from any request payload leaf -- only from the
+  chosen result case's own static index and the leaf's own position within
+  it -- matching `asymmetric-variant-capability-provider-wat`'s own
+  'wiring-only, not semantic' framing."
+  [descriptor case-index leaf-index]
+  (let [n (+ (* case-index 101) (* leaf-index 7) 3)]
+    (case descriptor
+      :bool (str "i32.const " (mod n 2))
+      :i64 (str "i64.const " n)
+      :f32 (str "f32.const " n)
+      :f64 (str "f64.const " n))))
+
+(defn- asymmetric-result-case-store
+  "The stores for one RESULT case's own fixed constant payload, reusing
+  `variant-case-leaves` (unmodified) to find each leaf's own relative offset
+  and descriptor -- exactly `variant-case-body`'s store half, with
+  `constant-leaf-wat` standing in for a request-derived value and no
+  validation at all (a compile-time constant is trivially in-bounds)."
+  [result-payload-offset case-index layout]
+  (let [leaves (variant-case-leaves layout)]
+    (apply str
+           (map-indexed
+            (fn [leaf-index {:keys [relative-offset descriptor]}]
+              (str "      local.get $ret " (constant-leaf-wat descriptor case-index leaf-index)
+                   " " (wasm-store descriptor)
+                   " offset=" (+ result-payload-offset relative-offset) "\n"))
+            leaves))))
+
+(defn- asymmetric-provider-dispatch-chain
+  "The nested `if`/`else` chain, dispatched on the REQUEST's own
+  discriminant, that writes a FIXED result value into `$ret` for an
+  asymmetric-identity provider (ADR 0058). One deterministic output case is
+  chosen per request case via `(mod request-case-index (count
+  result-cases))`, so every request case maps to some valid result case
+  even when the two case counts differ (e.g. `state-v1`'s own 3 request
+  cases vs. 5 result cases), and every possible request discriminant is
+  provably distinguishable in a round trip (`constant-leaf-wat` varies by
+  the chosen output case's own index). This is wiring-only, not a semantic
+  mapping: no request PAYLOAD leaf value is ever read here, only the
+  request's own discriminant (already range-checked by the caller before
+  this chain runs), to select purely which fixed result case gets written."
+  [request-case-count result-cases result-disc-size result-payload-offset]
+  (let [result-case-count (count result-cases)]
+    (letfn [(build [index]
+              (let [output-index (mod index result-case-count)
+                    output-layout (:layout (nth result-cases output-index))
+                    body (str "      local.get $ret i32.const " output-index " "
+                              (variant-disc-store result-disc-size) " offset=0\n"
+                              (asymmetric-result-case-store result-payload-offset output-index
+                                                            output-layout))]
+                (if (= index (dec request-case-count))
+                  body
+                  (str "    local.get $disc i32.const " index " i32.eq\n"
+                       "    if\n" body
+                       "    else\n" (build (inc index))
+                       "    end\n"))))]
+      (build 0))))
+
+(defn asymmetric-variant-capability-provider-wat
+  "Wiring-only provider core module for a `typed-cap-call` whose request and
+  result are two genuinely DIFFERENT sealed variant identities (ADR 0058),
+  each independently admitted by `asymmetric-variant-capability-schema`
+  (scalar or sealed all-scalar record cases only -- string/keyword-bearing
+  cases are out of scope for this crossing, see that function's own
+  docstring for why). Unlike `variant-capability-provider-wat` (whose whole
+  semantic IS echoing the active request case verbatim into a result area
+  of the identical shape, only meaningful when request and result share one
+  schema), this provider cannot echo a request case into a result case of a
+  genuinely different, unrelated shape. It is a deliberately simple,
+  explicitly non-semantic wiring fixture instead, matching the task's own
+  framing exactly: it range-checks the request discriminant, never reads
+  any request PAYLOAD leaf, and writes one of the result variant's own
+  cases with a fixed compile-time-constant payload, chosen deterministically
+  from the request's own discriminant alone
+  (`asymmetric-provider-dispatch-chain`) -- this is NOT `state`'s real
+  semantics (no request payload value ever informs the result's own value,
+  only which case is chosen), exactly the same 'wiring only' framing every
+  prior capability-call ADR's own identity provider already carried, now
+  applied to a provider that (unlike an identity provider) cannot even in
+  principle be semantically neutral, because request and result are
+  different types. Because neither admitted case kind in this slice ever
+  carries a string/keyword leaf, the Canonical ABI's own cross-instance
+  string-copy glue never triggers for this crossing, so this module needs
+  none of `variant-capability-provider-wat`'s ADR 0057 headroom-sizing
+  machinery -- a fixed one page and the simplest bump realloc
+  (`bounded-bump-realloc-wat` with a flat 65536-byte capacity) suffice,
+  matching ADR 0055/0056's own pre-0057 precedent."
+  [entry request-descriptor result-descriptor schemas]
+  (let [export (str "cm32p2|kotoba:application/" (:interface entry) "@1|" (:function entry))
+        request-layout (canonical/layout request-descriptor schemas)
+        result-layout (canonical/layout result-descriptor schemas)
+        joined-types (vec (rest (:flat request-layout)))
+        params (apply str
+                      (cons " (param $disc i32)"
+                            (map-indexed
+                             (fn [index core-type]
+                               (str " (param $p" index " " (core-type-name core-type) ")"))
+                             joined-types)))
+        dispatch (asymmetric-provider-dispatch-chain
+                  (count (:cases request-layout)) (:cases result-layout)
+                  (:discriminant-size result-layout) (:payload-offset result-layout))]
+    (str
+     "(module\n"
+     "  (memory (export \"cm32p2_memory\") 1 1)\n"
+     "  (global $next (mut i32) (i32.const 8))\n"
+     (bounded-bump-realloc-wat 65536)
+     "  (func (export \"" export "\")" params " (result i32)\n"
+     "    (local $ret i32)\n"
+     "    local.get $disc i32.const " (count (:cases request-layout)) " i32.ge_u if unreachable end\n"
+     "    i32.const 0 i32.const 0 i32.const " (:alignment result-layout)
+     " i32.const " (:size result-layout) " call $realloc local.set $ret\n"
+     dispatch
+     "    local.get $ret)\n"
+     "  (func (export \"" export "_post\") (param i32)\n"
+     "    i32.const 8 global.set $next)\n"
+     "  (func (export \"cm32p2_initialize\") i32.const 8 global.set $next))\n")))
+
 (defn emit [kir target]
   (case (assert-supported! kir)
     :scalar (wasm/emit-component-core kir target)
@@ -1473,4 +1713,9 @@
     (let [function (first (exported-functions kir))]
       (wasm-tools/parse-wat
        (variant-capability-wat function (:schemas kir)
-                               (variant-capability-call function (:schemas kir)))))))
+                               (variant-capability-call function (:schemas kir)))))
+    :different-variant-capability-call
+    (let [function (first (exported-functions kir))]
+      (wasm-tools/parse-wat
+       (variant-capability-wat function (:schemas kir)
+                               (different-variant-capability-call function (:schemas kir)))))))

@@ -415,9 +415,16 @@
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
                             (component/assert-scalar-slice! bare-string-case-kir
                                                             (wit/emit bare-string-case-kir)))))
-    ;; Different request/result variant identities remain fail-closed,
-    ;; matching `record-capability-call`'s own same-identity discipline (ADR
-    ;; 0048).
+    ;; ADR 0058: different request/result variant identities are now
+    ;; admitted, provided each independently satisfies the narrower
+    ;; scalar-or-sealed-all-scalar-record case-kind set
+    ;; (`asymmetric-variant-capability-schema` -- ADR 0055/0056's own
+    ;; case-kind union, deliberately not widened to ADR 0057's string/
+    ;; keyword-bearing record case in this same increment). `demo/flag-or-
+    ;; ratio` (bool/f32, request) crossing to `demo/other-outcome` (bare
+    ;; bool, result) -- a genuinely different, genuinely smaller variant --
+    ;; is the first shape in this ADR chain ever admitted with request-type
+    ;; != result-type.
     (let [other-schemas
           {:demo/flag-or-ratio [:variant :demo/flag-or-ratio
                                 [[:urgent :bool] [:weight :f32]]]
@@ -428,9 +435,88 @@
              (assoc-in [:functions 0 :result] [:ref :demo/other-outcome])
              (assoc-in [:functions 0 :body]
                        (list 'typed-cap-call 8 descriptor [:ref :demo/other-outcome] 'request)))]
+      (is (true? (component/assert-scalar-slice! different-identity-kir
+                                                  (wit/emit different-identity-kir))))
+      (let [different-identity-artifact
+            (component/package
+             (component-core/emit different-identity-kir :wasm32-wasi-kotoba-v1)
+             different-identity-kir (wit/emit different-identity-kir))]
+        (is (= :different-variant-capability-call
+               (:canonical-lowering different-identity-artifact)))
+        (is (= :wasm-component/v1 (:format different-identity-artifact)))))
+    ;; ADR 0058 also admits a case wrapping a sealed all-scalar record (the
+    ;; ADR 0052 shape) on either side of a different-identity crossing, not
+    ;; only a bare scalar -- `demo/cap-outcome` (`tally: cap-tally`/`empty:
+    ;; bool`, request) crossing to `demo/other-record-outcome`
+    ;; (`total: cap-total`, result), two different record-cased variants.
+    (let [record-other-schemas
+          {:demo/cap-tally [:record :demo/cap-tally [[:count :i64]]]
+           :demo/cap-outcome [:variant :demo/cap-outcome
+                              [[:tally [:ref :demo/cap-tally]] [:empty :bool]]]
+           :demo/cap-total [:record :demo/cap-total [[:sum :i64] [:ok :bool]]]
+           :demo/other-record-outcome [:variant :demo/other-record-outcome
+                                       [[:total [:ref :demo/cap-total]]]]}
+          record-different-identity-kir
+          (-> kir
+             (assoc :schemas record-other-schemas)
+             (assoc-in [:functions 0 :param-types] [[:ref :demo/cap-outcome]])
+             (assoc-in [:functions 0 :result] [:ref :demo/other-record-outcome])
+             (assoc-in [:functions 0 :body]
+                       (list 'typed-cap-call 8 [:ref :demo/cap-outcome]
+                             [:ref :demo/other-record-outcome] 'request)))]
+      (is (true? (component/assert-scalar-slice! record-different-identity-kir
+                                                  (wit/emit record-different-identity-kir))))
+      (let [record-different-identity-artifact
+            (component/package
+             (component-core/emit record-different-identity-kir :wasm32-wasi-kotoba-v1)
+             record-different-identity-kir (wit/emit record-different-identity-kir))]
+        (is (= :different-variant-capability-call
+               (:canonical-lowering record-different-identity-artifact)))
+        (is (= :wasm-component/v1 (:format record-different-identity-artifact)))))
+    ;; A different-identity crossing where one side's case wraps a sealed
+    ;; *string/keyword-bearing* record (the ADR 0053/0057 shape) remains
+    ;; fail-closed -- `asymmetric-variant-capability-schema` is deliberately
+    ;; narrower than `variant-capability-schema` (the same-identity path),
+    ;; not yet combining the different-identity and string/keyword-crossing
+    ;; dimensions in one increment.
+    (let [string-other-schemas
+          {:demo/cap-entry [:record :demo/cap-entry
+                            [[:key :keyword] [:value :string] [:version :i64]]]
+           :demo/cap-string-outcome [:variant :demo/cap-string-outcome
+                                     [[:found [:ref :demo/cap-entry]] [:missing :bool]]]
+           :demo/other-outcome [:variant :demo/other-outcome [[:urgent :bool]]]}
+          string-different-identity-kir
+          (-> kir
+             (assoc :schemas string-other-schemas)
+             (assoc-in [:functions 0 :param-types] [[:ref :demo/cap-string-outcome]])
+             (assoc-in [:functions 0 :result] [:ref :demo/other-outcome])
+             (assoc-in [:functions 0 :body]
+                       (list 'typed-cap-call 8 [:ref :demo/cap-string-outcome]
+                             [:ref :demo/other-outcome] 'request)))]
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
-                            (component/assert-scalar-slice! different-identity-kir
-                                                            (wit/emit different-identity-kir)))))
+                            (component/assert-scalar-slice! string-different-identity-kir
+                                                            (wit/emit string-different-identity-kir)))))
+    ;; A different-identity crossing where one side's case wraps an ADR 0051
+    ;; one-level-nested record remains fail-closed too, for the same reason
+    ;; it remains fail-closed on the same-identity path.
+    (let [nested-other-schemas
+          {:demo/cap-inner [:record :demo/cap-inner [[:count :i64]]]
+           :demo/cap-nested-entry [:record :demo/cap-nested-entry
+                                   [[:inner [:ref :demo/cap-inner]] [:label :string]]]
+           :demo/cap-nested-outcome [:variant :demo/cap-nested-outcome
+                                     [[:found [:ref :demo/cap-nested-entry]] [:missing :bool]]]
+           :demo/other-outcome [:variant :demo/other-outcome [[:urgent :bool]]]}
+          nested-different-identity-kir
+          (-> kir
+             (assoc :schemas nested-other-schemas)
+             (assoc-in [:functions 0 :param-types] [[:ref :demo/cap-nested-outcome]])
+             (assoc-in [:functions 0 :result] [:ref :demo/other-outcome])
+             (assoc-in [:functions 0 :body]
+                       (list 'typed-cap-call 8 [:ref :demo/cap-nested-outcome]
+                             [:ref :demo/other-outcome] 'request)))]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"
+                            (component/assert-scalar-slice! nested-different-identity-kir
+                                                            (wit/emit nested-different-identity-kir)))))
     ;; A computed capability request (anything other than a bare parameter
     ;; passthrough) remains fail-closed.
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical lowering"

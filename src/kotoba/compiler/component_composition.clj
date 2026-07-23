@@ -319,6 +319,147 @@
         (doseq [path [component embedded core world]] (Files/deleteIfExists path))
         (Files/deleteIfExists dir)))))
 
+(defn- asymmetric-variant-record-case-schema
+  "Schema of `payload-type` when it is `[:ref name]` to a sealed all-scalar
+  record (the ADR 0052 shape) ONLY -- the provider-side admission twin of
+  `kotoba.compiler.component-core/asymmetric-variant-capability-case?`
+  (ADR 0058), deliberately narrower than `variant-record-case-schema` (which
+  also admits a string/keyword-bearing record field, ADR 0057): the
+  different-identity crossing does not admit a string/keyword leaf on
+  either side, see that function's own docstring for why. Reuses
+  `variant-case-wit-type` (scalar-only) rather than `record-field-wit-type`
+  for its own field check, exactly mirroring `sealed-scalar-record`'s own
+  scalar-only field discipline on the `component-core` side."
+  [payload-type schemas]
+  (when (and (vector? payload-type) (= :ref (first payload-type)))
+    (let [schema (get schemas (second payload-type))]
+      (when (and (vector? schema) (= :record (first schema))
+                 (= (second payload-type) (second schema))
+                 (seq (nth schema 2))
+                 (every? (comp variant-case-wit-type second) (nth schema 2)))
+        schema))))
+
+(defn- asymmetric-variant-case-payload-wit
+  "WIT type text for one asymmetric-crossing variant case's payload: a bare
+  scalar's WIT spelling, or a sealed all-scalar record case's own WIT type
+  name -- the narrower (no string/keyword) twin of `variant-case-payload-wit`."
+  [payload-type schemas]
+  (or (get variant-case-wit-type payload-type)
+      (when-let [schema (asymmetric-variant-record-case-schema payload-type schemas)]
+        (wit-name (second schema)))
+      (reject "provider variant case is not scalar or a sealed all-scalar record"
+              {:payload-type payload-type})))
+
+(defn- asymmetric-variant-schema-valid?
+  "True when `descriptor` is `[:ref name]` to a sealed variant every one of
+  whose cases independently satisfies `asymmetric-variant-case-payload-wit`'s
+  own admitted shape -- the provider-side twin of
+  `component-core/asymmetric-variant-capability-schema`."
+  [descriptor schemas]
+  (let [schema (get schemas (second descriptor))]
+    (and (vector? descriptor) (= :ref (first descriptor))
+         (vector? schema) (= :variant (first schema))
+         (= (second descriptor) (second schema))
+         (seq (nth schema 2))
+         (every? (fn [[_ payload-type]]
+                   (or (contains? variant-case-wit-type payload-type)
+                       (asymmetric-variant-record-case-schema payload-type schemas)))
+                 (nth schema 2)))))
+
+(defn- asymmetric-variant-wit
+  "Deterministic WIT package/world text for a provider whose capability
+  crosses two DIFFERENT sealed variant identities (ADR 0058) -- the
+  different-identity counterpart to `variant-wit`'s own same-identity
+  `func(request: T) -> T`. Declares BOTH variant types (plus every record
+  either one's own cases reference, deduplicated via
+  `variant-referenced-record-schemas`, unmodified) inside the shared
+  `types` interface, and the capability function as
+  `func(request: RequestName) -> ResultName` -- `component-wit.clj`'s own
+  generic `typed-cap-call` body walk already renders exactly this shape for
+  the *application* side (confirmed by inspection, ADR 0055/0056/0057's own
+  'no changes needed' finding extends here too); this is only the
+  provider-side counterpart."
+  [entry request-descriptor result-descriptor schemas]
+  (when-not (and (asymmetric-variant-schema-valid? request-descriptor schemas)
+                 (asymmetric-variant-schema-valid? result-descriptor schemas)
+                 (not= (second request-descriptor) (second result-descriptor)))
+    (reject "provider variant crossing requires two distinct admitted scalar-or-record variant identities"
+            {:request request-descriptor :result result-descriptor}))
+  (let [request-schema (get schemas (second request-descriptor))
+        result-schema (get schemas (second result-descriptor))
+        [_ request-identity request-cases] request-schema
+        [_ result-identity result-cases] result-schema
+        request-name (wit-name request-identity)
+        result-name (wit-name result-identity)
+        interface (:interface entry)
+        record-schemas (variant-referenced-record-schemas
+                         (concat request-cases result-cases) schemas)]
+    (str "package kotoba:application@1.0.0;\n\n"
+         "interface types {\n"
+         (apply str
+                (map (fn [[_ record-identity fields]]
+                       (str "  record " (wit-name record-identity) " {\n"
+                            (apply str
+                                   (map (fn [[field type]]
+                                          (str "    " (wit-name field) ": "
+                                               (get variant-case-wit-type type) ",\n"))
+                                        fields))
+                            "  }\n"))
+                     record-schemas))
+         "  variant " request-name " {\n"
+         (apply str
+                (map (fn [[tag payload-type]]
+                       (str "    " (wit-name tag) "("
+                            (asymmetric-variant-case-payload-wit payload-type schemas) "),\n"))
+                     request-cases))
+         "  }\n"
+         "  variant " result-name " {\n"
+         (apply str
+                (map (fn [[tag payload-type]]
+                       (str "    " (wit-name tag) "("
+                            (asymmetric-variant-case-payload-wit payload-type schemas) "),\n"))
+                     result-cases))
+         "  }\n}\n\n"
+         "interface " interface " {\n"
+         "  use types.{" request-name ", " result-name "};\n"
+         "  " (:function entry) ": func(request: " request-name ") -> " result-name ";\n"
+         "}\n\n"
+         "world " interface "-provider {\n  export " interface ";\n}\n")))
+
+(defn package-variant-asymmetric-provider
+  "Build a wiring-only provider for a `typed-cap-call` whose request and
+  result are two DIFFERENT sealed variant identities (ADR 0058), each
+  independently a scalar-or-sealed-all-scalar-record-cased variant -- the
+  different-identity counterpart to `package-variant-identity-provider`.
+  The provider core module itself is
+  `kotoba.compiler.component-core/asymmetric-variant-capability-provider-wat`,
+  which inspects only the request's own discriminant and writes a fixed,
+  case-appropriate constant result -- it does not, and structurally cannot,
+  echo the request the way every prior identity provider in this chain
+  does, because request and result are unrelated shapes here."
+  [capability-name request-descriptor result-descriptor schemas]
+  (let [entry (capability capability-name)
+        wit (asymmetric-variant-wit entry request-descriptor result-descriptor schemas)
+        dir (Files/createTempDirectory "kotoba-variant-asym-provider-" (make-array FileAttribute 0))
+        world (.resolve dir "provider.wit") core (.resolve dir "provider.wasm")
+        embedded (.resolve dir "embedded.wasm") component (.resolve dir "provider.component.wasm")]
+    (try
+      (Files/writeString world wit (make-array java.nio.file.OpenOption 0))
+      (Files/write core (wasm-tools/parse-wat
+                         (component-core/asymmetric-variant-capability-provider-wat
+                          entry request-descriptor result-descriptor schemas))
+                   (make-array java.nio.file.OpenOption 0))
+      (wasm-tools/run-command! ["wasm-tools" "component" "embed" (str world) (str core)
+                                "--encoding" "utf8" "-o" (str embedded)])
+      (wasm-tools/run-command! ["wasm-tools" "component" "new" (str embedded)
+                                "--reject-legacy-names" "-o" (str component)])
+      {:format :wasm-component-provider/v1 :capability capability-name
+       :descriptor request-descriptor :result-descriptor result-descriptor
+       :schemas schemas :bytes (Files/readAllBytes component)}
+      (finally
+        (doseq [path [component embedded core world]] (Files/deleteIfExists path))
+        (Files/deleteIfExists dir)))))
+
 (defn compose-closed
   "Compose one application with provider definitions and reject any remaining
   instance import. `wasm-tools compose --no-imports` is the closure gate."
