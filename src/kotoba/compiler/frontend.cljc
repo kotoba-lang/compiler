@@ -999,13 +999,23 @@
                     (desugar-expr default)
                     (reverse pairs))))))
 
-(defn- literal-code-points [s]
-  #?(:clj (vec (.toArray (.codePoints ^String s)))
-     :cljs (vec (js/Array.from s))))
-
-(defn- code-points->string [points]
-  #?(:clj (String. (int-array points) 0 (count points))
-     :cljs (.join (clj->js points) "")))
+(defn- utf8-boundaries
+  "Map each valid UTF-8 byte boundary to its UTF-16 host-string index."
+  [s]
+  (loop [index 0 byte-index 0 boundaries {0 0}]
+    (if (= index (count s))
+      boundaries
+      (let [unit #?(:clj (int (.charAt ^String s index))
+                    :cljs (.charCodeAt s index))
+            [units bytes]
+            (cond
+              (<= unit 0x7f) [1 1]
+              (<= unit 0x7ff) [1 2]
+              (<= 0xd800 unit 0xdbff) [2 4]
+              :else [1 3])]
+        (recur (+ index units)
+               (+ byte-index bytes)
+               (assoc boundaries (+ byte-index bytes) (+ index units)))))))
 
 (defn- desugar-string-substring [args form]
   (when-not (= 3 (count args))
@@ -1015,11 +1025,14 @@
       (reject! "string-substring currently requires a literal string" form))
     (when-not (and (integer? start) (integer? end))
       (reject! "string-substring indexes must be integer literals" form))
-    (let [points (literal-code-points s)
-          length (count points)]
+    (value/utf8-byte-count! s)
+    (let [boundaries (utf8-boundaries s)
+          length (apply max (keys boundaries))]
       (when-not (<= 0 start end length)
         (reject! "string-substring indexes are out of bounds" form))
-      (code-points->string (subvec points start end)))))
+      (when-not (and (contains? boundaries start) (contains? boundaries end))
+        (reject! "string-substring indexes must land on UTF-8 code-point boundaries" form))
+      (subs s (get boundaries start) (get boundaries end)))))
 
 (defn- desugar-comparison-chain [op args form]
   (when (and (not= op '=) (empty? args))
