@@ -182,3 +182,29 @@ rewrite:
   fields' own pre-existing, still-open gap (named explicitly in ADR 0068,
   not silently left implicit). Recursive schema identity itself (this
   ledger's own item 2) is unchanged and out of scope for ADR 0068.
+- **Storage (`:storage/transact`) now also has a real `:clj` production
+  provider transport** — `kotoba.compiler.provider.storage-transport` (ADR
+  0070) — closing a third entry (after LLM/ADR 0064 and HTTP/ADR 0066) of
+  this ledger's own "identity wiring fixtures, not implementations" gap for
+  the nine application capabilities, and directly the case ADR 0067 named
+  as still open ("`storage` remains open and untouched by any in-flight
+  work this task found"). Durability is delegated entirely to a
+  host-configured key/value HTTP endpoint (a REQUIRED `:endpoint`
+  construction option or `KOTOBA_STORAGE_ENDPOINT` env var, no baked-in
+  default) — this ledger's own "Storage must not acquire ambient
+  filesystem authority" sentence (Remaining provider and authority gaps,
+  above) is satisfied by never adding a local-filesystem code path at all,
+  not by scoping one to a host-chosen directory. `storage.cljc` itself is
+  unmodified; every bound it already enforces (bounded keys, bounded
+  65536-byte values, conditional `[:option :i64]` versions) is unchanged
+  and un-weakened. The remaining six capabilities (log, clock, UI, and the
+  rest this ledger discusses, `state` already corrected by ADR 0067) are
+  UNCHANGED by this addendum. `:cljs`/nbb transport for storage itself also
+  remains an explicit, documented gap (ADR 0070's own "Remaining gaps"),
+  as does a live-network integration test against an already-deployed real
+  storage backend — unlike LLM's `murakumo-main`, no such repo-wide
+  well-known backend exists yet for storage. This progress is at the
+  JVM/Chicory reference-provider layer this ledger itself discusses, not
+  yet the WASM Component Model layer ADR chain 0037-0063 builds toward —
+  `storage-v1.edn`'s `:qualification` map is unchanged by this ADR. See ADR
+  0070 for the precise scope.
