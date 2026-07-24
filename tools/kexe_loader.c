@@ -315,26 +315,46 @@ static int valid_utf8(const uint8_t *bytes, uint64_t length) {
   return 1;
 }
 
+enum kexe_typed_kind_v1 {
+  KEXE_TYPED_STRING = 1,
+  KEXE_TYPED_OPTION_I64 = 2,
+  KEXE_TYPED_RESULT_I64 = 3
+};
+
+static int valid_typed_value(struct kexe_context_v2 *context,
+                             uint64_t kind, int64_t value) {
+  if (kind == KEXE_TYPED_STRING) {
+    int64_t offset = checked_pair_get(context, value, 0);
+    int64_t length = checked_pair_get(context, value, 1);
+    const uint8_t *bytes = resolve_string_bytes(context, offset, length);
+    return valid_utf8(bytes, (uint64_t)length);
+  }
+  if (kind == KEXE_TYPED_OPTION_I64 || kind == KEXE_TYPED_RESULT_I64) {
+    int64_t tag = checked_pair_get(context, value, 0);
+    int64_t payload = checked_pair_get(context, value, 1);
+    if (tag != 0 && tag != 1) return 0;
+    return kind != KEXE_TYPED_OPTION_I64 || tag != 0 || payload == 0;
+  }
+  return 0;
+}
+
 static int64_t checked_typed_cap_call(struct kexe_context_v2 *context,
                                       uint64_t id, uint64_t request_kind,
                                       uint64_t result_kind, int64_t request) {
   if (context == NULL || context->version != 2 || id > 255 ||
       !(context->allow[id / 64] & (UINT64_C(1) << (id % 64))) ||
-      request_kind != 1 || result_kind != 1) {
+      request_kind != result_kind ||
+      !valid_typed_value(context, request_kind, request)) {
     raise(SIGILL);
     return 0;
   }
-  int64_t offset = checked_pair_get(context, request, 0);
-  int64_t length = checked_pair_get(context, request, 1);
-  const uint8_t *bytes = resolve_string_bytes(context, offset, length);
-  if (!valid_utf8(bytes, (uint64_t)length)) { raise(SIGILL); return 0; }
-  /* The qualification host's deterministic string provider is identity.
+  /* The qualification host's deterministic typed provider is identity.
    * Production tenders replace this callback while preserving validation. */
   int64_t result = request;
-  offset = checked_pair_get(context, result, 0);
-  length = checked_pair_get(context, result, 1);
-  bytes = resolve_string_bytes(context, offset, length);
-  if (!valid_utf8(bytes, (uint64_t)length)) { raise(SIGILL); return 0; }
+  if (!valid_typed_value(context, result_kind, result)) {
+    raise(SIGILL);
+    return 0;
+  }
   return result;
 }
 

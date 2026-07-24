@@ -43,11 +43,12 @@
 ;; implement, PLUS -- as of the second native increment (ADR 0063) -- a
 ;; sealed, all-scalar-cased `variant-new`/`variant-match` pair, used only in
 ;; the analogous one exact nested construction+dispatch shape those same two
-;; files implement, PLUS sealed typed capability boundaries for i64 and
-;; bounded UTF-8 strings. The latter uses a dedicated callback which validates
-;; the pair-backed pointer/length handle on both sides. Every
-;; other typed feature (options, results, general/nested/escaping records or
-;; variants, typed maps/vectors/sets) has zero native backend codegen and
+;; files implement, PLUS sealed typed capability boundaries for i64, bounded
+;; UTF-8 strings, `:option-i64`, and `:result-i64`. The structured callback
+;; validates pair-backed string pointer/length handles or canonical tagged
+;; `(tag,payload)` handles on both sides. Every other typed feature
+;; (generic options/results, general/nested/escaping records or variants,
+;; typed maps/vectors/sets) has zero native backend codegen and
 ;; must keep producing the same "requires kotoba-script web target"
 ;; rejection it always has. This is a content check, not a blanket
 ;; per-backend allowance:
@@ -108,7 +109,7 @@
                                (ir/only-cljs-provider-typed-features? hir)))
                      (not (and (contains? #{:x86_64-kotoba-v1 :aarch64-kotoba-v1} backend)
                                (ir/only-string-and-scalar-record-typed-features? hir))))
-            (throw (ex-info "typed values currently require the kotoba-script web target, typed Wasm/CLJS target, or a qualified native string/scalar-record/i64-or-string-capability slice"
+            (throw (ex-info "typed values currently require the kotoba-script web target, typed Wasm/CLJS target, or a qualified native string/scalar-record/i64/string/option/result capability slice"
                             {:phase :target :target target :backend backend
                              :value-profile :kotoba.value/typed-v1})))
         _ (when (and (nil? (:entry hir))

@@ -270,7 +270,7 @@
           (ldr-context 16 48) (insn 0xd63f0200)   ; blr x16
           (ldr-sp 7 0) (add-sp 16)))))
 
-(defn- emit-typed-string-cap-call [cap-id value env depth]
+(defn- emit-typed-cap-call [cap-id kind value env depth]
   (let [cap-id #?(:clj cap-id :cljs (js/Number cap-id))
         word-offset (+ 16 (* 8 (quot cap-id 64)))
         bit-index (mod cap-id 64)]
@@ -280,8 +280,8 @@
           (mov-reg 4 0)                           ; x4=request handle
           (sub-sp 16) (str-sp 7 0)
           (load-constant-reg 1 cap-id)
-          (load-constant-reg 2 1)                 ; request kind string
-          (load-constant-reg 3 1)                 ; result kind string
+          (load-constant-reg 2 kind)              ; request kind
+          (load-constant-reg 3 kind)              ; result kind
           (mov-reg 0 7)
           (ldr-context 16 128) (insn 0xd63f0200)
           (ldr-sp 7 0) (add-sp 16)))))
@@ -528,11 +528,45 @@
             (= :i64 request-type result-type)
             (emit-cap-call cap-id request env depth)
             (= :string request-type result-type)
-            (emit-typed-string-cap-call cap-id request env depth)
+            (emit-typed-cap-call cap-id 1 request env depth)
+            (= :option-i64 request-type result-type)
+            (emit-typed-cap-call cap-id 2 request env depth)
+            (= :result-i64 request-type result-type)
+            (emit-typed-cap-call cap-id 3 request env depth)
             :else
             (throw (ex-info "native typed capability ABI does not support this boundary"
                             {:phase :aarch64 :request-type request-type
                              :result-type result-type}))))
+        (= op 'option-some)
+        (emit-heap-call 'pair [1 (first args)] env depth)
+        (= op 'option-none)
+        (emit-heap-call 'pair [0 0] env depth)
+        (= op 'option-some?)
+        (emit-heap-call 'pair-first [(first args)] env depth)
+        (= op 'option-value)
+        (let [[value fallback] args
+              tagged-value '__native_option_value]
+          (emit-let [tagged-value value]
+                    (list 'if (list 'pair-first tagged-value)
+                          (list 'pair-second tagged-value)
+                          fallback)
+                    env depth))
+        (= op 'result-ok)
+        (emit-heap-call 'pair [1 (first args)] env depth)
+        (= op 'result-err)
+        (emit-heap-call 'pair [0 (first args)] env depth)
+        (= op 'result-ok?)
+        (emit-heap-call 'pair-first [(first args)] env depth)
+        (contains? '#{result-value result-error} op)
+        (let [[value fallback] args
+              tagged-value '__native_result_value
+              ok? (list 'pair-first tagged-value)
+              payload (list 'pair-second tagged-value)]
+          (emit-let [tagged-value value]
+                    (if (= op 'result-value)
+                      (list 'if ok? payload fallback)
+                      (list 'if ok? fallback payload))
+                    env depth))
         (= op 'record-get)
         (let [[type value-form field] args]
           (emit-record-get-of-new type value-form field env depth))
