@@ -318,3 +318,202 @@
                                           {:demo/wrapper
                                            [:record :demo/wrapper
                                             [[:items [:list [:ref :demo/wrapper]]]]]}))))
+
+(deftest option-of-scalar-layout-is-a-two-case-union-with-a-payload-less-none-case
+  (let [descriptor [:option :i64]
+        value (canonical/layout descriptor)]
+    (is (= descriptor (:descriptor value)))
+    (is (= :option (:kind value)))
+    (is (= {:descriptor :i64 :size 8 :alignment 8 :flat [:i64]} (:item-layout value)))
+    ;; discriminant (1 byte, 2 cases) padded up to the payload's own 8-byte
+    ;; alignment before the payload area starts, exactly the same
+    ;; `align-up`/`discriminant-byte-size` math `variant-layout` already
+    ;; uses for a sealed variant's own union area.
+    (is (= 1 (:discriminant-size value)))
+    (is (= 8 (:payload-offset value)))
+    (is (= 8 (:alignment value)))
+    (is (= 16 (:size value)))
+    ;; none's own flat is [] (unit, no core values) and only ever touches no
+    ;; position at all; some's own flat is [:i64] and is appended past the
+    ;; fold's current (empty) length untouched -- the leading discriminant
+    ;; i32 is prepended on top.
+    (is (= [:i32 :i64] (:flat value)))
+    (is (= [:bounded-discriminant] (:validation value)))
+    (is (= [:i32]
+           (:core-results
+            (canonical/export-plan
+             {:name 'echo :params ['value] :param-types [descriptor] :result descriptor}))))
+    (is (= [:i32 :i64]
+           (:core-params
+            (canonical/export-plan
+             {:name 'echo :params ['value] :param-types [descriptor] :result descriptor}))))))
+
+(deftest option-descriptor-arity-is-checked
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                        #"option descriptor must be exactly \[:option item-descriptor\]"
+                        (canonical/layout [:option]))))
+
+(deftest option-of-nested-sealed-record-layout-carries-the-item-record-layout
+  (let [item-descriptor [:ref :demo/point]
+        schemas {:demo/point [:record :demo/point [[:x :i64] [:weight :f64] [:visible :bool]]]}
+        descriptor [:option item-descriptor]
+        value (canonical/layout descriptor schemas)
+        record-value (canonical/layout item-descriptor schemas)]
+    (is (= record-value (:item-layout value)))
+    (is (= 1 (:discriminant-size value)))
+    (is (= 8 (:payload-offset value)))
+    (is (= 8 (:alignment value)))
+    (is (= 32 (:size value)))
+    (is (= [:i32 :i64 :f64 :i32] (:flat value)))))
+
+(deftest result-of-scalar-and-bool-layout-is-a-two-case-union
+  (let [descriptor [:result :i64 :bool]
+        value (canonical/layout descriptor)]
+    (is (= descriptor (:descriptor value)))
+    (is (= :result (:kind value)))
+    (is (= {:descriptor :i64 :size 8 :alignment 8 :flat [:i64]} (:ok-layout value)))
+    (is (= {:descriptor :bool :size 1 :alignment 1 :flat [:i32] :validation [:canonical-bool]}
+           (:err-layout value)))
+    (is (= 1 (:discriminant-size value)))
+    (is (= 8 (:payload-offset value)))
+    (is (= 8 (:alignment value)))
+    (is (= 16 (:size value)))
+    ;; ok's own flat [:i64] is appended past the fold's empty start; err's
+    ;; own flat [:i32] joins against that first (and only) position, widening
+    ;; i32 against i64 to i64 -- the same `join-core-type` "anything but an
+    ;; i32/f32 mismatch widens to i64" rule `variant-flatten-payload` already
+    ;; applies to any pair of case shapes.
+    (is (= [:i32 :i64] (:flat value)))
+    (is (= [:bounded-discriminant] (:validation value)))
+    (is (= [:i32]
+           (:core-results
+            (canonical/export-plan
+             {:name 'echo :params ['value] :param-types [descriptor] :result descriptor}))))))
+
+(deftest result-with-only-bool-and-f32-cases-joins-to-i32
+  ;; Mirrors `variant-with-only-bool-and-f32-cases-joins-to-i32`: neither
+  ;; case ever touches i64/f64, so the Component Model spec's special-cased
+  ;; i32/f32 join keeps the shared payload position at i32 instead of
+  ;; widening to i64.
+  (let [descriptor [:result :bool :f32]
+        value (canonical/layout descriptor)]
+    (is (= [:i32 :i32] (:flat value)))
+    (is (= 1 (:discriminant-size value)))
+    (is (= 4 (:payload-offset value)))
+    (is (= 8 (:size value)))
+    (is (= 4 (:alignment value)))))
+
+(deftest result-descriptor-arity-is-checked
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                        #"result descriptor must be exactly \[:result ok-descriptor err-descriptor\]"
+                        (canonical/layout [:result :i64])))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                        #"result descriptor must be exactly \[:result ok-descriptor err-descriptor\]"
+                        (canonical/layout [:result :i64 :bool :string]))))
+
+(deftest result-of-nested-sealed-record-and-scalar-carries-both-payload-layouts
+  (let [ok-descriptor [:ref :demo/point]
+        schemas {:demo/point [:record :demo/point [[:x :i64] [:weight :f64] [:visible :bool]]]}
+        descriptor [:result ok-descriptor :bool]
+        value (canonical/layout descriptor schemas)
+        record-value (canonical/layout ok-descriptor schemas)]
+    (is (= record-value (:ok-layout value)))
+    (is (= {:descriptor :bool :size 1 :alignment 1 :flat [:i32] :validation [:canonical-bool]}
+           (:err-layout value)))))
+
+(deftest option-inside-a-variant-case-joins-with-the-other-cases-flat-core-types
+  (let [descriptor [:ref :demo/lookup]
+        schemas {:demo/lookup [:variant :demo/lookup
+                                [[:present [:option :i64]] [:absent :bool]]]}
+        value (canonical/layout descriptor schemas)]
+    (is (= :variant (:kind value)))
+    (is (= [:present :absent] (mapv :tag (:cases value))))
+    ;; :present's own flat is [:i32 :i64] (option discriminant, payload);
+    ;; :absent's own flat is [:i32] and only touches position 0, joining
+    ;; i32/i32 -> i32 there and leaving position 1 exactly as :present's own
+    ;; option layout already produced it -- `variant-flatten-payload` needed
+    ;; zero changes for a case whose own payload is `[:option ...]`, exactly
+    ;; as ADR 0065 already showed for `[:list ...]`.
+    (is (= [:i32 :i32 :i64] (:flat value)))
+    (is (= [:i32 :i32 :i64]
+           (:core-params
+            (canonical/export-plan
+             {:name 'echo :params ['value] :param-types [descriptor] :result descriptor}
+             schemas))))))
+
+(deftest result-inside-a-variant-case-joins-with-the-other-cases-flat-core-types
+  (let [descriptor [:ref :demo/attempt]
+        schemas {:demo/attempt [:variant :demo/attempt
+                                 [[:tried [:result :i64 :bool]] [:skipped :bool]]]}
+        value (canonical/layout descriptor schemas)]
+    (is (= :variant (:kind value)))
+    (is (= [:tried :skipped] (mapv :tag (:cases value))))
+    (is (= [:i32 :i32 :i64] (:flat value)))))
+
+(deftest list-of-option-and-option-of-list-both-work
+  ;; Neither `list-layout` nor `option-layout` restricts what the other may
+  ;; nest as an item type -- only list-of-list is explicitly rejected (see
+  ;; `list-item-type-must-not-itself-be-a-list`), because a second
+  ;; independent variable length/stride nested inside the first is a
+  ;; genuinely harder shape. An option (a single fixed-size union payload
+  ;; area) nested inside a list's per-item stride, or a list (a
+  ;; pointer+length pair) nested inside an option's payload area, are both
+  ;; already-admitted recursive shapes with no such problem.
+  (is (= {:descriptor :i64 :size 8 :alignment 8 :flat [:i64]}
+         (get-in (canonical/layout [:list [:option :i64]]) [:item-layout :item-layout])))
+  (is (= [:list :i64] (get-in (canonical/layout [:option [:list :i64]]) [:item-layout :descriptor])))
+  (is (= value/canonical-list-item-limit
+         (get-in (canonical/layout [:option [:list :i64]]) [:item-layout :max-items]))))
+
+(deftest option-of-option-and-result-of-result-are-not-rejected
+  ;; Unlike list-of-list, nesting a union inside another union's payload area
+  ;; is not a genuinely harder shape (both are still a single fixed-size
+  ;; payload area, the same recursive shape a variant case whose own payload
+  ;; is another variant already has) -- so no analogous rejection applies to
+  ;; `option`/`result`.
+  (is (= :option (get-in (canonical/layout [:option [:option :i64]]) [:item-layout :kind])))
+  (is (= :result (get-in (canonical/layout [:result [:result :i64 :bool] :bool]) [:ok-layout :kind]))))
+
+(deftest option-item-type-must-be-a-qualified-canonical-abi-descriptor
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical ABI layout"
+                        (canonical/layout [:option :not-a-real-descriptor]))))
+
+(deftest result-payload-types-must-be-qualified-canonical-abi-descriptors
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical ABI layout"
+                        (canonical/layout [:result :not-a-real-descriptor :bool])))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical ABI layout"
+                        (canonical/layout [:result :bool :not-a-real-descriptor]))))
+
+(deftest option-item-type-recursive-schema-through-the-option-is-still-rejected
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"recursive schema has no bounded"
+                        (canonical/layout [:ref :demo/maybe-wrapper]
+                                          {:demo/maybe-wrapper
+                                           [:record :demo/maybe-wrapper
+                                            [[:maybe [:option [:ref :demo/maybe-wrapper]]]]]}))))
+
+(deftest result-payload-type-recursive-schema-through-the-result-is-still-rejected
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"recursive schema has no bounded"
+                        (canonical/layout [:ref :demo/attempt-wrapper]
+                                          {:demo/attempt-wrapper
+                                           [:record :demo/attempt-wrapper
+                                            [[:attempt [:result [:ref :demo/attempt-wrapper] :bool]]]]}))))
+
+(deftest record-field-of-option-or-result-type-still-flattens-the-whole-record-correctly
+  ;; `layout-leaves` does not yet expose a bespoke per-leaf breakdown for an
+  ;; option/result-typed record field (it falls through to the same plain
+  ;; scalar leaf shape a nested *variant* field already does today, since
+  ;; neither has a dedicated leaf-shape branch) -- a documented, out-of-scope
+  ;; gap mirroring `variant`'s own pre-existing one (see this ADR's
+  ;; "Remaining gaps"). This test pins that the record's own top-level
+  ;; `:size`/`:alignment`/`:flat` are still fully and correctly computed
+  ;; regardless, since `record-layout` folds every field's own raw
+  ;; `layout*` result directly and never depends on `layout-leaves` to do so.
+  (let [descriptor [:ref :demo/attempt-record]
+        schemas {:demo/attempt-record
+                 [:record :demo/attempt-record
+                  [[:id :i64] [:outcome [:result :i64 :bool]] [:closed :bool]]]}
+        outer-layout (canonical/layout descriptor schemas)]
+    (is (= [0 8 24] (mapv :offset (:fields outer-layout))))
+    (is (= [:i64 :i32 :i64 :i32] (:flat outer-layout)))
+    (is (= 32 (:size outer-layout)))
+    (is (= 8 (:alignment outer-layout)))))

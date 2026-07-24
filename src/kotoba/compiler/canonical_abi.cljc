@@ -131,6 +131,120 @@
        :flat (vec (mapcat (comp :flat :layout) (:fields planned)))
        :fields (:fields planned)})))
 
+(defn- unit-case-layout
+  "The zero-size, zero-flat-core-values shape for a payload-less case, used
+  only by `option`'s `none` case in this file. No admitted top-level
+  descriptor produces this shape via `layout*` itself -- every real type in
+  this profile carries at least one flat core value and at least one byte of
+  size/alignment -- so it is synthesized locally here rather than routed
+  through `layout*`, exactly the way Component Model spec's own `unit` case
+  needs no payload type of its own."
+  []
+  {:size 0 :alignment 1 :flat []})
+
+(defn- structural-union-layout
+  "Shared discriminant+payload-area math for a structural (non-nominal)
+  union of `case-layouts` (each `{:tag :layout}`, the same shape
+  `variant-layout` builds its own `case-layouts` binding from), reusing
+  `discriminant-byte-size`/`variant-flatten-payload`/`join-core-type`
+  unchanged -- exactly `variant-layout`'s own union-of-cases math, minus the
+  `schemas` lookup, `identity`, and `visited`-set entry a *nominal* schema
+  needs. `option`/`result` are structural, not nominal (parallel to why
+  `:list` carries no schema-table identity of its own): the Component Model
+  spec defines `option<T>`/`result<T, E>` as anonymous type constructors, the
+  same way `list<T>` is, not sealed named types a caller registers once and
+  references by identity thereafter."
+  [case-layouts]
+  (let [discriminant-size (discriminant-byte-size (count case-layouts))
+        payload-alignment (reduce max 1 (map (comp :alignment :layout) case-layouts))
+        payload-offset (align-up discriminant-size payload-alignment)
+        payload-size (reduce max 0 (map (comp :size :layout) case-layouts))
+        alignment (max discriminant-size payload-alignment)]
+    {:discriminant-size discriminant-size
+     :payload-offset payload-offset
+     :alignment alignment
+     :size (align-up (+ payload-offset payload-size) alignment)
+     :flat (into [:i32] (variant-flatten-payload case-layouts))}))
+
+(defn- option-layout
+  "Checked Canonical ABI layout for a structural `[:option item-descriptor]`
+  (the Component Model's `option<T>`): sugar over the same union-of-cases
+  math `variant-layout` uses, specialized to exactly the two cases
+  `option<T>` always has -- a payload-less `none` (`unit-case-layout`) and a
+  `some` case carrying `item-descriptor`'s own recursive `layout*` result.
+  `item-layout` is kept alongside on the returned map (not discarded once
+  folded into `:flat`), exactly the reason `list-layout` keeps its own
+  `:item-layout` alongside: so a caller can derive the payload area's shape
+  or recurse into a nested record/variant/list/option/result item without
+  re-deriving it from the descriptor. `item-descriptor` may be any
+  already-admitted Canonical ABI descriptor, including another `:option`,
+  `:result`, or `:list` -- unlike `[:list [:list ...]]`, nesting an option or
+  result inside another one is not a genuinely harder shape (both sides are
+  still a single fixed-size union payload area, exactly the same recursive
+  shape a variant case whose own payload is another variant already has),
+  so no analogous rejection applies here. A `visited` guard is threaded
+  straight through into `item-descriptor`'s own `layout*` call unchanged, so
+  an item type reaching back to an *enclosing* record/variant's own identity
+  (including by way of an option) is still caught by that record/variant's
+  own existing recursion guard, exactly as `list-layout` already does."
+  [descriptor schemas visited]
+  (when-not (= 2 (count descriptor))
+    (reject "option descriptor must be exactly [:option item-descriptor]"
+            {:descriptor descriptor}))
+  (let [item-descriptor (second descriptor)
+        item-layout (layout* item-descriptor schemas visited)
+        case-layouts [{:tag :none :layout (unit-case-layout)}
+                      {:tag :some :layout item-layout}]]
+    (merge {:descriptor descriptor
+            :kind :option
+            :item-layout item-layout
+            ;; Declarative obligation for a future codegen consumer, exactly
+            ;; the same "documents an obligation, nothing in this repository
+            ;; reads it programmatically" contract every other :validation
+            ;; tag in this file already has (confirmed by grep, see ADR).
+            ;; `variant-layout` itself carries no analogous tag for its own
+            ;; discriminant today -- a pre-existing gap this ADR does not
+            ;; also need to close, since it is out of this task's scope.
+            :validation [:bounded-discriminant]}
+           (structural-union-layout case-layouts))))
+
+(defn- result-layout
+  "Checked Canonical ABI layout for a structural `[:result ok-descriptor
+  err-descriptor]` (the Component Model's `result<T, E>`): sugar over the
+  same union-of-cases math `variant-layout` uses, specialized to exactly the
+  two cases `result<T, E>` always has -- `ok` carrying `ok-descriptor` and
+  `err` carrying `err-descriptor`. Both payload types are required (matching
+  `kotoba.compiler.value`'s own domain-level `[:result T E]` descriptor
+  shape at `validate-value-type!`, which also always requires both types
+  present); the Component Model spec's optional-payload `result<>`/
+  `result<T>`/`result<_, E>` shapes are not admitted by this slice, matching
+  this task's own scope boundary. `ok-layout`/`err-layout` are kept
+  alongside on the returned map for the same reason `list-layout` keeps its
+  own `:item-layout` and `option-layout` keeps its own `:item-layout`: so a
+  caller can recurse into either payload's own shape without re-deriving it
+  from the descriptor. Either descriptor may be any already-admitted
+  Canonical ABI descriptor, including another `:option`/`:result`/`:list`;
+  see `option-layout`'s docstring for why no list-of-list-style rejection
+  applies to nesting a union inside a union. `visited` is threaded straight
+  through into both payload types' own `layout*` calls unchanged, exactly as
+  `option-layout`/`list-layout` already do."
+  [descriptor schemas visited]
+  (when-not (= 3 (count descriptor))
+    (reject "result descriptor must be exactly [:result ok-descriptor err-descriptor]"
+            {:descriptor descriptor}))
+  (let [ok-descriptor (second descriptor)
+        err-descriptor (nth descriptor 2)
+        ok-layout (layout* ok-descriptor schemas visited)
+        err-layout (layout* err-descriptor schemas visited)
+        case-layouts [{:tag :ok :layout ok-layout}
+                      {:tag :err :layout err-layout}]]
+    (merge {:descriptor descriptor
+            :kind :result
+            :ok-layout ok-layout
+            :err-layout err-layout
+            :validation [:bounded-discriminant]}
+           (structural-union-layout case-layouts))))
+
 (defn- list-layout
   "Checked Canonical ABI layout for a bounded `[:list item-descriptor]`: a
   pointer+length pair in linear memory, the same two-core-value `[:i32 :i32]`
@@ -223,6 +337,10 @@
       (assoc (variant-layout [:ref identity] schemas visited) :descriptor descriptor))
     (and (vector? descriptor) (= :list (first descriptor)))
     (list-layout descriptor schemas visited)
+    (and (vector? descriptor) (= :option (first descriptor)))
+    (option-layout descriptor schemas visited)
+    (and (vector? descriptor) (= :result (first descriptor)))
+    (result-layout descriptor schemas visited)
     :else
     (reject "descriptor has no qualified Canonical ABI layout"
             {:descriptor descriptor})))
