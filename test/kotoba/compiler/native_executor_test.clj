@@ -84,6 +84,37 @@
     (is (= 128 (get-in envelope [:artifact :context-abi
                                  :typed-cap-call-offset])))))
 
+(deftest typed-option-and-result-capability-calls-validate-native-tagged-boundaries
+  (let [source "(defn main [] :i64
+                  (+ (option-value
+                       (typed-cap-call 4 :option-i64 :option-i64 (some 41)) 0)
+                     (option-value
+                       (typed-cap-call 4 :option-i64 :option-i64 nil) 5)
+                     (result-value
+                       (typed-cap-call 4 :result-i64 :result-i64 (result-ok 7)) 0)
+                     (result-error
+                       (typed-cap-call 4 :result-i64 :result-i64 (result-err 9)) 0)))"
+        policy {:allow #{[:cap/call 4]}}
+        {:keys [envelope trust]} (signed source policy)
+        {:keys [trust options]} (execution-options trust)
+        result (executor/execute envelope trust policy {:args []} options)]
+    (is (= {:status :ok :result 62}
+           (select-keys (:evidence result) [:status :result])))
+    (is (= #{[:cap/call 4]} (get-in envelope [:artifact :effects])))
+    (is (= :kotoba.kir/v4 (get-in envelope [:artifact :program :format])))))
+
+(deftest typed-option-and-result-capability-calls-emit-on-both-native-isas
+  (let [source "(defn main [] :i64
+                  (+ (option-value
+                       (typed-cap-call 4 :option-i64 :option-i64 (some 3)) 0)
+                     (result-error
+                       (typed-cap-call 4 :result-i64 :result-i64 (result-err 4)) 0)))"
+        policy {:allow #{[:cap/call 4]}}]
+    (doseq [native-target [:x86_64-kotoba-v1 :aarch64-kotoba-v1]]
+      (let [artifact (:artifact (compiler/compile-source source native-target policy))]
+        (is (seq (:code artifact)) (name native-target))
+        (is (= #{[:cap/call 4]} (:effects artifact)) (name native-target))))))
+
 (deftest execution-rejects-before-entering-untrusted-or-unauthorized-code
   (let [{:keys [envelope trust]} (signed "(defn main [] 42)" {:allow #{}})
         tampered (assoc-in envelope [:artifact :code 0] 255)

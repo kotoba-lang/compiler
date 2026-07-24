@@ -532,9 +532,13 @@ one-based integers validated on every access; zero, negative, future, and
 out-of-range handles trap before an address is formed. Allocation is monotonic,
 immutable, and traps at capacity—there is no fallback to host allocation and no
 GC pause or unbounded growth. The normative KIR executor enforces the same
-capacity. Native code reaches only three fixed context-v2 callbacks at sealed
-offsets; the loader owns the arena. Wasm uses equivalent `kotoba:heap` imports,
-whose host implementation must enforce the same contract.
+capacity. Native code reaches only fixed context-v2 callbacks at sealed
+offsets; the loader owns the arena. The typed callback admits bounded strings
+and monomorphic `:option-i64`/`:result-i64`. Options and results use canonical
+pair-backed `(tag,payload)` handles; the loader validates the handle and tag on
+both sides and additionally requires a none option's payload to be zero. Wasm
+uses equivalent `kotoba:heap` imports, whose host implementation must enforce
+the same contract.
 
 The empty list is the i64 value zero. Non-empty lists are immutable pair chains;
 projection from zero or any forged handle traps. `list` is capped at 128 items

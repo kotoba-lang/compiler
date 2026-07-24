@@ -29,10 +29,13 @@
 ;; this slice models) `record-new`/`record-get` pair used in the one exact
 ;; nested shape `backend/x86-64.cljc`'s and `backend/aarch64.cljc`'s own
 ;; `emit-record-get-of-new` implement: `record-get`'s value operand must be
-;; a directly-nested, SAME-schema `record-new`. Every other typed feature
-;; (maps, options, results, variants, general/escaping/nested records,
-;; typed sets, heterogeneous vectors, ...) still requires the kotoba-script
-;; web target or typed Wasm target. A blanket per-backend allowance would
+;; a directly-nested, SAME-schema `record-new`, plus monomorphic
+;; `:option-i64`/`:result-i64` constructors, projections, and same-type
+;; capability callbacks using canonical pair-backed `(tag,payload)` handles.
+;; Every other typed feature (maps, generic options/results, variants,
+;; general/escaping/nested records, typed sets, heterogeneous vectors, ...)
+;; still requires the kotoba-script web target or typed Wasm target. A blanket
+;; per-backend allowance would
 ;; silently let unsupported ops reach the backend and crash confusingly
 ;; instead of rejecting cleanly -- so admission has to inspect which
 ;; features are actually used, not just the HIR format tag.
@@ -209,19 +212,33 @@
                          (every? #(and (vector? %) (= 3 (count %)) (symbol? (second %))) branches)
                          (walk value)
                          (every? (fn [[_ _binder body]] (walk body)) branches)))
-                  ;; Native capability callback ABI is currently one i64
-                  ;; request word -> one i64 result word. Preserve the sealed
-                  ;; descriptors in KIR for verification, but erase them only
-                  ;; at this already type-checked machine-code boundary.
+                  ;; Native capability callbacks preserve sealed descriptors
+                  ;; in KIR and pass either a scalar word or a validated
+                  ;; pair-backed string/tagged-value handle at the
+                  ;; already-type-checked machine-code boundary.
                   (= op 'typed-cap-call)
                   (let [[cap-id request-type result-type request] args]
                     (and (= 4 (count args))
                          #?(:clj (integer? cap-id)
                             :cljs (or (i64/bigint-value? cap-id) (integer? cap-id)))
                          (<= 0 cap-id 255)
-                         (contains? #{[:i64 :i64] [:string :string]}
+                         (contains? #{[:i64 :i64] [:string :string]
+                                      [:option-i64 :option-i64]
+                                      [:result-i64 :result-i64]}
                                     [request-type result-type])
                          (walk request)))
+                  (= op 'option-some)
+                  (and (= 1 (count args)) (walk (first args)))
+                  (= op 'option-none)
+                  (empty? args)
+                  (= op 'option-some?)
+                  (and (= 1 (count args)) (walk (first args)))
+                  (= op 'option-value)
+                  (and (= 2 (count args)) (every? walk args))
+                  (contains? '#{result-ok result-err result-ok?} op)
+                  (and (= 1 (count args)) (walk (first args)))
+                  (contains? '#{result-value result-error} op)
+                  (and (= 2 (count args)) (every? walk args))
                   :else
                   (and (not (contains? non-string-typed-ops op))
                        (every? walk args))))
