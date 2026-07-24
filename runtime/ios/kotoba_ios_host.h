@@ -8,8 +8,10 @@ extern "C" {
 #endif
 
 #define KOTOBA_IOS_HOST_ABI_V1 1u
+#define KOTOBA_IOS_MAX_CODE_BYTES (1024u * 1024u)
 #define KOTOBA_IOS_MAX_ARITY 5u
 #define KOTOBA_IOS_PAIR_CAPACITY 4096u
+#define KOTOBA_IOS_STRING_POOL_BYTES 65536u
 
 struct kotoba_ios_request_v1 {
   uint32_t abi_version;

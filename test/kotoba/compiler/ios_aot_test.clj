@@ -18,6 +18,8 @@
     (is (= :aarch64-ios-kotoba-v1 (get-in first [:manifest :target])))
     (is (= 0 (get-in first [:manifest :entry :arity])))
     (is (.contains assembly ".section __TEXT,__text,regular,pure_instructions"))
+    (is (.contains assembly ".globl _kotoba_ios_code_end"))
+    (is (.contains assembly ".no_dead_strip _kotoba_ios_code_end"))
     (is (.contains assembly ".set _kotoba_ios_entry, _kotoba_ios_code_start + "))
     (is (.contains assembly ".asciz \"aarch64-ios-kotoba-v1\""))))
 

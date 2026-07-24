@@ -62,7 +62,7 @@
                           (.includes load-info "sectname __text")
                           (.includes load-info "flags 0x80000000"))
                      "ios-aot: executable Mach-O text section rejected")
-        (doseq [symbol ["_kotoba_ios_code_start" "_kotoba_ios_entry"
+        (doseq [symbol ["_kotoba_ios_code_start" "_kotoba_ios_code_end" "_kotoba_ios_entry"
                         "_kotoba_ios_target_profile" "_kotoba_ios_execute_static_v1"]]
           (lib/ensure! (.includes symbols symbol) (str "ios-aot: missing symbol " symbol)))
         (doseq [needle [":format :kotoba.ios-aot/v1" ":target :aarch64-ios-kotoba-v1"

@@ -12,6 +12,7 @@ extern "C" {
 #define KOTOBA_ANDROID_MAX_CODE_BYTES (1024u * 1024u)
 #define KOTOBA_ANDROID_MAX_ARITY 5u
 #define KOTOBA_ANDROID_PAIR_CAPACITY 4096u
+#define KOTOBA_ANDROID_STRING_POOL_BYTES 65536u
 
 struct kotoba_android_request_v1 {
   uint32_t abi_version;

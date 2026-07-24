@@ -78,25 +78,51 @@
     (let [nbb-cli (.join path lib/root "node_modules" "nbb" "cli.js")
           kotoba (.join path lib/root "bin" "kotoba")
           artifact (.join path tmp "android.kexe")
-          raw (.join path tmp "android.bin")]
+          raw (.join path tmp "android.bin")
+          typed-source (.join path tmp "typed-capability.kotoba")
+          typed-policy (.join path tmp "typed-policy.edn")
+          typed-artifact (.join path tmp "typed-android.kexe")
+          typed-raw (.join path tmp "typed-android.bin")]
       (run! js/process.execPath [nbb-cli kotoba "-M" "compile"
                                  (.join path lib/root "examples" "structured.kotoba")
                                  "--target" "aarch64-android" "--output" artifact])
       (run! js/process.execPath [nbb-cli kotoba "-M" "verify" artifact])
+      (.writeFileSync
+       fs typed-source
+       "(defn main [] :i64\n  (+ (string-byte-length (typed-cap-call 4 :string :string \"hello😀\"))\n     (option-value (typed-cap-call 4 :option-i64 :option-i64 (some 41)) 0)\n     (option-value (typed-cap-call 4 :option-i64 :option-i64 (option-none)) 5)\n     (result-value (typed-cap-call 4 :result-i64 :result-i64 (result-ok 7)) 0)\n     (result-error (typed-cap-call 4 :result-i64 :result-i64 (result-err 9)) 0)))\n")
+      (.writeFileSync fs typed-policy "{:allow #{[:cap/call 4]}}\n")
+      (run! js/process.execPath [nbb-cli kotoba "-M" "compile" typed-source
+                                 "--target" "aarch64-android" "--policy" typed-policy
+                                 "--output" typed-artifact])
+      (run! js/process.execPath [nbb-cli kotoba "-M" "verify" typed-artifact])
       (let [extracted (run! js/process.execPath [nbb-cli kotoba "-M" "extract-native"
                                                  artifact "--symbol" "main" "--output" raw])
             [_ offset] (re-find #":offset ([0-9]+)" (.-stdout extracted))
-            [_ arity] (re-find #":arity ([0-9]+)" (.-stdout extracted))]
-        (lib/ensure! (and offset arity) "android-ndk: missing entry metadata")
+            [_ arity] (re-find #":arity ([0-9]+)" (.-stdout extracted))
+            typed-extracted
+            (run! js/process.execPath [nbb-cli kotoba "-M" "extract-native"
+                                       typed-artifact "--symbol" "main" "--output" typed-raw])
+            [_ typed-offset] (re-find #":offset ([0-9]+)" (.-stdout typed-extracted))
+            [_ typed-arity] (re-find #":arity ([0-9]+)" (.-stdout typed-extracted))]
+        (lib/ensure! (and offset arity typed-offset typed-arity)
+                     "android-ndk: missing entry metadata")
         (when (= "1" (aget js/process.env "KOTOBA_ANDROID_EXECUTE"))
           (run! "adb" ["push" harness "/data/local/tmp/kotoba-android-harness"])
           (run! "adb" ["push" raw "/data/local/tmp/kotoba-android.bin"])
+          (run! "adb" ["push" typed-raw "/data/local/tmp/kotoba-android-typed.bin"])
           (run! "adb" ["shell" "chmod" "700" "/data/local/tmp/kotoba-android-harness"])
           (let [executed (run! "adb" ["shell" "/data/local/tmp/kotoba-android-harness"
                                        "/data/local/tmp/kotoba-android.bin" offset arity])]
             (lib/ensure! (= "{:status :ok :result 42 :fuel {:initial 512 :remaining 509} :heap {:used 0}}"
                               (.trim (.-stdout executed)))
                          (str "android-ndk: emulator result mismatch: " (.-stdout executed)))
+            (let [typed-executed
+                  (run! "adb" ["shell" "/data/local/tmp/kotoba-android-harness"
+                                "/data/local/tmp/kotoba-android-typed.bin"
+                                typed-offset typed-arity "4"])]
+              (lib/ensure! (.includes (.-stdout typed-executed) ":result 71")
+                           (str "android-ndk: typed callback mismatch: "
+                                (.-stdout typed-executed))))
             (println "android-ndk: Arm64 emulator executed verified code under RW-to-RX host")))
       (let [text (.readFileSync fs artifact "utf8")]
         (doseq [needle [":target :aarch64-android-kotoba-v1" ":os :android"
