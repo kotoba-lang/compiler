@@ -77,6 +77,21 @@
                (nth type 2))
        (= (count (nth type 2)) (count (distinct (map first (nth type 2)))))))
 
+(defn- native-word-value-type?
+  "Independent verifier copy of the recursive one-word native value slice."
+  ([type] (native-word-value-type? type 0))
+  ([type depth]
+   (and (<= depth 8)
+        (or (contains? #{:i64 :bool :string} type)
+            (and (vector? type)
+                 (case (first type)
+                   :option (and (= 2 (count type))
+                                (native-word-value-type? (second type) (inc depth)))
+                   :result (and (= 3 (count type))
+                                (native-word-value-type? (second type) (inc depth))
+                                (native-word-value-type? (nth type 2) (inc depth)))
+                   false))))))
+
 ;; Mirrors `kotoba.compiler.backend.wasm`'s `utf8` -- `.getBytes` is
 ;; JVM-only, cljs has no `String`/`Charset`; `TextEncoder` is the
 ;; UTF-8-safe equivalent.
@@ -141,6 +156,28 @@
     (and (seq? form) (= 'typed-cap-call (first form)))
     (let [[_ _cap-id _request-type _result-type request] form]
       (bounded-sum [1 (lowered-cost request env)]))
+    (and (seq? form)
+         (contains? '#{option-some-of option-some?-of
+                       result-ok-of result-err-of result-ok?-of}
+                    (first form)))
+    (let [[_ _type value] form]
+      (bounded-sum [1 (lowered-cost value env)]))
+    (and (seq? form) (= 'option-none-of (first form))) 1
+    (and (seq? form)
+         (contains? '#{option-value-of result-value-of result-error-of}
+                    (first form)))
+    (let [[_ _type value fallback] form]
+      (bounded-sum [1 (lowered-cost value env) (lowered-cost fallback env)]))
+    (and (seq? form) (= 'option-match (first form)))
+    (let [[_ _type value none-body binder some-body] form]
+      (bounded-sum [1 (lowered-cost value env)
+                    (lowered-cost none-body env)
+                    (lowered-cost some-body (assoc env binder 1))]))
+    (and (seq? form) (= 'result-match-of (first form)))
+    (let [[_ _type value ok-binder ok-body err-binder err-body] form]
+      (bounded-sum [1 (lowered-cost value env)
+                    (lowered-cost ok-body (assoc env ok-binder 1))
+                    (lowered-cost err-body (assoc env err-binder 1))]))
     :else
     (let [[op & args] form]
       (if (= op 'let)
@@ -191,7 +228,8 @@
     ;; `:bool`-typed VALUE in this frontend's type system (every comparison,
     ;; including `=`, always yields `:i64`; see `ir/only-string-and-scalar-
     ;; record-typed-features?`'s own comment), reachable only as a
-    ;; `record-new` field value under this increment's admission. Always
+    ;; `record-new` field value or generic option/result payload under this
+    ;; increment's admission. Always
     ;; valid; no bound to check.
     (boolean? form) nil
 
@@ -313,6 +351,72 @@
           (verify-expr! value locals signatures (inc depth) nodes facts)
           (doseq [[_ binder body] branches]
             (verify-expr! body (conj locals binder) signatures (inc depth) nodes facts)))
+
+        (contains? '#{option-some-of option-some?-of} op)
+        (let [[type value] args]
+          (when-not (and (= 2 (count args))
+                         (vector? type) (= :option (first type))
+                         (native-word-value-type? type))
+            (reject! "runtime KIR generic option operation rejected" {:operation op}))
+          (verify-expr! value locals signatures (inc depth) nodes facts))
+
+        (= op 'option-none-of)
+        (let [[type] args]
+          (when-not (and (= 1 (count args))
+                         (vector? type) (= :option (first type))
+                         (native-word-value-type? type))
+            (reject! "runtime KIR generic option operation rejected" {:operation op})))
+
+        (= op 'option-value-of)
+        (let [[type value fallback] args]
+          (when-not (and (= 3 (count args))
+                         (vector? type) (= :option (first type))
+                         (native-word-value-type? type))
+            (reject! "runtime KIR generic option projection rejected" {:operation op}))
+          (verify-expr! value locals signatures (inc depth) nodes facts)
+          (verify-expr! fallback locals signatures (inc depth) nodes facts))
+
+        (= op 'option-match)
+        (let [[type value none-body binder some-body] args]
+          (when-not (and (= 5 (count args))
+                         (vector? type) (= :option (first type))
+                         (native-word-value-type? type)
+                         (valid-name? binder))
+            (reject! "runtime KIR generic option match rejected" {:operation op}))
+          (verify-expr! value locals signatures (inc depth) nodes facts)
+          (verify-expr! none-body locals signatures (inc depth) nodes facts)
+          (verify-expr! some-body (conj locals binder) signatures
+                        (inc depth) nodes facts))
+
+        (contains? '#{result-ok-of result-err-of result-ok?-of} op)
+        (let [[type value] args]
+          (when-not (and (= 2 (count args))
+                         (vector? type) (= :result (first type))
+                         (native-word-value-type? type))
+            (reject! "runtime KIR generic result operation rejected" {:operation op}))
+          (verify-expr! value locals signatures (inc depth) nodes facts))
+
+        (contains? '#{result-value-of result-error-of} op)
+        (let [[type value fallback] args]
+          (when-not (and (= 3 (count args))
+                         (vector? type) (= :result (first type))
+                         (native-word-value-type? type))
+            (reject! "runtime KIR generic result projection rejected" {:operation op}))
+          (verify-expr! value locals signatures (inc depth) nodes facts)
+          (verify-expr! fallback locals signatures (inc depth) nodes facts))
+
+        (= op 'result-match-of)
+        (let [[type value ok-binder ok-body err-binder err-body] args]
+          (when-not (and (= 6 (count args))
+                         (vector? type) (= :result (first type))
+                         (native-word-value-type? type)
+                         (valid-name? ok-binder) (valid-name? err-binder))
+            (reject! "runtime KIR generic result match rejected" {:operation op}))
+          (verify-expr! value locals signatures (inc depth) nodes facts)
+          (verify-expr! ok-body (conj locals ok-binder) signatures
+                        (inc depth) nodes facts)
+          (verify-expr! err-body (conj locals err-binder) signatures
+                        (inc depth) nodes facts))
 
         (contains? heap-operations op)
         (do

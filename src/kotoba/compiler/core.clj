@@ -57,7 +57,7 @@
 ;; would silently let unsupported ops reach the backend and crash confusingly
 ;; instead of rejecting cleanly. Shared with `kotoba.compiler.nbb.cli` (the
 ;; nbb-native fast path) via
-;; `kotoba.compiler.ir/only-string-and-scalar-record-typed-features?` so both
+;; `kotoba.compiler.ir/only-native-word-typed-features?` so both
 ;; compile paths admit the exact same native-typed-feature subset.
 
 (defn check-source
@@ -108,8 +108,8 @@
                      (not (and (= :cljs-kotoba-v1 backend)
                                (ir/only-cljs-provider-typed-features? hir)))
                      (not (and (contains? #{:x86_64-kotoba-v1 :aarch64-kotoba-v1} backend)
-                               (ir/only-string-and-scalar-record-typed-features? hir))))
-            (throw (ex-info "typed values currently require the kotoba-script web target, typed Wasm/CLJS target, or a qualified native string/scalar-record/i64/string/option/result capability slice"
+                               (ir/only-native-word-typed-features? hir))))
+            (throw (ex-info "typed values currently require the kotoba-script web target, typed Wasm/CLJS target, or the qualified native one-word string/record/variant/option/result slice"
                             {:phase :target :target target :backend backend
                              :value-profile :kotoba.value/typed-v1})))
         _ (when (and (nil? (:entry hir))
