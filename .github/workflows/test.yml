@@ -86,6 +86,11 @@ jobs:
         with:
           cli: 1.12.5.1654
       - uses: bytecodealliance/actions/wasm-tools/setup@7ee36389ead2e51422087f820a7e17e39811b05f # main
+        with:
+          # Must match kotoba.compiler.wasm-tools/version -- the default is
+          # `latest`, which broke every test run when 1.254.0 shipped
+          # (2026-07-20): assert-version! rightly refuses an unpinned binary.
+          version: "1.243.0"
       - name: Install pinned Component composition tool
         run: cargo install --locked --version 0.10.1 wac-cli
       - run: npm ci
