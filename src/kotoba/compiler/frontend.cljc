@@ -2211,7 +2211,15 @@
             (reject! "equality operands must have the same value type" args))
           (when-not (or (contains? #{:i64 :keyword :bool :option-i64 :result-i64 :vector-i64} (first types))
                         (parametric-result-type? (first types)))
-            (reject! "equality type is outside the safe value profile" args))
+            (reject! (str "equality type is outside the safe value profile"
+                          (condp = (first types)
+                            :string " -- use string=? for string equality"
+                            :f64 (str " -- use f64-eq for IEEE equality (returns"
+                                      " :bool; NaN is never equal), or compare"
+                                      " f64-to-bits values with = for bitwise"
+                                      " identity")
+                            ""))
+                     args))
           :i64)
 
       (= op 'bool-not)
