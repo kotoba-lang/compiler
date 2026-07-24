@@ -19,8 +19,8 @@ static uint64_t parse_u64(const char *text) {
 }
 
 int main(int argc, char **argv) {
-  if (argc != 4) {
-    fprintf(stderr, "usage: kotoba-android-harness <raw-code> <offset> <arity>\n");
+  if (argc != 4 && argc != 5) {
+    fprintf(stderr, "usage: kotoba-android-harness <raw-code> <offset> <arity> [cap-id]\n");
     return 2;
   }
   FILE *input = fopen(argv[1], "rb");
@@ -43,6 +43,11 @@ int main(int argc, char **argv) {
   request.verified_code = code;
   request.code_length = (size_t)length;
   request.entry_offset = (size_t)parse_u64(argv[2]);
+  if (argc == 5) {
+    uint64_t cap_id = parse_u64(argv[4]);
+    if (cap_id > 255) fail("capability id");
+    request.allow[cap_id / 64] |= UINT64_C(1) << (cap_id % 64);
+  }
   int status = kotoba_android_execute_verified_v1(&request, &result);
   free(code);
   if (status != KOTOBA_ANDROID_OK) {

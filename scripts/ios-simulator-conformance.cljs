@@ -80,7 +80,7 @@
         (run! "xcrun" ["simctl" "bootstatus" (:udid target)])
         {:udid (:udid target) :booted-by-us? true}))))
 
-(defn build! [directory]
+(defn build! [directory source policy]
   (.mkdirSync fs directory #js {:recursive true})
   (let [nbb-cli (.join path lib/root "node_modules" "nbb" "cli.js")
         kotoba (.join path lib/root "bin" "kotoba")
@@ -92,9 +92,10 @@
         harness (.join path directory "kotoba-ios-simulator-harness")
         sim-flags ["--sdk" "iphonesimulator" "clang" "-arch" "arm64"
                    "-mios-simulator-version-min=15.0"]]
-    (run! js/process.execPath [nbb-cli kotoba "-M" "compile"
-                               (.join path lib/root "examples" "structured.kotoba")
-                               "--target" "aarch64-ios" "--output" kexe])
+    (run! js/process.execPath
+          (cond-> [nbb-cli kotoba "-M" "compile" source
+                   "--target" "aarch64-ios" "--output" kexe]
+            policy (into ["--policy" policy])))
     (run! js/process.execPath [nbb-cli kotoba "-M" "package-ios" kexe
                                "--entry" "main" "--output" assembly
                                "--manifest-output" manifest])
@@ -113,9 +114,18 @@
 (lib/ensure! (= "darwin" (.-platform js/process)) "ios-simulator: macOS host is required")
 (let [identity (str/trim (.-stdout (run! "xcodebuild" ["-version"])))
       _ (lib/ensure! (= expected-xcode identity) "ios-simulator: pinned Xcode 16.2 is required")
-      tmp (lib/temp-dir "kotoba-ios-simulator-")]
+      tmp (lib/temp-dir "kotoba-ios-simulator-")
+      typed-source (.join path tmp "typed-capability.kotoba")
+      typed-policy (.join path tmp "typed-policy.edn")]
   (try
-    (let [{:keys [harness manifest]} (build! tmp)
+    (.writeFileSync
+     fs typed-source
+     "(defn main [] :i64\n  (+ (string-byte-length (typed-cap-call 4 :string :string \"hello😀\"))\n     (option-value (typed-cap-call 4 :option-i64 :option-i64 (some 41)) 0)\n     (option-value (typed-cap-call 4 :option-i64 :option-i64 (option-none)) 5)\n     (result-value (typed-cap-call 4 :result-i64 :result-i64 (result-ok 7)) 0)\n     (result-error (typed-cap-call 4 :result-i64 :result-i64 (result-err 9)) 0)))\n")
+    (.writeFileSync fs typed-policy "{:allow #{[:cap/call 4]}}\n")
+    (let [{:keys [harness manifest]}
+          (build! (.join path tmp "structured")
+                  (.join path lib/root "examples" "structured.kotoba") nil)
+          typed-build (build! (.join path tmp "typed") typed-source typed-policy)
           object-info (.-stdout (run! "file" [harness]))
           build-info (.-stdout (run! "xcrun" ["vtool" "-show-build" harness]))]
       (lib/ensure! (.includes object-info "Mach-O 64-bit executable arm64")
@@ -128,11 +138,16 @@
       (let [{:keys [udid booted-by-us?]} (find-or-boot-device!)]
         (try
           (let [spawned (run! "xcrun" ["simctl" "spawn" udid harness])
-                out (str/trim (.-stdout spawned))]
+                out (str/trim (.-stdout spawned))
+                typed-spawned
+                (run! "xcrun" ["simctl" "spawn" udid (:harness typed-build) "typed"])
+                typed-out (str/trim (.-stdout typed-spawned))]
             (lib/ensure! (str/includes? out ":status :ok")
                          (str "ios-simulator: harness did not report :status :ok: " out))
             (lib/ensure! (str/includes? out ":result 42")
                          (str "ios-simulator: structured.kotoba's main() must equal 42, got: " out))
+            (lib/ensure! (str/includes? typed-out ":result 71")
+                         (str "ios-simulator: typed callback mismatch: " typed-out))
             (println (str "ios-simulator: real Simulator execution -- " out)))
           (finally
             (when booted-by-us? (run! "xcrun" ["simctl" "shutdown" udid]))))))
