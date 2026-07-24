@@ -96,3 +96,22 @@ rewrite:
   This progress is at the JVM/Chicory reference-provider layer this ledger
   itself discusses, not yet the WASM Component Model layer ADR chain
   0037-0063 builds toward — see ADR 0064 for the precise scope.
+- **Item 1 ("Nested structured values ... need recursive flatten/lift/
+  lower/store/load plans") now has a `[:list item-descriptor]` Canonical ABI
+  layout plan** — `kotoba.compiler.canonical-abi`'s `list-layout` (ADR
+  0065) — closing one narrow slice of this ledger's own item 1, at the
+  layout-plan level the item's own wording asks for ("plans", not codegen).
+  `layout*` now admits three aggregate schema shapes (`:record`/`:variant`/
+  `:list`); the list item type may recursively be any existing scalar/
+  string/keyword/symbol/record/variant, but a list-of-lists is explicitly
+  rejected and remains closed. Tuples/vectors, maps, sets, options, and
+  results named in this same ledger item are UNCHANGED by ADR 0065 and
+  remain entirely unimplemented in `layout*`. ADR 0065 adds no
+  `component-core.clj` codegen for `list` (no `.kotoba` export, capability
+  call, or provider Component can take or return a list value yet) and no
+  instance-level list-value validator — both are explicit remaining gaps
+  in ADR 0065 itself, matching this ledger's own "plans... plus pre-call and
+  post-return validation" phrasing only at the declarative-metadata level
+  (`:max-items`/`:validation` tags), not as an executable check. Recursive
+  schema identity itself (this ledger's own item 2) is unchanged and out of
+  scope for ADR 0065.

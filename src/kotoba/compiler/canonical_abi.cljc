@@ -131,6 +131,50 @@
        :flat (vec (mapcat (comp :flat :layout) (:fields planned)))
        :fields (:fields planned)})))
 
+(defn- list-layout
+  "Checked Canonical ABI layout for a bounded `[:list item-descriptor]`: a
+  pointer+length pair in linear memory, the same two-core-value `[:i32 :i32]`
+  shape ADR 0040/0041 already gave bare `string`/`keyword` parameters and
+  results, generalized from a byte-addressed buffer (length in UTF-8 bytes)
+  to an element-addressed one (length in items). `item-layout` is the item
+  descriptor's own recursive `layout*` result, kept alongside (not flattened
+  away) so a caller can derive the buffer's per-element stride
+  (`align-up` of the item's own `:size` to its own `:alignment`) and recurse
+  into a nested record/variant item without re-deriving its shape from the
+  descriptor -- exactly how a record field's own nested `:fields`/`:cases`
+  layout is kept alongside today. Item count is bounded by
+  `value/canonical-list-item-limit`, exposed here as `:max-items` (the same
+  role `:max-bytes` plays for a bounded string/keyword) so callers can tell a
+  list leaf apart from a plain scalar leaf or a string/keyword leaf without
+  re-deriving it from the descriptor; the corresponding `:validation` tag is
+  `:bounded-item-count`, alongside the same `:checked-pointer-range` tag
+  every other indirect (pointer-bearing) leaf already carries.
+
+  An item type that is itself a `[:list ...]` is rejected before any layout
+  is computed: unlike ADR 0051's one-level nested record (whose *fields* are
+  still bounded to plain scalars), a list-of-lists would need a second,
+  independent variable length and stride nested inside the first, and that
+  shape is an explicitly separate, still-open gap (ADR 0049's remaining
+  gaps), not a narrowing of this slice's one already-admitted case. An item
+  type that is itself a recursive nominal schema (a record/variant that
+  reaches back to an identity already in `visited`, including by way of a
+  list) is still caught by `record-layout`/`variant-layout`'s own existing
+  recursion guard: `visited` is threaded straight through unchanged, exactly
+  as a record field or variant case payload's own type already does."
+  [descriptor schemas visited]
+  (let [item-descriptor (second descriptor)]
+    (when (and (vector? item-descriptor) (= :list (first item-descriptor)))
+      (reject "list item type must not itself be a list in this slice"
+              {:descriptor descriptor :item-descriptor item-descriptor}))
+    (let [item-layout (layout* item-descriptor schemas visited)]
+      {:descriptor descriptor
+       :size 8
+       :alignment 4
+       :flat [:i32 :i32]
+       :item-layout item-layout
+       :max-items value/canonical-list-item-limit
+       :validation [:checked-pointer-range :bounded-item-count]})))
+
 (defn- layout* [descriptor schemas visited]
   (cond
     (= descriptor :i64) {:descriptor :i64 :size 8 :alignment 8 :flat [:i64]}
@@ -177,6 +221,8 @@
         (reject "inline variant differs from sealed schema identity"
                 {:descriptor descriptor :schema (get schemas identity)}))
       (assoc (variant-layout [:ref identity] schemas visited) :descriptor descriptor))
+    (and (vector? descriptor) (= :list (first descriptor)))
+    (list-layout descriptor schemas visited)
     :else
     (reject "descriptor has no qualified Canonical ABI layout"
             {:descriptor descriptor})))
@@ -201,9 +247,18 @@
   `{:offset :descriptor :max-bytes}` instead of the plain scalar leaf's
   `{:offset :descriptor}`, so callers can tell a two-core-value pointer+length
   leaf from a one-core-value scalar leaf without re-deriving it from the
-  descriptor. Every consumer must still bound nesting depth before calling
-  this (`layout` itself only rejects unbounded recursive schemas, not depth
-  generally)."
+  descriptor. A field whose own layout is a bounded `list` (carries a
+  `:max-items` key, the pointer+length shape `list-layout` above gives a
+  bounded `[:list ...]`) is likewise exposed as its own leaf shape,
+  `{:offset :descriptor :max-items :item-layout}`, rather than being
+  recursed into the way a nested record's `:fields` are: a list's own items
+  live in a separately-addressed buffer at a length only known at runtime,
+  not at a further fixed offset inside this record's own layout, so there is
+  nothing further to flatten here -- `:item-layout` is carried on the leaf
+  itself so a caller can still derive the item stride/shape without
+  re-deriving it from the descriptor. Every consumer must still bound
+  nesting depth before calling this (`layout` itself only rejects unbounded
+  recursive schemas, not depth generally)."
   ([record-layout] (layout-leaves record-layout 0))
   ([record-layout base-offset]
    (vec
@@ -216,6 +271,11 @@
                   (contains? layout :max-bytes)
                   [{:offset absolute :descriptor (:descriptor layout)
                     :max-bytes (:max-bytes layout)}]
+
+                  (contains? layout :max-items)
+                  [{:offset absolute :descriptor (:descriptor layout)
+                    :max-items (:max-items layout)
+                    :item-layout (:item-layout layout)}]
 
                   :else
                   [{:offset absolute :descriptor (:descriptor layout)}])))

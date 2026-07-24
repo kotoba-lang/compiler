@@ -8,6 +8,16 @@
 (def map-entry-limit 128)
 (def vector-literal-item-limit 128)
 (def vector-item-limit 16384)
+;; Canonical ABI `[:list item-descriptor]` item-count bound (see
+;; kotoba.compiler.canonical-abi's `list-layout`). Deliberately the same
+;; order of magnitude as this file's other bounded-sequential-collection
+;; limits (`vector-item-limit` above) rather than a freshly invented number;
+;; kept as its own named constant rather than a direct reuse of
+;; `vector-item-limit` because the two bound genuinely different domains
+;; (a `vector-i64` runtime value vs. a Canonical ABI wire-transport schema
+;; shape whose item type is not restricted to i64) that happen to share a
+;; magnitude today, not one concept wearing two names.
+(def canonical-list-item-limit 16384)
 (def adt-depth-limit 8)
 (def adt-node-limit 64)
 (def variant-case-limit 32)
