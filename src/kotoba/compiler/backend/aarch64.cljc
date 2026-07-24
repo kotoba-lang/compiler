@@ -270,6 +270,22 @@
           (ldr-context 16 48) (insn 0xd63f0200)   ; blr x16
           (ldr-sp 7 0) (add-sp 16)))))
 
+(defn- emit-typed-string-cap-call [cap-id value env depth]
+  (let [cap-id #?(:clj cap-id :cljs (js/Number cap-id))
+        word-offset (+ 16 (* 8 (quot cap-id 64)))
+        bit-index (mod cap-id 64)]
+    (vec (concat
+          (ldr-context 16 word-offset) (tbnz 16 bit-index 8) (insn 0xd4200000)
+          (emit-expr value env depth)
+          (mov-reg 4 0)                           ; x4=request handle
+          (sub-sp 16) (str-sp 7 0)
+          (load-constant-reg 1 cap-id)
+          (load-constant-reg 2 1)                 ; request kind string
+          (load-constant-reg 3 1)                 ; result kind string
+          (mov-reg 0 7)
+          (ldr-context 16 128) (insn 0xd63f0200)
+          (ldr-sp 7 0) (add-sp 16)))))
+
 (def ^:private heap-call-offsets
   {'pair 56 'pair-first 64 'pair-second 72
    'kgraph-assert! 80 'kgraph-get 88 'kgraph-count 96 'kgraph-entity-at 104
@@ -508,11 +524,15 @@
         (emit-cap-call (first args) (second args) env depth)
         (= op 'typed-cap-call)
         (let [[cap-id request-type result-type request] args]
-          (when-not (= :i64 request-type result-type)
-            (throw (ex-info "native typed capability ABI supports only i64 request/result"
+          (cond
+            (= :i64 request-type result-type)
+            (emit-cap-call cap-id request env depth)
+            (= :string request-type result-type)
+            (emit-typed-string-cap-call cap-id request env depth)
+            :else
+            (throw (ex-info "native typed capability ABI does not support this boundary"
                             {:phase :aarch64 :request-type request-type
-                             :result-type result-type})))
-          (emit-cap-call cap-id request env depth))
+                             :result-type result-type}))))
         (= op 'record-get)
         (let [[type value-form field] args]
           (emit-record-get-of-new type value-form field env depth))

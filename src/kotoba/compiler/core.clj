@@ -43,8 +43,9 @@
 ;; implement, PLUS -- as of the second native increment (ADR 0063) -- a
 ;; sealed, all-scalar-cased `variant-new`/`variant-match` pair, used only in
 ;; the analogous one exact nested construction+dispatch shape those same two
-;; files implement, PLUS a sealed `typed-cap-call :i64 :i64` boundary which
-;; is bit-identical to the existing native capability callback ABI. Every
+;; files implement, PLUS sealed typed capability boundaries for i64 and
+;; bounded UTF-8 strings. The latter uses a dedicated callback which validates
+;; the pair-backed pointer/length handle on both sides. Every
 ;; other typed feature (options, results, general/nested/escaping records or
 ;; variants, typed maps/vectors/sets) has zero native backend codegen and
 ;; must keep producing the same "requires kotoba-script web target"
@@ -107,7 +108,7 @@
                                (ir/only-cljs-provider-typed-features? hir)))
                      (not (and (contains? #{:x86_64-kotoba-v1 :aarch64-kotoba-v1} backend)
                                (ir/only-string-and-scalar-record-typed-features? hir))))
-            (throw (ex-info "typed values currently require the kotoba-script web target, typed Wasm/CLJS target, or a qualified native string/scalar-record/i64-capability slice"
+            (throw (ex-info "typed values currently require the kotoba-script web target, typed Wasm/CLJS target, or a qualified native string/scalar-record/i64-or-string-capability slice"
                             {:phase :target :target target :backend backend
                              :value-profile :kotoba.value/typed-v1})))
         _ (when (and (nil? (:entry hir))
@@ -235,6 +236,7 @@
                                      :kgraph-count-offset 96 :kgraph-entity-at-offset 104
                                      :kgraph-capacity 4096
                                      :string-equal-offset 112 :string-concat-offset 120
+                                     :typed-cap-call-offset 128
                                      :string-pool-capacity 65536}
                       :effects (:effects hir)
                        :compatibility compatibility

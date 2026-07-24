@@ -162,6 +162,23 @@
           (when align? [0x48 0x83 0xc4 0x08])
           [0x41 0x59]))))                         ; pop r9
 
+(defn- emit-typed-string-cap-call [cap-id value env {:keys [temp-depth] :as ctx}]
+  (let [cap-id #?(:clj cap-id :cljs (js/Number cap-id))
+        byte-offset (+ 16 (quot cap-id 8))
+        mask (bit-shift-left 1 (mod cap-id 8))
+        align? (even? temp-depth)]
+    (vec (concat
+          [0x41 0xf6 0x41 byte-offset mask 0x75 0x02 0x0f 0x0b]
+          (emit-expr value env (assoc ctx :tail? false))
+          [0x49 0x89 0xc0 0x41 0x51]             ; r8=request; push r9
+          (when align? [0x50])
+          [0xbe] (le32 cap-id)                    ; esi=cap-id
+          [0xba] (le32 1)                         ; edx=request kind string
+          [0xb9] (le32 1)                         ; ecx=result kind string
+          [0x4c 0x89 0xcf 0x41 0xff 0x91] (le32 128)
+          (when align? [0x48 0x83 0xc4 0x08])
+          [0x41 0x59]))))
+
 (def ^:private heap-call-offsets
   {'pair 56 'pair-first 64 'pair-second 72
    'kgraph-assert! 80 'kgraph-get 88 'kgraph-count 96 'kgraph-entity-at 104
@@ -514,11 +531,15 @@
 
         (= op 'typed-cap-call)
         (let [[cap-id request-type result-type request] args]
-          (when-not (= :i64 request-type result-type)
-            (throw (ex-info "native typed capability ABI supports only i64 request/result"
+          (cond
+            (= :i64 request-type result-type)
+            (emit-cap-call cap-id request env ctx)
+            (= :string request-type result-type)
+            (emit-typed-string-cap-call cap-id request env ctx)
+            :else
+            (throw (ex-info "native typed capability ABI does not support this boundary"
                             {:phase :x86-64 :request-type request-type
-                             :result-type result-type})))
-          (emit-cap-call cap-id request env ctx))
+                             :result-type result-type}))))
 
         (= op 'record-get)
         (let [[type value-form field] args]
