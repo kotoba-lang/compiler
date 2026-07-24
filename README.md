@@ -66,6 +66,19 @@ whereas `i64-to-f64-rounded` names the IEEE rounding request.
 `f64-to-i64-truncating` names truncation toward zero while still rejecting
 NaN, infinities, and signed-i64 overflow.
 
+## Stack topology & boundaries
+
+This repository is the **foundation layer** of the kotoba stack: it depends
+on nothing else in the stack (`security` and the pinned `kotoba-script` JS
+backend only), and `kotoba` / `kototama` / `aiueos` / `kotobase` consume it —
+as a library or as emitted artifacts — never the reverse. The canonical
+topology, the dependency-direction invariants, and this repo's assigned
+design-cleanup items (admission-gate ↔ backend capability parity, unified
+`=` equality surface, kexe-loader validation in Kotoba objects, classpath-scan
+robustness) are recorded in
+[`docs/adr/0074-stack-topology-admission-backend-parity.md`](docs/adr/0074-stack-topology-admission-backend-parity.md)
+(root authority: `com-junkawasaki/root` ADR-2607241100).
+
 ## Relationship to `kotoba-lang/kotoba` and `kotoba-lang/kotoba-lang`
 
 This repository is the CLJC-native successor of `kotoba-lang/kotoba`'s
