@@ -563,6 +563,34 @@
                           fallback)
                     env ctx))
 
+        (= op 'option-some-of)
+        (emit-heap-call 'pair [1 (second args)] env ctx)
+
+        (= op 'option-none-of)
+        (emit-heap-call 'pair [0 0] env ctx)
+
+        (= op 'option-some?-of)
+        (emit-heap-call 'pair-first [(second args)] env ctx)
+
+        (= op 'option-value-of)
+        (let [[_type value fallback] args
+              tagged-value '__native_generic_option_value]
+          (emit-let [tagged-value value]
+                    (list 'if (list 'pair-first tagged-value)
+                          (list 'pair-second tagged-value)
+                          fallback)
+                    env ctx))
+
+        (= op 'option-match)
+        (let [[_type value none-body binder some-body] args
+              tagged-value '__native_generic_option_match]
+          (emit-let [tagged-value value]
+                    (list 'if (list 'pair-first tagged-value)
+                          (list 'let [binder (list 'pair-second tagged-value)]
+                                some-body)
+                          none-body)
+                    env ctx))
+
         (= op 'result-ok)
         (emit-heap-call 'pair [1 (first args)] env ctx)
 
@@ -581,6 +609,33 @@
                     (if (= op 'result-value)
                       (list 'if ok? payload fallback)
                       (list 'if ok? fallback payload))
+                    env ctx))
+
+        (contains? '#{result-ok-of result-err-of} op)
+        (emit-heap-call 'pair [(if (= op 'result-ok-of) 1 0) (second args)] env ctx)
+
+        (= op 'result-ok?-of)
+        (emit-heap-call 'pair-first [(second args)] env ctx)
+
+        (contains? '#{result-value-of result-error-of} op)
+        (let [[_type value fallback] args
+              tagged-value '__native_generic_result_value
+              ok? (list 'pair-first tagged-value)
+              payload (list 'pair-second tagged-value)]
+          (emit-let [tagged-value value]
+                    (if (= op 'result-value-of)
+                      (list 'if ok? payload fallback)
+                      (list 'if ok? fallback payload))
+                    env ctx))
+
+        (= op 'result-match-of)
+        (let [[_type value ok-binder ok-body err-binder err-body] args
+              tagged-value '__native_generic_result_match
+              payload (list 'pair-second tagged-value)]
+          (emit-let [tagged-value value]
+                    (list 'if (list 'pair-first tagged-value)
+                          (list 'let [ok-binder payload] ok-body)
+                          (list 'let [err-binder payload] err-body))
                     env ctx))
 
         (= op 'record-get)

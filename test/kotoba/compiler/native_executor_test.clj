@@ -115,6 +115,69 @@
         (is (seq (:code artifact)) (name native-target))
         (is (= #{[:cap/call 4]} (:effects artifact)) (name native-target))))))
 
+(def generic-option-result-source
+  "(defn main [] :i64
+     (+ (match-option
+          (option-some-of [:option :string] \"abc\") [:option :string]
+          (none 100)
+          (some text (string-byte-length text)))
+        (string-byte-length
+          (result-value-of
+            [:result :string [:option :i64]]
+            (result-ok-of [:result :string [:option :i64]] \"hello\")
+            \"fallback\"))
+        (option-value-of
+          [:option :i64]
+          (result-error-of
+            [:result :string [:option :i64]]
+            (result-err-of
+              [:result :string [:option :i64]]
+              (option-some-of [:option :i64] 7))
+            (option-none-of [:option :i64]))
+          0)
+        (match-option
+          (option-none-of [:option [:result :i64 :bool]])
+          [:option [:result :i64 :bool]]
+          (none 11)
+          (some nested 100))
+        (match-result
+          (result-err-of [:result :bool :i64] 13)
+          [:result :bool :i64]
+          (ok value 100)
+          (err error error))))")
+
+(deftest generic-option-and-result-values-execute-through-real-native-loader
+  (let [{:keys [envelope trust]} (signed generic-option-result-source {:allow #{}})
+        {:keys [trust options]} (execution-options trust)
+        result (executor/execute envelope trust {:allow #{}} {:args []} options)]
+    (is (= 39 (get-in result [:evidence :result])))
+    (is (= :kotoba.kir/v4 (get-in envelope [:artifact :program :format])))
+    (is (= {:capacity 4096 :used 8} (get-in result [:report :heap])))))
+
+(deftest generic-option-and-result-values-emit-on-both-native-isas
+  (doseq [native-target [:x86_64-kotoba-v1 :aarch64-kotoba-v1]]
+    (let [artifact (:artifact
+                    (compiler/compile-source generic-option-result-source
+                                             native-target))]
+      (is (seq (:code artifact)) (name native-target))
+      (is (= :kotoba.kir/v4 (get-in artifact [:program :format]))
+          (name native-target)))))
+
+(deftest native-generic-option-still-rejects-non-word-payloads
+  (let [record-type
+        "[:record :demo/person [[:age :i64]]]"
+        source
+        (str "(defn main [] :i64 "
+             "(match-option "
+             "(option-some-of [:option " record-type "] "
+             "(record-new " record-type " 7)) "
+             "[:option " record-type "] "
+             "(none 0) (some person (record-get " record-type " person :age))))")]
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo
+         #"typed values currently require"
+         (compiler/compile-source source (target))))))
+
 (deftest execution-rejects-before-entering-untrusted-or-unauthorized-code
   (let [{:keys [envelope trust]} (signed "(defn main [] 42)" {:allow #{}})
         tampered (assoc-in envelope [:artifact :code 0] 255)
@@ -526,7 +589,7 @@
 
 ;; ADR 0062: the first native (x86-64/aarch64) value-representation
 ;; increment -- a sealed, all-scalar (`:i64`/`:bool` fields only, no
-;; `:f64`; see `ir/only-string-and-scalar-record-typed-features?`'s own
+;; `:f64`; see `ir/only-native-word-typed-features?`'s own
 ;; doc comment for why) record, construction + field projection only, real
 ;; native-process evidence matching every other deftest in this file (no
 ;; synthetic byte-level check). The record schema itself has no independent
