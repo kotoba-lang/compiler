@@ -1,6 +1,7 @@
 (ns kotoba.compiler.canonical-abi-test
   (:require [clojure.test :refer [deftest is]]
-            [kotoba.compiler.canonical-abi :as canonical]))
+            [kotoba.compiler.canonical-abi :as canonical]
+            [kotoba.compiler.value :as value]))
 
 (deftest scalar-and-bounded-string-layouts-are-closed
   (is (= {:descriptor :i64 :size 8 :alignment 8 :flat [:i64]}
@@ -211,3 +212,109 @@
                         (canonical/layout [:ref :demo/self]
                                           {:demo/self [:variant :demo/self
                                                        [[:child [:ref :demo/self]]]]}))))
+
+(deftest list-of-scalar-layout-is-a-bounded-pointer-length-leaf
+  (let [descriptor [:list :i64]
+        value (canonical/layout descriptor)]
+    (is (= descriptor (:descriptor value)))
+    (is (= 8 (:size value)))
+    (is (= 4 (:alignment value)))
+    (is (= [:i32 :i32] (:flat value)))
+    (is (= {:descriptor :i64 :size 8 :alignment 8 :flat [:i64]}
+           (:item-layout value)))
+    (is (= value/canonical-list-item-limit (:max-items value)))
+    (is (= [:checked-pointer-range :bounded-item-count] (:validation value)))
+    (is (= [:i32]
+           (:core-results
+            (canonical/export-plan
+             {:name 'echo :params ['value] :param-types [descriptor] :result descriptor}))))
+    (is (= [:i32 :i32]
+           (:core-params
+            (canonical/export-plan
+             {:name 'echo :params ['value] :param-types [descriptor] :result descriptor}))))))
+
+(deftest empty-list-descriptor-shares-the-same-closed-layout-as-any-other-list
+  ;; The Canonical ABI list layout is a type-level plan (pointer+length pair
+  ;; plus item stride/bound), independent of how many items an actual
+  ;; instance carries at runtime -- an empty list and a full list share
+  ;; exactly the same layout, unlike a sealed record/variant's per-field
+  ;; shape. This test pins that a `:list` layout never varies by instance
+  ;; size, since this namespace has no notion of "instance" at all.
+  (is (= (canonical/layout [:list :bool]) (canonical/layout [:list :bool]))))
+
+(deftest list-of-nested-sealed-record-layout-carries-the-item-record-layout
+  (let [item-descriptor [:ref :demo/point]
+        schemas {:demo/point [:record :demo/point [[:x :i64] [:weight :f64] [:visible :bool]]]}
+        descriptor [:list item-descriptor]
+        value (canonical/layout descriptor schemas)
+        record-value (canonical/layout item-descriptor schemas)]
+    (is (= 8 (:size value)))
+    (is (= 4 (:alignment value)))
+    (is (= [:i32 :i32] (:flat value)))
+    (is (= record-value (:item-layout value)))
+    (is (= value/canonical-list-item-limit (:max-items value)))
+    (is (= [:i32]
+           (:core-results
+            (canonical/export-plan
+             {:name 'echo :params ['value] :param-types [descriptor] :result descriptor}
+             schemas))))
+    (is (= [:i32 :i32]
+           (:core-params
+            (canonical/export-plan
+             {:name 'echo :params ['value] :param-types [descriptor] :result descriptor}
+             schemas))))))
+
+(deftest list-field-inside-a-record-is-exposed-as-its-own-pointer-length-leaf
+  (let [descriptor [:ref :demo/basket]
+        schemas {:demo/basket [:record :demo/basket
+                               [[:id :i64] [:items [:list :i64]] [:closed :bool]]]}
+        outer-layout (canonical/layout descriptor schemas)]
+    (is (= 24 (:size outer-layout)))
+    (is (= 8 (:alignment outer-layout)))
+    (is (= [:i64 :i32 :i32 :i32] (:flat outer-layout)))
+    (is (= [0 8 16] (mapv :offset (:fields outer-layout))))
+    (is (= [{:offset 0 :descriptor :i64}
+            {:offset 8 :descriptor [:list :i64]
+             :max-items value/canonical-list-item-limit
+             :item-layout {:descriptor :i64 :size 8 :alignment 8 :flat [:i64]}}
+            {:offset 16 :descriptor :bool}]
+           (canonical/layout-leaves outer-layout)))))
+
+(deftest list-inside-a-variant-case-joins-with-the-other-cases-flat-core-types
+  (let [descriptor [:ref :demo/entries]
+        schemas {:demo/entries [:variant :demo/entries
+                                [[:present [:list :i64]] [:absent :bool]]]}
+        value (canonical/layout descriptor schemas)]
+    (is (= :variant (:kind value)))
+    (is (= [:present :absent] (mapv :tag (:cases value))))
+    ;; :present's own flat is [i32 i32] (list pointer+length); :absent's own
+    ;; flat is [i32] and only touches position 0, joining i32/i32 -> i32
+    ;; there and leaving position 1 exactly as :present's own list layout
+    ;; already produced it. The leading discriminant i32 is prepended.
+    (is (= [:i32 :i32 :i32] (:flat value)))
+    (is (= [:i32 :i32 :i32]
+           (:core-params
+            (canonical/export-plan
+             {:name 'echo :params ['value] :param-types [descriptor] :result descriptor}
+             schemas))))))
+
+(deftest list-item-type-must-not-itself-be-a-list
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"list item type must not itself be a list"
+                        (canonical/layout [:list [:list :i64]]))))
+
+(deftest list-item-type-must-be-a-qualified-canonical-abi-descriptor
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical ABI layout"
+                        (canonical/layout [:list :not-a-real-descriptor]))))
+
+(deftest list-item-type-recursive-schema-through-the-list-is-still-rejected
+  ;; A list does not itself carry a sealed identity (it is structural, not
+  ;; nominal), so it cannot be self-referential the way a record/variant is
+  ;; -- but a list's item type reaching back to an *enclosing* record's own
+  ;; identity is still a genuinely unbounded recursive schema, and is still
+  ;; caught by `record-layout`'s existing `visited` guard, since `visited`
+  ;; is threaded through `list-layout` unchanged.
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"recursive schema has no bounded"
+                        (canonical/layout [:ref :demo/wrapper]
+                                          {:demo/wrapper
+                                           [:record :demo/wrapper
+                                            [[:items [:list [:ref :demo/wrapper]]]]]}))))
