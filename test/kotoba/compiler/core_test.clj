@@ -140,6 +140,26 @@
     (is (zero? (:exit result)) (:err result))
     (is (= (str expected) (str/trim (:out result))))))
 
+(deftest javascript-let-shadowing-preserves-lexical-scope
+  (let [source "(ns repro (:export [main]))
+                (defn normalize [y :i64] :i64
+                  (let [y (if (< y 0) (- y) y)]
+                    y))
+                (defn main [] :i64
+                  (let [x 1]
+                    (let [x (+ x 1)]
+                      (+ (normalize -5) x))))"
+        compiled (compiler/compile-source source :js-browser-kotoba-v1)
+        encoded (.encodeToString (java.util.Base64/getEncoder)
+                                 (.getBytes ^String (:source compiled) "UTF-8"))
+        program (str "import('data:text/javascript;base64," encoded
+                     "').then(m=>console.log(String(m.instantiateKotoba({}).main())))")
+        result (shell/sh "node" "--input-type=module" "-e" program)]
+    (is (zero? (:exit result)) (:err result))
+    (is (= "7" (str/trim (:out result))))
+    (is (str/includes? (:source compiled) "function k$normalize(k$y$1)"))
+    (is (str/includes? (:source compiled) "const k$y$2="))))
+
 (deftest safe-source-identifiers-that-contain-ambient-names-compile-and-run
   (let [source "(ns timing (:export [shot-hit]))
                 (defn shot-hit [delta-present delta-ms window-ms]
