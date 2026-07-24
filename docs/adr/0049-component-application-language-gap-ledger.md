@@ -73,3 +73,26 @@ manifest gate. Wasmtime and native therefore remain `pending`.
 3. Wasmtime 43+ semantic/adversarial qualification.
 4. Native syscall/codec implementation and the same qualification corpus.
 5. Bounded WASI 0.3 async profile.
+
+## Progress addendum (this session's own ledger is not rewritten in place; see ADR 0064)
+
+Per this repo's own established practice for this file (every ADR from 0050
+onward that closed part of what this ledger names has cited this ledger
+rather than editing its Decision/gap prose in place — confirmed by this
+file's own one-commit history), this addendum only records a pointer, not a
+rewrite:
+
+- **LLM (`:llm/generate`) now has a real, live-verified `:clj` production
+  provider transport** — `kotoba.compiler.provider.llm-transport` (ADR
+  0064) — wired to the repo-wide `murakumo-main` fleet alias, closing one
+  entry of item 2's "identity wiring fixtures, not implementations" gap
+  for the nine application capabilities named in this ledger's own
+  "Remaining provider and authority gaps" section above. The other eight
+  capabilities (HTTP, log, clock, state, UI, storage, and the remainder)
+  are UNCHANGED by this addendum and remain identity wiring fixtures at
+  the `:clj` reference-provider layer discussed in this ledger — ADR
+  0064 does not claim otherwise. `:cljs`/nbb transport for LLM itself also
+  remains an explicit, documented gap (ADR 0064's own "Remaining gaps").
+  This progress is at the JVM/Chicory reference-provider layer this ledger
+  itself discusses, not yet the WASM Component Model layer ADR chain
+  0037-0063 builds toward — see ADR 0064 for the precise scope.
