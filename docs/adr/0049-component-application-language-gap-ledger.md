@@ -373,3 +373,34 @@ an explicit, documented gap (ADR 0071's own "Remaining gaps"), as does a
 live-network integration test against an already-deployed real storage
 backend — unlike LLM's `murakumo-main`, no such repo-wide well-known
 backend exists yet for storage. See ADR 0071 for the precise scope.
+
+## Progress addendum (this snapshot's own prose is not rewritten in place; see ADR 0072)
+
+Per this file's own established practice, this addendum only records a
+pointer, not a rewrite of the "Current remaining-gap snapshot" section's
+"Provider and authority status" bullet above ("Clock, log, and UI must be
+assessed against their actual self-contained implementations..."): **ADR
+0072 performs that assessment for `log` and `ui`** (two of the three named
+capabilities), following the same method ADR 0067 already used for `state`.
+Both `kotoba.compiler.provider.log/create-provider` and `kotoba.compiler.
+provider.ui/create-provider` take no arguments at all — no `:transport`, no
+other host-injection seam — and directly implement their full bounded
+semantics (log: sequence assignment, field/read-limit and retention-window
+enforcement with truncation signalling; UI: base-revision optimistic
+concurrency, node-id/parent validation, bounded event queue pull) against
+closed-over atoms, confirmed by direct reads of `log.cljc`/`ui.cljc`,
+`log_provider_test.clj`/`ui_provider_test.clj`, and
+`provider_conformance_test.clj`'s fixture list (which constructs
+`(log/create-provider)`/`(ui/create-provider)` directly, with no disabled-
+fixture `:transport` indirection to swap out, unlike that same fixture
+list's `llm`/`http`/`storage` entries). Neither `log` nor `ui` was ever an
+"identity wiring fixture" at the `:clj` reference-provider layer this
+ledger discusses. Unlike `state` (ADR 0060/0061), **neither `log` nor `ui`
+yet has a real WASM Component Model provider** — `component_core.clj` has
+no `log-provider-wat`/`ui-provider-wat`, and `log-v1.edn`/`ui-v1.edn`'s own
+`:wasm-aot :pending` is accurate and unchanged by ADR 0072. `clock` remains
+the one capability of the three this snapshot bullet named that still has
+no dedicated correction ADR of its own — out of ADR 0072's scope, named
+here only so a future reader does not repeat this investigation from the
+same snapshot bullet. See ADR 0072 for the precise scope and full evidence
+for `log`/`ui` individually.
