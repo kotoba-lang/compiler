@@ -134,3 +134,25 @@ rewrite:
   the JVM/Chicory reference-provider layer this ledger itself discusses,
   not yet the WASM Component Model layer ADR chain 0037-0063 builds toward
   — see ADR 0066 for the precise scope.
+- **Correction to this addendum's own prior wording, not a new capability
+  closed** — ADR 0067: this ledger's own preceding bullets (added by ADR
+  0064's and ADR 0066's PRs) say the capabilities other than LLM/HTTP
+  "remain identity wiring fixtures at the `:clj` reference-provider layer."
+  That is accurate for `storage` (and was accurate for `http` and `llm`
+  before their own transports landed above). It overstates `state`:
+  `kotoba.compiler.provider.state` (ADR 0024) has no `:transport` seam at
+  all and has been a real, bounded, tested in-process key/value
+  implementation since PR #154 (2026-07-20), read directly and confirmed by
+  ADR 0067, which also confirms ADR 0060 and ADR 0061 already proved a real
+  (non-wiring-only), full-256-entry-capacity WASM Component Model provider
+  for `state-v1` through real Wasmtime execution — the "production provider
+  Components for all nine capabilities" next-completion-order item is
+  further along for `state` specifically than this ledger's own prior
+  wording implied. `clock`, `log`, and `ui` share `state`'s same
+  self-contained, no-transport-seam shape, so the same overstatement likely
+  applies to them too, but ADR 0067 is scoped to `state` only and does not
+  verify or correct those three. Native-AOT, JIT, and production-hardening
+  review for `state`'s WASM Component Model provider remain open (ADR
+  0060/0061's own named gaps, unchanged) — this correction is about the
+  `:clj` reference-provider layer's status, not a claim that `state` is now
+  fully qualified end to end.
