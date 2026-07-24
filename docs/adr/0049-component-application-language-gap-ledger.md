@@ -115,3 +115,22 @@ rewrite:
   (`:max-items`/`:validation` tags), not as an executable check. Recursive
   schema identity itself (this ledger's own item 2) is unchanged and out of
   scope for ADR 0065.
+- **HTTP (`:http/post`) now also has a real `:clj` production provider
+  transport** — `kotoba.compiler.provider.http-transport` (ADR 0066) —
+  backed by `java.net.http.HttpClient` with bounded, per-hop
+  allow-list-revalidated redirect following and a best-effort private/
+  loopback/link-local destination-IP block, closing a second entry of item
+  2's "identity wiring fixtures, not implementations" gap for the nine
+  application capabilities named in this ledger's own "Remaining provider
+  and authority gaps" section above. The remaining seven capabilities (log,
+  clock, state, UI, storage, and the rest) are UNCHANGED by this addendum
+  and remain identity wiring fixtures at the `:clj` reference-provider layer
+  this ledger discusses — ADR 0066 does not claim otherwise. `:cljs`/nbb
+  transport for HTTP itself also remains an explicit, documented gap (ADR
+  0066's own "Remaining gaps"), as does full DNS-rebinding closure (same
+  section, item 1) — unlike LLM's fixed-endpoint design, HTTP's
+  guest-chosen-destination design makes DNS-rebinding a live, honestly
+  documented residual risk rather than a closed one. This progress is at
+  the JVM/Chicory reference-provider layer this ledger itself discusses,
+  not yet the WASM Component Model layer ADR chain 0037-0063 builds toward
+  — see ADR 0066 for the precise scope.
