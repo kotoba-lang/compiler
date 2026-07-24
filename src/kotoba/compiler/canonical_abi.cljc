@@ -166,6 +166,94 @@
      :size (align-up (+ payload-offset payload-size) alignment)
      :flat (into [:i32] (variant-flatten-payload case-layouts))}))
 
+(defn- structural-product-layout
+  "Shared sequential offset/alignment fold for a structural (non-nominal)
+  fixed-length product of `element-layouts` (each an already-computed
+  `layout*` result, in declared positional order), factored out of
+  `record-layout`'s own per-field loop exactly the way `structural-union-layout`
+  above factors out `variant-layout`'s own discriminant/payload math for a
+  structural union -- `tuple` is structural, not nominal (parallel to why
+  `:list`/`:option`/`:result` carry no schema-table identity of their own):
+  the Component Model spec defines `tuple<T1, T2, ...>` as an anonymous type
+  constructor, the same way `list<T>`/`option<T>`/`result<T, E>` are, not a
+  sealed named type a caller registers once and references by identity
+  thereafter.
+
+  The result deliberately reuses the key name `:fields` (each entry
+  `{:offset :layout}`, positional -- no `:name`, unlike a record field's own
+  `{:name :offset :layout}`) rather than a bespoke key such as `:elements`:
+  `layout-leaves`'s existing nested-record recursion clause,
+  `(contains? layout :fields)`, only ever destructures `:offset`/`:layout`
+  from each entry and never depends on `:name` being present, so a tuple's
+  own layout is recursed into by that clause for free with **zero changes**
+  to `layout-leaves` (verified directly, see Evidence) -- exactly the
+  `record-layout`/`variant-layout`/`list-layout`/`option-layout`/
+  `result-layout` precedent of reusing an existing generic call site rather
+  than adding a new one. This reuse is the correct one (not a coincidental
+  key-name collision): a tuple, like a nested record and unlike a
+  variant/option/result, is a pure fixed-offset product with no discriminant,
+  so every element's own absolute offset is already the final answer for
+  flattening, the same reason a nested record's own `:fields` are recursed
+  into today."
+  [element-layouts]
+  (let [planned
+        (loop [remaining element-layouts offset 0 alignment 1 result []]
+          (if-let [element-layout (first remaining)]
+            (let [element-offset (align-up offset (:alignment element-layout))]
+              (recur (next remaining)
+                     (+ element-offset (:size element-layout))
+                     (max alignment (:alignment element-layout))
+                     (conj result {:offset element-offset :layout element-layout})))
+            {:fields result :alignment alignment :end offset}))]
+    {:size (align-up (:end planned) (:alignment planned))
+     :alignment (:alignment planned)
+     :flat (vec (mapcat (comp :flat :layout) (:fields planned)))
+     :fields (:fields planned)}))
+
+(defn- tuple-layout
+  "Checked Canonical ABI layout for a structural `[:tuple item-descriptor-1
+  item-descriptor-2 ... item-descriptor-n]` (the Component Model's
+  `tuple<T1, T2, ...>`): sugar over the same sequential offset/alignment fold
+  `record-layout` uses for a sealed record's fields, specialized to a
+  positional (unnamed), non-nominal fixed-length product -- structurally
+  exactly an anonymous record. `item-layouts` is kept alongside on the
+  returned map (the plain ordered layout sequence, no offset annotation),
+  exactly the reason `list-layout`/`option-layout`/`result-layout` keep their
+  own item/ok/err layout(s) alongside: so a caller can inspect any element's
+  own shape without re-deriving it from the descriptor or walking `:fields`.
+
+  Item count is bounded by `value/canonical-tuple-item-limit` (32, see that
+  constant's own docstring for why this magnitude and why its own name). At
+  least one item type is required -- an empty tuple has no admitted shape in
+  this slice, exactly as a sealed record requires at least one field
+  (`kotoba.compiler.value`'s own `validate-value-type!` record-field check).
+
+  Each item descriptor may be any already-admitted Canonical ABI descriptor,
+  including another `:tuple`/`:option`/`:result`/`:list` -- recursively
+  re-entering `layout*` with `visited` threaded straight through unchanged (a
+  tuple carries no identity of its own to add), exactly as list/option/result
+  already do. Nesting a tuple inside a tuple is not rejected (contrast ADR
+  0065's deliberate list-of-list rejection): every level is still a single
+  fixed-size, fixed-offset product with no independent runtime-variable
+  length or stride of its own, so there is no genuinely-harder shape here to
+  guard against, the same reasoning ADR 0068 already gave for not rejecting
+  option-of-option/result-of-result."
+  [descriptor schemas visited]
+  (let [item-descriptors (vec (rest descriptor))]
+    (when (empty? item-descriptors)
+      (reject "tuple descriptor must have at least one item type"
+              {:descriptor descriptor}))
+    (when (> (count item-descriptors) value/canonical-tuple-item-limit)
+      (reject "tuple item count exceeds bound"
+              {:descriptor descriptor
+               :count (count item-descriptors)
+               :max value/canonical-tuple-item-limit}))
+    (let [item-layouts (mapv #(layout* % schemas visited) item-descriptors)]
+      (merge {:descriptor descriptor
+              :kind :tuple
+              :item-layouts item-layouts}
+             (structural-product-layout item-layouts)))))
+
 (defn- option-layout
   "Checked Canonical ABI layout for a structural `[:option item-descriptor]`
   (the Component Model's `option<T>`): sugar over the same union-of-cases
@@ -341,6 +429,8 @@
     (option-layout descriptor schemas visited)
     (and (vector? descriptor) (= :result (first descriptor)))
     (result-layout descriptor schemas visited)
+    (and (vector? descriptor) (= :tuple (first descriptor)))
+    (tuple-layout descriptor schemas visited)
     :else
     (reject "descriptor has no qualified Canonical ABI layout"
             {:descriptor descriptor})))
@@ -359,6 +449,13 @@
   (that is, it carries a `:fields` key) is recursed into so every nested leaf
   gets its own absolute store/load offset; this is how one level of nested
   aggregate lowering reuses the same flat-scalar codegen as a plain record.
+  A field whose own layout is a bounded `tuple` (also carries a `:fields` key,
+  `structural-product-layout`'s own positional `{:offset :layout}` entries)
+  is recursed into by this same clause with no dedicated branch of its own:
+  a tuple is a pure fixed-offset product exactly like a nested record, so
+  every element's own absolute offset is already the final answer for
+  flattening, unlike a list/option/result whose payload interpretation is
+  either runtime-length (list) or discriminant-gated (option/result).
   A field whose own layout is a bounded `string`/`keyword` (carries a
   `:max-bytes` key, the same pointer+length linear-memory shape ADR 0040/0041
   already gave bare string parameters/results) is exposed as

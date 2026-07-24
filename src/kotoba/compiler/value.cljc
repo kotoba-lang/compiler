@@ -25,6 +25,19 @@
 (def typed-set-item-limit 32)
 (def typed-map-entry-limit 31)
 (def record-field-limit 32)
+;; Canonical ABI `[:tuple item-descriptor ...]` item-count bound (see
+;; kotoba.compiler.canonical-abi's `tuple-layout`). A tuple is a structural,
+;; positional analog of a sealed record's fields, so this is kept at the same
+;; magnitude as this file's own nominal `record-field-limit` above (a sealed
+;; record's own field-count bound) and `heterogeneous-vector-item-limit`
+;; above (this file's pre-existing fixed-length heterogeneous-product bound,
+;; which `kotoba.compiler.component-wit` already renders to this exact WIT
+;; `tuple<...>` syntax today) -- both already 32. Kept as its own named
+;; constant rather than a direct reuse of either, for the same reason
+;; `canonical-list-item-limit` above got its own name alongside
+;; `vector-item-limit`: these bound genuinely different domains that happen
+;; to share a magnitude today, not one concept wearing three names.
+(def canonical-tuple-item-limit 32)
 (def compact-graph-item-limit 128)
 (def string-index-key-byte-limit 65536)
 (def document-depth-limit 8)
