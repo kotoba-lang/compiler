@@ -1,6 +1,6 @@
 # ADR 0049: Component application-language gap ledger
 
-Status: accepted; closing ledger for the 2026-07-21 implementation session
+Status: accepted; living ledger, current snapshot updated 2026-07-24
 
 ## Context
 
@@ -219,29 +219,157 @@ rewrite:
   validator — both explicit remaining gaps in ADR 0070 itself. Recursive
   schema identity itself (this ledger's own item 2) is unchanged and out of
   scope for ADR 0070.
-- **Storage (`:storage/transact`) now also has a real `:clj` production
-  provider transport** — `kotoba.compiler.provider.storage-transport` (ADR
-  0071) — closing a third entry (after LLM/ADR 0064 and HTTP/ADR 0066) of
-  this ledger's own "identity wiring fixtures, not implementations" gap for
-  the nine application capabilities, and directly the case ADR 0067 named
-  as still open ("`storage` remains open and untouched by any in-flight
-  work this task found"). Durability is delegated entirely to a
-  host-configured key/value HTTP endpoint (a REQUIRED `:endpoint`
-  construction option or `KOTOBA_STORAGE_ENDPOINT` env var, no baked-in
-  default) — this ledger's own "Storage must not acquire ambient
-  filesystem authority" sentence (Remaining provider and authority gaps,
-  above) is satisfied by never adding a local-filesystem code path at all,
-  not by scoping one to a host-chosen directory. `storage.cljc` itself is
-  unmodified; every bound it already enforces (bounded keys, bounded
-  65536-byte values, conditional `[:option :i64]` versions) is unchanged
-  and un-weakened. The remaining six capabilities (log, clock, UI, and the
-  rest this ledger discusses, `state` already corrected by ADR 0067) are
-  UNCHANGED by this addendum. `:cljs`/nbb transport for storage itself also
-  remains an explicit, documented gap (ADR 0071's own "Remaining gaps"),
-  as does a live-network integration test against an already-deployed real
-  storage backend — unlike LLM's `murakumo-main`, no such repo-wide
-  well-known backend exists yet for storage. This progress is at the
-  JVM/Chicory reference-provider layer this ledger itself discusses, not
-  yet the WASM Component Model layer ADR chain 0037-0063 builds toward —
-  `storage-v1.edn`'s `:qualification` map is unchanged by this ADR. See ADR
-  0071 for the precise scope.
+
+## Current remaining-gap snapshot (2026-07-24)
+
+This section is the current operational summary. The original 2026-07-21
+ledger and chronological addenda above remain as historical evidence, but
+their present-tense statements must not be read as overriding this snapshot.
+In particular, a type-level layout plan is not executable Canonical ABI
+support, and an intentionally closed authority boundary is not an
+implementation gap.
+
+### P0: correctness bugs in already-admitted programs
+
+1. **Five-parameter `:f64` Wasm functions can emit an invalid local index.**
+   Four parameters work; five are admitted but the generated module can fail
+   validation. This is tracked by compiler issue #206 and is a correctness
+   bug, not an unsupported-language decision.
+2. **Project linking cannot synthesize an import stub for `:f64`/`:f32`
+   results.** Standalone floating functions work, but a cross-file call can
+   fail in `kotoba.compiler.project/stub-value`. This is the second open item
+   in issue #206.
+
+The JavaScript self-shadowing `let` bug formerly tracked as issue #225 is
+closed by compiler PR #250 and kotoba-script PR #68. Lexical parameters,
+nested `let` bindings, and match binders now receive deterministic unique
+JavaScript names, so this is no longer a remaining gap.
+
+### P1: planned layouts that still lack executable Component codegen
+
+The Canonical ABI layout planner now covers:
+
+- scalar/string/keyword/symbol;
+- sealed record and variant;
+- bounded structural `list<T>` (ADR 0065);
+- structural `option<T>` and `result<T,E>` (ADR 0068);
+- structural tuple (ADR 0070).
+
+For `list`, `option`, `result`, and tuple, this is still **type-level planning
+only**. `component-core.clj` has no general lowering/lifting/store/load path
+for these shapes, no `.kotoba` export or typed capability call can use them
+end to end, and the planner's validation tags are not executable instance
+checks. The next coherent implementation slice is:
+
+1. runtime value validation and bounded allocation;
+2. export parameter/result lowering and lifting;
+3. typed capability request/result lowering and lifting;
+4. malformed-provider-result and overflow adversarial tests;
+5. real Wasmtime execution evidence.
+
+This is one codegen gap per shape, not evidence that their layouts remain
+unimplemented.
+
+### P1: Canonical ABI shapes without a layout plan
+
+- **Map and set** remain absent from `canonical-abi.cljc/layout*`.
+- **List-of-list** remains explicitly rejected by ADR 0065. Supporting it
+  requires independently bounded nested buffers and checked stride/range
+  arithmetic.
+- **Payload-less WIT result forms** remain outside the current
+  `[:result ok-type err-type]` model.
+- `layout-leaves` still lacks a dedicated representation for
+  variant/option/result-typed record fields.
+
+There is no separate homogeneous-vector gap: ADR 0070 records that Canonical
+ABI `list<T>` is that shape. The heterogeneous fixed-length domain vector is
+the structural tuple shape.
+
+### P1: backend parity still deliberately narrow
+
+- Native parametric option/result values are implemented internally by ADR
+  0069, including nested one-word values, but are not admitted as generic
+  structured exported parameters/results. A structured host codec remains a
+  separate boundary.
+- Native record/variant support remains the sealed bounded slices documented
+  by ADRs 0062/0063, not general escaping recursive aggregates.
+- The ClojureScript backend still traps outside JavaScript's exact safe
+  integer range rather than implementing modulo-2^64 arithmetic with BigInt
+  end to end. This is an explicit fail-closed parity limitation, not silent
+  miscompilation.
+
+### P2: recursive identity, ownership, and async
+
+- General recursive schema identity remains rejected. A future bounded
+  representation or resource/handle design must preserve schema identity.
+- Canonical ownership transfer, nested post-return cleanup, aggregate
+  byte/node/item accounting, and adversarial malformed-result coverage remain
+  incomplete for newly planned aggregates.
+- WASI 0.3 async functions, futures, streams, cancellation, deadlines, and
+  their fuel/item/byte budgets remain specification-only and fail closed.
+
+### Provider and authority status
+
+- `:llm/generate` and `:http/post` have real JVM transports (ADRs 0064/0066);
+  their CLJS/nbb transports remain unimplemented.
+- `state` is a real bounded reference implementation and has real Wasmtime
+  Component evidence (ADRs 0060/0061/0067); it is not an identity fixture.
+  Native-AOT/JIT qualification and production hardening remain open.
+- Storage remains the clearest production-transport gap and must not gain
+  ambient filesystem authority.
+- Clock, log, and UI must be assessed against their actual self-contained
+  implementations and conformance evidence rather than grouped
+  automatically with transport-backed HTTP/LLM/storage. This ledger does not
+  claim production qualification merely from a reference implementation.
+- All capability kits still need one shared cross-runtime semantic and
+  adversarial corpus with release evidence; per-provider implementation does
+  not by itself close runtime parity.
+
+### Explicit non-gaps
+
+The following remain intentionally excluded by the safe-language and
+authority design and must not be scheduled as ordinary missing coverage:
+ambient Java/JavaScript interop, `eval`/dynamic loading, unrestricted
+mutation or threads, unrestricted exceptions, and un-fuelled looping. Any
+proposal to admit one of these requires a new safety decision, not a desugar
+or backend-parity patch.
+
+## Updated completion order
+
+1. Fix both issue #206 floating-point correctness bugs and add real Wasm/
+   cross-file regression tests.
+2. Implement executable Component lowering/lifting for one already-planned
+   aggregate, starting with bounded `list<T>`; validate every pointer, length,
+   stride, discriminant, and allocation before widening to the other shapes.
+3. Add map/set layout plans only after their deterministic ordering,
+   duplicate-key/item, and aggregate-budget rules are explicit.
+4. Extend the same aggregate codec through typed capability boundaries and
+   provider-result validation.
+5. Close production provider/runtime qualification gaps with a shared
+   Wasmtime/native/CLJS corpus.
+6. Address recursive resources and bounded WASI 0.3 async as separate,
+   explicitly reviewed authority-bearing designs.
+
+## Progress addendum (this snapshot's own prose is not rewritten in place; see ADR 0071)
+
+Per this file's own established practice, this addendum only records a
+pointer, not a rewrite of the "Current remaining-gap snapshot" section
+above: **storage (`:storage/transact`) now also has a real `:clj`
+production provider transport** —
+`kotoba.compiler.provider.storage-transport` (ADR 0071) — landed after the
+snapshot above was written, so its "Storage remains the clearest
+production-transport gap" sentence is superseded for the `:clj`
+reference-provider layer specifically (not for the WASM Component Model
+layer, which ADR 0071 does not touch). Durability is delegated entirely to
+a host-configured key/value HTTP endpoint (a REQUIRED `:endpoint`
+construction option or `KOTOBA_STORAGE_ENDPOINT` env var, no baked-in
+default), so this ledger's "Storage must not acquire ambient filesystem
+authority" constraint is satisfied by never adding a local-filesystem code
+path at all, not by scoping one to a host-chosen directory. `storage.cljc`
+itself is unmodified; every bound it already enforces (bounded keys,
+bounded 65536-byte values, conditional `[:option :i64]` versions) is
+unchanged and un-weakened. `:cljs`/nbb transport for storage itself remains
+an explicit, documented gap (ADR 0071's own "Remaining gaps"), as does a
+live-network integration test against an already-deployed real storage
+backend — unlike LLM's `murakumo-main`, no such repo-wide well-known
+backend exists yet for storage. See ADR 0071 for the precise scope.
