@@ -60,6 +60,7 @@
             [kotoba.compiler.log-provider-test]
             [kotoba.compiler.provider-conformance-test]
             [kotoba.compiler.wasm-typed-test]
+            [kotoba.compiler.wasm-tools-test]
             [kotoba.compiler.value-test]
             [kotoba.compiler.verifier-profile-test]))
 
@@ -117,6 +118,7 @@
                                           'kotoba.compiler.log-provider-test
                                           'kotoba.compiler.provider-conformance-test
                                           'kotoba.compiler.wasm-typed-test
+                                          'kotoba.compiler.wasm-tools-test
                                           'kotoba.compiler.native-executor-test
                                           'kotoba.compiler.receipt-test
                                           'kotoba.compiler.release-test
