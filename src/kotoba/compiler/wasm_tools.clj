@@ -19,9 +19,16 @@
               {:command (vec args) :exit exit :output output}))
     output))
 
+(def ^:private version-pattern
+  ;; `wasm-tools --version` prints `wasm-tools <version>` optionally followed
+  ;; by a ` (<git-hash> <date>)` build-metadata suffix that varies between
+  ;; otherwise-identical pinned builds. Pin the version token exactly; ignore
+  ;; the suffix. \Q..\E quotes the dotted version so it matches literally.
+  (re-pattern (str "wasm-tools \\Q" version "\\E(?: \\(.*\\))?")))
+
 (defn assert-version! []
   (let [output (.trim ^String (run-command! ["wasm-tools" "--version"]))]
-    (when-not (= (str "wasm-tools " version) output)
+    (when-not (re-matches version-pattern output)
       (reject "wasm-tools version is not pinned"
               {:expected version :actual output}))))
 
