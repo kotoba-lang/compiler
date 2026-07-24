@@ -404,3 +404,38 @@ no dedicated correction ADR of its own — out of ADR 0072's scope, named
 here only so a future reader does not repeat this investigation from the
 same snapshot bullet. See ADR 0072 for the precise scope and full evidence
 for `log`/`ui` individually.
+
+## Progress addendum (this snapshot's own prose is not rewritten in place; see ADR 0073)
+
+Per this file's own established practice, this addendum only records a
+pointer, not a rewrite of the sections above: **`clock` (`:clock/now`) now
+also has a real production transport, at BOTH the `:clj` AND `:cljs`
+reference-provider layers** —
+`kotoba.compiler.provider.clock-transport/production-clock-source` (ADR
+0073) — closing out the one capability ADR 0072's own closing paragraph
+named as still lacking a dedicated correction/transport ADR. Unlike
+`state`/`log`/`ui` (ADR 0060/0061/0067/0072, which turned out to need no
+transport seam at all), `clock` DOES have a real host-injection seam
+(`clock-v1.edn`'s `:source-authority :host`), so this is genuinely an
+"add a production transport" ADR in the shape of ADR 0064/0066/0071 (LLM/
+HTTP/storage), scaled down to match `clock`'s much smaller authority
+surface (no network destination, allow-list, or credential — just the
+host's own already-running clock). Unlike those three, `:cljs` is NOT left
+an explicit documented gap here — both hosts get a real, tested
+implementation, verified end to end through the full typed
+`clock/provider` boundary (a compiled `.kotoba` guest via
+`kotoba.compiler.reference-runtime`), the first capability in this ADR
+chain to clear that bar on `:cljs`. Doing so required ADR 0073 to also fix
+a real, independent, pre-existing `clock.cljc` defect it discovered along
+the way (not merely add a transport around it): `clock.cljc`'s own
+`valid-tick?` used plain `cljs.core/integer?`, which does not recognize a
+`bigint` — the ONLY representation the ABI boundary accepts for an `:i64`
+crossing back into a compiled guest on `:cljs` — so no tick value could
+satisfy both `clock.cljc`'s own gate and the ABI boundary's gate
+simultaneously before this fix, independent of any transport. `clock.cljc`
+is otherwise unmodified for `:clj` (both `#?(:clj ...)` branches are
+byte-for-byte the prior `:clj` behavior); every bound it already enforces
+(non-negative-whole-number ticks, monotonic-regression detection via
+`:clock/regressed`, provider-local observation sequencing) is unchanged
+and un-weakened on both hosts. See ADR 0073 for the precise scope, the live
+repro of the pre-existing defect, and the fix.
