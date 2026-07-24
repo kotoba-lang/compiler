@@ -717,35 +717,40 @@
                       (recur remaining next-env group-out)
                       [(vec group-out) next-env]))))))
           (walk-form [form env]
-            (cond
-              (seq? form)
-              (let [[op & args] form]
-                (case op
-                  let
-                  (let [[bindings & body] args]
-                    (if (and (vector? bindings) (even? (count bindings)))
-                      (let [[bindings* body-env] (walk-bindings bindings env)]
-                        (list* 'let bindings*
-                               (map #(walk-form % body-env) body)))
-                      (apply list op (map #(walk-form % env) args))))
+            (let [result
+                  (cond
+                    (seq? form)
+                    (let [[op & args] form]
+                      (case op
+                        let
+                        (let [[bindings & body] args]
+                          (if (and (vector? bindings) (even? (count bindings)))
+                            (let [[bindings* body-env] (walk-bindings bindings env)]
+                              (list* 'let bindings*
+                                     (map #(walk-form % body-env) body)))
+                            (apply list op (map #(walk-form % env) args))))
 
-                  doseq
-                  (let [[binding & body] args]
-                    (if (and (vector? binding) (<= 2 (count binding)))
-                      (let [[binding* body-env]
-                            (walk-doseq-binding binding env)]
-                        (list* 'doseq binding*
-                               (map #(walk-form % body-env) body)))
-                      (apply list op (map #(walk-form % env) args))))
+                        doseq
+                        (let [[binding & body] args]
+                          (if (and (vector? binding) (<= 2 (count binding)))
+                            (let [[binding* body-env]
+                                  (walk-doseq-binding binding env)]
+                              (list* 'doseq binding*
+                                     (map #(walk-form % body-env) body)))
+                            (apply list op (map #(walk-form % env) args))))
 
-                  (apply list op (map #(walk-form % env) args))))
-              (vector? form) (mapv #(walk-form % env) form)
-              (map? form) (into {} (map (fn [[k v]]
-                                          [(walk-form k env)
-                                           (walk-form v env)]))
-                                form)
-              (set? form) (set (map #(walk-form % env) form))
-              :else form))]
+                        (apply list op (map #(walk-form % env) args))))
+                    (vector? form) (mapv #(walk-form % env) form)
+                    (map? form) (into {} (map (fn [[k v]]
+                                                [(walk-form k env)
+                                                 (walk-form v env)]))
+                                      form)
+                    (set? form) (set (map #(walk-form % env) form))
+                    :else form)]
+              (if (and (seq (meta form))
+                       (or (coll? result) (symbol? result)))
+                (with-meta result (meta form))
+                result)))]
     (walk-form root {})))
 
 (defn- desugar-doseq [args form]
