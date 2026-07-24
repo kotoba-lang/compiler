@@ -55,6 +55,7 @@
             [kotoba.compiler.storage-provider-test]
             [kotoba.compiler.storage-transport-test]
             [kotoba.compiler.clock-provider-test]
+            [kotoba.compiler.clock-transport-test]
             [kotoba.compiler.log-provider-test]
             [kotoba.compiler.provider-conformance-test]
             [kotoba.compiler.wasm-typed-test]
@@ -111,6 +112,7 @@
                                           'kotoba.compiler.storage-provider-test
                                           'kotoba.compiler.storage-transport-test
                                           'kotoba.compiler.clock-provider-test
+                                          'kotoba.compiler.clock-transport-test
                                           'kotoba.compiler.log-provider-test
                                           'kotoba.compiler.provider-conformance-test
                                           'kotoba.compiler.wasm-typed-test

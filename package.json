@@ -8,6 +8,7 @@
   "scripts": {
     "test-nbb-wasm32": "nbb --classpath . scripts/test-nbb-wasm32.cljs",
     "test-nbb-project": "nbb --classpath .:src test/nbb/project.cljs",
+    "test-nbb-clock-transport": "nbb --classpath . scripts/test-nbb-clock-transport.cljs",
     "conformance": "nbb scripts/conformance.cljs",
     "sanitizer": "nbb scripts/sanitizer.cljs",
     "fuzz": "nbb scripts/fuzz-native.cljs",

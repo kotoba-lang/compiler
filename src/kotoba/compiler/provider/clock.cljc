@@ -1,6 +1,7 @@
 (ns kotoba.compiler.provider.clock
   "Typed clock reference provider. Host clock functions never cross the ABI."
-  (:require [kotoba.compiler.value :as value]))
+  (:require [kotoba.compiler.value :as value]
+            #?@(:cljs [[kotoba.compiler.cljs-i64 :as i64]])))
 
 (def capability-id 7)
 
@@ -25,8 +26,29 @@
    :kotoba.clock/error error-type
    :kotoba.clock/result result-type})
 
-(defn- valid-tick? [tick]
-  (and (integer? tick) (<= 0 tick)))
+(defn- valid-tick?
+  "A tick is valid when it is a non-negative whole number in the host's own
+  canonical i64 representation. This is `(and (integer? tick) (<= 0
+  tick))` on `:clj`, where a `System/currentTimeMillis`/`System/nanoTime`-
+  derived `long` already satisfies `integer?` directly. On `:cljs`, a
+  plain cljs number is NOT the canonical i64 representation the ABI
+  boundary (`kotoba.compiler.value`/`kotoba.compiler.cljs-i64`) requires
+  for a `typed-cap-call` result crossing back into a compiled `.kotoba`
+  guest -- only a JS `bigint` is (`cljs.core/integer?` itself does not
+  reliably recognize `bigint`, confirmed live: `(integer? (js/BigInt 5))`
+  => false; see `cljs-i64.cljs`'s own ns docstring for the same warning).
+  So the `:cljs` branch checks `i64/bigint-value?` (the canonical i64
+  predicate every other cljs-side provider in this ADR chain also uses)
+  instead of `integer?`, and `(not (i64/k-neg? tick))` instead of `(<= 0
+  tick)` (mixing a bigint with a plain-number `0` in `<=` happens to work
+  today, but `k-neg?`/the bigint-literal `zero` is the pattern this
+  namespace's own sibling `cljs-i64` helpers standardize on). This is the
+  SAME non-negative-whole-number requirement on both hosts -- neither
+  branch admits anything `valid-tick?` on the other host would reject --
+  only the host-native representation of 'whole number' differs."
+  [tick]
+  #?(:clj (and (integer? tick) (<= 0 tick))
+     :cljs (and (i64/bigint-value? tick) (not (i64/k-neg? tick)))))
 
 (defn- error [code message]
   (value/bounded-keyword! code value/keyword-value-byte-limit)
@@ -39,6 +61,24 @@
     (catch #?(:clj Throwable :cljs :default) _
       {:error (error :clock/source "clock source failed")})))
 
+(defn- initial-sequence []
+  #?(:clj 0 :cljs i64/zero))
+
+(defn- next-sequence! [sequence-number]
+  "Increments and returns the provider-local observation sequence, in the
+  host's own canonical i64 representation -- the SAME reason `valid-tick?`
+  above branches by host: this counter is itself an `:i64`-typed field
+  (`wall-type`/`monotonic-type`'s `:observation-sequence`), so on `:cljs`
+  a plain-number `inc` would produce a value the ABI boundary rejects at
+  the exact same `typed-cap-call` result check `valid-tick?`'s own
+  docstring describes, regardless of what a host's `wall-now`/
+  `monotonic-now` returns. `i64/one` is a `bigint`; JS's native `+`
+  operator (which cljs's own `+` compiles down to for two bigint operands)
+  adds two bigints exactly, so this is a lossless, unbounded-precision
+  increment on `:cljs`, matching plain `inc` on a `:clj` `long` closely
+  enough for this counter's practical range."
+  (swap! sequence-number #?(:clj inc :cljs (fn [n] (+ n i64/one)))))
+
 (defn provider
   "Creates an isolated clock provider from host-supplied zero-argument wall
   (Unix milliseconds) and monotonic (nanoseconds) functions. The provider
@@ -47,7 +87,7 @@
   (when-not (and (fn? wall-now) (fn? monotonic-now))
     (throw (ex-info "clock provider requires wall and monotonic functions"
                     {:phase :clock-provider})))
-  (let [sequence-number (atom 0)
+  (let [sequence-number (atom (initial-sequence))
         last-monotonic (atom nil)]
     {:request-type request-type
      :result-type result-type
@@ -63,7 +103,7 @@
              source-error source-error
              (not (valid-tick? value)) (error :clock/invalid "wall clock value is invalid")
              :else [result-type :wall
-                    [wall-type value (swap! sequence-number inc)]]))
+                    [wall-type value (next-sequence! sequence-number)]]))
 
          :monotonic
          (let [{:keys [value] :as observation} (read-source monotonic-now)
@@ -78,7 +118,7 @@
              (do
                (reset! last-monotonic value)
                [result-type :monotonic
-                [monotonic-type value (swap! sequence-number inc)]])))
+                [monotonic-type value (next-sequence! sequence-number)]])))
 
          (throw (ex-info "unknown clock domain"
                          {:phase :clock-provider :domain domain}))))}))
