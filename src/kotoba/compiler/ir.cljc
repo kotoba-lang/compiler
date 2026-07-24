@@ -137,7 +137,24 @@
                (nth type 2))
        (= (count (nth type 2)) (count (distinct (map first (nth type 2)))))))
 
-(defn only-string-and-scalar-record-typed-features? [hir]
+(defn- native-word-value-type?
+  "Types whose runtime value fits the native backend's uniform 64-bit word.
+  Structured option/result values are pair handles, so they compose
+  recursively without changing the machine ABI."
+  ([type] (native-word-value-type? type 0))
+  ([type depth]
+   (and (<= depth 8)
+        (or (contains? #{:i64 :bool :string} type)
+            (and (vector? type)
+                 (case (first type)
+                   :option (and (= 2 (count type))
+                                (native-word-value-type? (second type) (inc depth)))
+                   :result (and (= 3 (count type))
+                                (native-word-value-type? (second type) (inc depth))
+                                (native-word-value-type? (nth type 2) (inc depth)))
+                   false))))))
+
+(defn only-native-word-typed-features? [hir]
   (letfn [(walk [form]
             (cond
               (or (string? form) (integer? form) (symbol? form)) true
@@ -239,6 +256,49 @@
                   (and (= 1 (count args)) (walk (first args)))
                   (contains? '#{result-value result-error} op)
                   (and (= 2 (count args)) (every? walk args))
+                  (contains? '#{option-some-of option-some?-of} op)
+                  (let [[type value] args]
+                    (and (= 2 (count args))
+                         (vector? type) (= :option (first type))
+                         (native-word-value-type? type)
+                         (walk value)))
+                  (= op 'option-none-of)
+                  (let [[type] args]
+                    (and (= 1 (count args))
+                         (vector? type) (= :option (first type))
+                         (native-word-value-type? type)))
+                  (= op 'option-value-of)
+                  (let [[type value fallback] args]
+                    (and (= 3 (count args))
+                         (vector? type) (= :option (first type))
+                         (native-word-value-type? type)
+                         (walk value) (walk fallback)))
+                  (= op 'option-match)
+                  (let [[type value none-body binder some-body] args]
+                    (and (= 5 (count args))
+                         (vector? type) (= :option (first type))
+                         (native-word-value-type? type)
+                         (symbol? binder)
+                         (walk value) (walk none-body) (walk some-body)))
+                  (contains? '#{result-ok-of result-err-of result-ok?-of} op)
+                  (let [[type value] args]
+                    (and (= 2 (count args))
+                         (vector? type) (= :result (first type))
+                         (native-word-value-type? type)
+                         (walk value)))
+                  (contains? '#{result-value-of result-error-of} op)
+                  (let [[type value fallback] args]
+                    (and (= 3 (count args))
+                         (vector? type) (= :result (first type))
+                         (native-word-value-type? type)
+                         (walk value) (walk fallback)))
+                  (= op 'result-match-of)
+                  (let [[type value ok-binder ok-body err-binder err-body] args]
+                    (and (= 6 (count args))
+                         (vector? type) (= :result (first type))
+                         (native-word-value-type? type)
+                         (symbol? ok-binder) (symbol? err-binder)
+                         (walk value) (walk ok-body) (walk err-body)))
                   :else
                   (and (not (contains? non-string-typed-ops op))
                        (every? walk args))))
