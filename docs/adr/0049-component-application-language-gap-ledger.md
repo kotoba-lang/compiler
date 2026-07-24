@@ -184,7 +184,7 @@ rewrite:
   ledger's own item 2) is unchanged and out of scope for ADR 0068.
 - **Storage (`:storage/transact`) now also has a real `:clj` production
   provider transport** — `kotoba.compiler.provider.storage-transport` (ADR
-  0070) — closing a third entry (after LLM/ADR 0064 and HTTP/ADR 0066) of
+  0071) — closing a third entry (after LLM/ADR 0064 and HTTP/ADR 0066) of
   this ledger's own "identity wiring fixtures, not implementations" gap for
   the nine application capabilities, and directly the case ADR 0067 named
   as still open ("`storage` remains open and untouched by any in-flight
@@ -200,11 +200,11 @@ rewrite:
   and un-weakened. The remaining six capabilities (log, clock, UI, and the
   rest this ledger discusses, `state` already corrected by ADR 0067) are
   UNCHANGED by this addendum. `:cljs`/nbb transport for storage itself also
-  remains an explicit, documented gap (ADR 0070's own "Remaining gaps"),
+  remains an explicit, documented gap (ADR 0071's own "Remaining gaps"),
   as does a live-network integration test against an already-deployed real
   storage backend — unlike LLM's `murakumo-main`, no such repo-wide
   well-known backend exists yet for storage. This progress is at the
   JVM/Chicory reference-provider layer this ledger itself discusses, not
   yet the WASM Component Model layer ADR chain 0037-0063 builds toward —
   `storage-v1.edn`'s `:qualification` map is unchanged by this ADR. See ADR
-  0070 for the precise scope.
+  0071 for the precise scope.

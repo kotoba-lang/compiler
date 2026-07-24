@@ -2,7 +2,7 @@
   "Production transport for the bounded storage capability kit (ADR 0028,
   `kotoba.compiler.provider.storage`), backed by a real blocking
   `java.net.http.HttpClient` call to a host-configured durable key/value
-  service. See docs/adr/0070-production-storage-transport-host-configured-kv-endpoint.md
+  service. See docs/adr/0071-production-storage-transport-host-configured-kv-endpoint.md
   for the full design rationale; this docstring is the summary.
 
   This namespace does NOT define a new provider or a new capability, and does

@@ -1,4 +1,4 @@
-# ADR 0070: Production transport for the storage capability kit, delegating durability entirely to a host-configured key/value HTTP endpoint
+# ADR 0071: Production transport for the storage capability kit, delegating durability entirely to a host-configured key/value HTTP endpoint
 
 Status: accepted; production `:clj` transport implemented and unit/integration-tested against local fake servers; `:cljs` remains an explicit, documented gap
 

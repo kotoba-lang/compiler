@@ -24,7 +24,7 @@
      transport (a fixed, real, already-deployed `murakumo-main` endpoint),
      there is no repo-wide well-known storage backend this transport's wire
      protocol is designed to be pinned against -- see
-     docs/adr/0070-production-storage-transport-host-configured-kv-endpoint.md
+     docs/adr/0071-production-storage-transport-host-configured-kv-endpoint.md
      'Remaining gaps'."
   (:require [clojure.data.json :as json]
             [clojure.test :refer [deftest is testing]]
@@ -372,4 +372,4 @@
 ;; Note: the cljs/nbb host branch of `production-transport` is a documented
 ;; gap (ns docstring: no synchronous HTTP primitive available there today),
 ;; not something this JVM test suite can exercise -- see
-;; docs/adr/0070-production-storage-transport-host-configured-kv-endpoint.md.
+;; docs/adr/0071-production-storage-transport-host-configured-kv-endpoint.md.
