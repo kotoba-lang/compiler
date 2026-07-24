@@ -156,7 +156,7 @@
 (defn- compile-native! [hir target backend policy]
   (when (and (= :kotoba.hir/v3 (:format hir))
              (not (and (contains? #{:x86_64-kotoba-v1 :aarch64-kotoba-v1} backend)
-                       (ir/only-string-and-scalar-record-typed-features? hir))))
+                       (ir/only-native-word-typed-features? hir))))
     (throw (ex-info "typed values currently require the kotoba-script web target, typed Wasm target, or qualified native string/scalar-record/option-i64/result-i64 features"
                     {:phase :target :target target :backend backend
                      :value-profile :kotoba.value/typed-v1})))
