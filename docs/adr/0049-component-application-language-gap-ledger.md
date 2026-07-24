@@ -349,3 +349,27 @@ or backend-parity patch.
    Wasmtime/native/CLJS corpus.
 6. Address recursive resources and bounded WASI 0.3 async as separate,
    explicitly reviewed authority-bearing designs.
+
+## Progress addendum (this snapshot's own prose is not rewritten in place; see ADR 0071)
+
+Per this file's own established practice, this addendum only records a
+pointer, not a rewrite of the "Current remaining-gap snapshot" section
+above: **storage (`:storage/transact`) now also has a real `:clj`
+production provider transport** —
+`kotoba.compiler.provider.storage-transport` (ADR 0071) — landed after the
+snapshot above was written, so its "Storage remains the clearest
+production-transport gap" sentence is superseded for the `:clj`
+reference-provider layer specifically (not for the WASM Component Model
+layer, which ADR 0071 does not touch). Durability is delegated entirely to
+a host-configured key/value HTTP endpoint (a REQUIRED `:endpoint`
+construction option or `KOTOBA_STORAGE_ENDPOINT` env var, no baked-in
+default), so this ledger's "Storage must not acquire ambient filesystem
+authority" constraint is satisfied by never adding a local-filesystem code
+path at all, not by scoping one to a host-chosen directory. `storage.cljc`
+itself is unmodified; every bound it already enforces (bounded keys,
+bounded 65536-byte values, conditional `[:option :i64]` versions) is
+unchanged and un-weakened. `:cljs`/nbb transport for storage itself remains
+an explicit, documented gap (ADR 0071's own "Remaining gaps"), as does a
+live-network integration test against an already-deployed real storage
+backend — unlike LLM's `murakumo-main`, no such repo-wide well-known
+backend exists yet for storage. See ADR 0071 for the precise scope.
