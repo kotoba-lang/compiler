@@ -49,6 +49,7 @@
             [kotoba.compiler.state-provider-test]
             [kotoba.compiler.ui-provider-test]
             [kotoba.compiler.http-provider-test]
+            [kotoba.compiler.http-transport-test]
             [kotoba.compiler.llm-provider-test]
             [kotoba.compiler.llm-transport-test]
             [kotoba.compiler.storage-provider-test]
@@ -103,6 +104,7 @@
                                           'kotoba.compiler.state-provider-test
                                           'kotoba.compiler.ui-provider-test
                                           'kotoba.compiler.http-provider-test
+                                          'kotoba.compiler.http-transport-test
                                           'kotoba.compiler.llm-provider-test
                                           'kotoba.compiler.llm-transport-test
                                           'kotoba.compiler.storage-provider-test
