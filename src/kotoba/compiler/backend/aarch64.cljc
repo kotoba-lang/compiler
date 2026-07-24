@@ -150,6 +150,16 @@
   (insn (bit-or 0x54000000 (bit-shift-left (bit-and (quot byte-offset 4) 0x7ffff) 5) cond-code)))
 (defn- cbz-reg [rt byte-offset]
   (insn (bit-or 0xb4000000 (bit-shift-left (bit-and (quot byte-offset 4) 0x7ffff) 5) rt)))
+;; `CMP Xn, #imm12` (alias of `SUBS XZR, Xn, #imm12`, no shift). Used by
+;; `emit-variant-dispatch` below to compare the discriminant register
+;; against each case's own small, always-non-negative, compile-time-known
+;; ordinal -- never an arbitrary `.kotoba` i64 VALUE (that class of value
+;; goes through the general `contains? '#{= < > <= >=}` register-vs-register
+;; path already in `emit-expr`, unchanged), so a plain JS-number-safe imm12
+;; is always sufficient here (this increment's own case counts are a
+;; handful, nowhere near imm12's 4096 ceiling).
+(defn- cmp-imm [rn imm12]
+  (insn (bit-or 0xf100001f (bit-shift-left (bit-and imm12 0xfff) 10) (bit-shift-left rn 5))))
 (def ^:private cond-hi 8)     ; unsigned length > maximum
 (def ^:private cond-hs 2)     ; unsigned index >= length
 
@@ -358,6 +368,104 @@
           bindings (vec (mapcat vector names field-exprs))]
       (emit-let bindings (nth names field-index) env depth))))
 
+;; ADR 0063: AArch64 half of the SAME design decision
+;; `backend/x86-64.cljc/emit-variant-dispatch`'s own docstring documents in
+;; full (this is the second native value-representation increment, right
+;; after ADR 0062's record). A native sealed variant has no independent
+;; heap/pointer representation: it is rewritten into TWO synthetic 16-byte-
+;; aligned stack slots (this backend's own `let` slot size) on the SAME
+;; `emit-let`/`load-let` machinery -- slot 0 = discriminant (the case's
+;; 0-based ordinal within the type's declared `cases`), slot 1 = payload (one
+;; word, uniformly reserved for every case including a tag-only/"unit" one,
+;; whose branch body simply never reads it). Dispatch is a real runtime
+;; compare-and-branch chain over the stored discriminant (x0 after
+;; `load-let`): `cmp x0,#i ; b.eq case_i` for each of the N declared cases in
+;; order, falling through past all N comparisons to a defensive `brk`trap if
+;; none match -- never special-cased away by a directly-nested `variant-
+;; new`'s literal tag being statically known at that call site (see
+;; `emit-variant-match-of-new` below).
+(defn- emit-variant-dispatch
+  "Mirrors `backend/x86-64.cljc`'s own `emit-variant-dispatch` exactly, on
+  this backend's own AArch64 instruction encodings and 16-byte let-slot
+  convention. See that function's docstring for the full contract (including
+  why ORDINAL-EXPR is intentionally NOT restricted to a compiler-derived
+  in-range value here)."
+  [ordinal-expr payload-expr branch-specs env depth]
+  (let [push-ordinal (vec (concat (emit-expr ordinal-expr env depth) (save-x0)))
+        payload-depth (inc depth)
+        push-payload (vec (concat (emit-expr payload-expr env payload-depth) (save-x0)))
+        dispatch-depth (+ depth 2)
+        load-tag (load-let 0 depth dispatch-depth)
+        n (count branch-specs)
+        ;; add sp, sp, #32 -- drops the two synthetic 16-byte slots this
+        ;; dispatch alone pushed, run at the end of EVERY case body.
+        cleanup (add-sp 32)
+        body-codes (mapv (fn [{:keys [binder body]}]
+                           (vec (emit-expr body (assoc env binder {:let-depth payload-depth}) dispatch-depth)))
+                         branch-specs)
+        ;; Right-to-left fold, same reasoning as the x86-64 half: the last
+        ;; case never needs a trailing branch, so its size is known first,
+        ;; and each earlier case's own trailing `b` distance is exactly the
+        ;; already-known total size of every case laid out after it. Unlike
+        ;; x86-64's `jmp rel32` (relative to the NEXT instruction), AArch64's
+        ;; `b`/`b.cond` immediate is relative to the BRANCH INSTRUCTION'S OWN
+        ;; address (confirmed against this file's own pre-existing `if` and
+        ;; `bounds-check` byte-layout comments/offsets) -- every offset here
+        ;; therefore adds this instruction's own 4-byte width on top of the
+        ;; byte count between the END of this instruction and its target.
+        full-bodies
+        (vec (reverse
+              (reduce (fn [built body-code]
+                        (let [remaining (reduce + (map code-size built))]
+                          (conj built
+                                (if (empty? built)
+                                  (vec (concat body-code cleanup))
+                                  (vec (concat body-code cleanup (branch (+ 4 remaining))))))))
+                      []
+                      (reverse body-codes))))
+        body-sizes (mapv code-size full-bodies)
+        body-start-offsets (reductions + 0 (butlast body-sizes))
+        trap (insn 0xd4200000)                              ; brk #0
+        compare-entry-size 8                                 ; cmp-imm (4) + b.eq (4)
+        compare-block
+        (vec (mapcat
+              (fn [i]
+                (let [remaining-compares (- n i 1)
+                      ;; +4: `b.eq`'s own self-relative width, see the
+                      ;; `full-bodies` comment above for why.
+                      distance (+ 4 (* remaining-compares compare-entry-size)
+                                  (count trap)
+                                  (nth body-start-offsets i))]
+                  (concat (cmp-imm 0 i) (b-cond 0 distance))))    ; cond-eq = 0
+              (range n)))]
+    (vec (concat push-ordinal push-payload load-tag compare-block trap (apply concat full-bodies)))))
+
+;; Mirrors `backend/x86-64.cljc/emit-variant-match-of-new` exactly: `value-
+;; form` must be a directly-nested, same-schema `variant-new` -- a variant
+;; value never crosses a function boundary, matching the record ADR's own
+;; restriction, so no new host arena and no lifetime question to answer.
+(defn- emit-variant-match-of-new [type value-form branches env depth]
+  (when-not (seq? value-form)
+    (throw (ex-info "variant-match is only supported directly over a matching variant-new construction on the native backend"
+                    {:phase :aarch64 :type type})))
+  (let [[ctor-op ctor-type tag payload-expr] value-form
+        cases (nth type 2)
+        ordinal (first (keep-indexed (fn [i [case-tag _]] (when (= case-tag tag) i)) cases))]
+    (when-not (= 'variant-new ctor-op)
+      (throw (ex-info "variant-match is only supported directly over a matching variant-new construction on the native backend"
+                      {:phase :aarch64 :type type})))
+    (when-not (= type ctor-type)
+      (throw (ex-info "variant-match's schema must be identical to its variant-new operand's schema"
+                      {:phase :aarch64 :expected type :actual ctor-type})))
+    (when (nil? ordinal)
+      (throw (ex-info "variant-new references an undeclared case"
+                      {:phase :aarch64 :type type :tag tag})))
+    (when-not (= (count cases) (count branches))
+      (throw (ex-info "variant-match does not supply exactly one branch per declared case"
+                      {:phase :aarch64 :type type})))
+    (let [branch-specs (mapv (fn [[_ binder body]] {:binder binder :body body}) branches)]
+      (emit-variant-dispatch ordinal payload-expr branch-specs env depth))))
+
 (defn emit-expr [form env depth]
   (cond
     ;; `integer?` alone does not reliably recognize a cljs `bigint` (see
@@ -410,6 +518,12 @@
           (emit-record-get-of-new type value-form field env depth))
         (= op 'record-new)
         (throw (ex-info "record-new is only supported as the direct operand of a matching record-get on the native backend"
+                        {:phase :aarch64}))
+        (= op 'variant-match)
+        (let [[type value-form branches] args]
+          (emit-variant-match-of-new type value-form branches env depth))
+        (= op 'variant-new)
+        (throw (ex-info "variant-new is only supported as the direct operand of a matching variant-match on the native backend"
                         {:phase :aarch64}))
         (contains? '#{pair pair-first pair-second
                       kgraph-assert! kgraph-get kgraph-count kgraph-entity-at

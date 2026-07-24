@@ -331,6 +331,137 @@
           bindings (vec (mapcat vector names field-exprs))]
       (emit-let bindings (nth names field-index) env ctx))))
 
+;; ADR 0063: the second native value-representation increment, immediately
+;; following ADR 0062's record. A native sealed variant, like the record, has
+;; NO independent heap/pointer representation -- it is rewritten at codegen
+;; time into TWO synthetic 8-byte stack slots on the SAME synthetic-stack-slot
+;; scheme `emit-let`/`load-let` already implement: slot 0 = discriminant (the
+;; case's 0-based ordinal index within the type's own declared `cases`
+;; vector, resolved at COMPILE TIME the same way `emit-record-get-of-new`
+;; resolves a field name to its index), slot 1 = payload (the ONE word every
+;; admitted case needs, since every admitted payload type -- `:i64`/`:bool`
+;; -- is already a uniform 8-byte word on this backend, matching the record
+;; ADR's own "no narrower packing" finding; a tag-only/"unit" case still
+;; reserves this SAME word -- its value is simply never bound/read by that
+;; case's own branch body, exactly the way a Rust `enum` variant without a
+;; payload still occupies its union's full size). Both slots are pushed
+;; UNCONDITIONALLY and exactly once (matching `emit-let`'s own side-
+;; effecting-binding discipline: the payload expression runs once regardless
+;; of which case it belongs to or whether that case's branch reads it).
+;;
+;; Dispatch is a REAL runtime compare-and-branch chain over the stored
+;; discriminant word, not a compile-time selection: for each of the N
+;; declared cases, in order, `cmp rax,i ; je case_i`, falling through past
+;; ALL N comparisons to a defensive UD2 trap if none match. The codegen does
+;; NOT special-case away any comparison based on a directly-nested
+;; `variant-new`'s literal tag being known at that particular call site (see
+;; `emit-variant-match-of-new` below) -- every one of the N comparisons is
+;; always present in the emitted bytes, for every call site, regardless of
+;; which case that site happens to construct. See docs/adr/0063-* for the
+;; full design rationale, including why the UD2 fallback is unreachable from
+;; any program this compiler's own pipeline will admit, sign, or execute (a
+;; MULTI-LAYER, not just single-layer, guarantee: frontend's own tag
+;; declaration check, this backend's own re-derived ordinal lookup,
+;; `kotoba.compiler.verifier`'s independent re-derivation, AND -- unique to
+;; this repository's native track -- `kotoba.compiler.signing/sign` and
+;; `signing/verify` BOTH unconditionally re-run the full verifier before
+;; producing or trusting a signature, so even a hand-crafted artifact
+;; bypassing `frontend/analyze` cannot reach real execution with a
+;; discriminant the type system did not itself validate).
+(defn- emit-variant-dispatch
+  "ORDINAL-EXPR and PAYLOAD-EXPR are ordinary KIR expressions (ORDINAL-EXPR
+  is normally a compile-time-computed plain integer, but nothing here
+  requires that -- see the direct low-level trap test in
+  native_executor_test.clj, which passes an out-of-range integer here
+  directly, bypassing `emit-variant-match-of-new`'s own tag-lookup entirely,
+  specifically to exercise this dispatch chain's fallback trap with a value
+  no admitted `.kotoba` program could ever produce). BRANCH-SPECS is an
+  ordered vector of `{:binder sym :body kir-form}`, one per declared case, in
+  the SAME order as the discriminant ordinal each one corresponds to."
+  [ordinal-expr payload-expr branch-specs env {:keys [temp-depth] :as ctx}]
+  (let [tail-ctx (assoc ctx :tail? false)
+        push-ordinal (vec (concat (emit-expr ordinal-expr env tail-ctx) [0x50]))
+        payload-depth (inc temp-depth)
+        push-payload (vec (concat (emit-expr payload-expr env (assoc tail-ctx :temp-depth payload-depth))
+                                  [0x50]))
+        dispatch-depth (+ temp-depth 2)
+        load-tag (load-let temp-depth dispatch-depth)
+        n (count branch-specs)
+        body-ctx (assoc ctx :temp-depth dispatch-depth)
+        ;; add rsp, 16 -- drops the two synthetic slots this dispatch alone
+        ;; pushed, run at the end of EVERY case body before falling through
+        ;; to whatever follows this whole construct (mirrors `emit-let`'s own
+        ;; final pop, just deferred until after the SELECTED branch runs
+        ;; instead of after a single body expression).
+        cleanup [0x48 0x81 0xc4 0x10 0x00 0x00 0x00]
+        body-codes (mapv (fn [{:keys [binder body]}]
+                           (vec (emit-expr body (assoc env binder {:let-depth payload-depth}) body-ctx)))
+                         branch-specs)
+        ;; Build the final per-case bodies right-to-left: the LAST case never
+        ;; needs a trailing jump (nothing follows it but whatever comes after
+        ;; this whole dispatch), so its size is fixed first; each earlier
+        ;; case's own trailing `jmp` distance is exactly the total size of
+        ;; every case that will be laid out after it, which is already known
+        ;; once the fold reaches that case -- no forward-reference patching
+        ;; needed.
+        full-bodies
+        (vec (reverse
+              (reduce (fn [built body-code]
+                        (let [remaining (reduce + (map code-size built))]
+                          (conj built
+                                (if (empty? built)
+                                  (vec (concat body-code cleanup))
+                                  (vec (concat body-code cleanup [0xe9] (le32 remaining)))))))
+                      []
+                      (reverse body-codes))))
+        body-sizes (mapv code-size full-bodies)
+        body-start-offsets (reductions + 0 (butlast body-sizes))
+        trap [0x0f 0x0b]                                  ; ud2
+        compare-entry-size 12                              ; cmp rax,imm32 (6) + je rel32 (6)
+        compare-block
+        (vec (mapcat
+              (fn [i]
+                (let [remaining-compares (- n i 1)
+                      distance (+ (* remaining-compares compare-entry-size)
+                                  (count trap)
+                                  (nth body-start-offsets i))]
+                  (concat [0x48 0x3d] (le32 i) [0x0f 0x84] (le32 distance))))
+              (range n)))]
+    (vec (concat push-ordinal push-payload load-tag compare-block trap (apply concat full-bodies)))))
+
+;; The public-facing admitted shape, mirroring `emit-record-get-of-new`
+;; exactly: `variant-match`'s value operand must be a DIRECTLY-nested,
+;; SAME-schema `variant-new` (never a parameter, a `let`-bound name, an
+;; `if`, or a different-schema construction) -- a variant value never
+;; escapes past this one call, so no new host arena, no new function-
+;; boundary ABI (variants never appear in `param-types` or `result`, exactly
+;; matching the record ADR's own restriction), and no lifetime question to
+;; answer. `branches` arrives in the SAME order as the type's own declared
+;; `cases` (frontend's shared, unchanged `variant-match` validation already
+;; enforces `(= (mapv first cases) (mapv first branches))`), so the branch at
+;; index i always corresponds to the case whose ordinal is i.
+(defn- emit-variant-match-of-new [type value-form branches env ctx]
+  (when-not (seq? value-form)
+    (throw (ex-info "variant-match is only supported directly over a matching variant-new construction on the native backend"
+                    {:phase :x86-64 :type type})))
+  (let [[ctor-op ctor-type tag payload-expr] value-form
+        cases (nth type 2)
+        ordinal (first (keep-indexed (fn [i [case-tag _]] (when (= case-tag tag) i)) cases))]
+    (when-not (= 'variant-new ctor-op)
+      (throw (ex-info "variant-match is only supported directly over a matching variant-new construction on the native backend"
+                      {:phase :x86-64 :type type})))
+    (when-not (= type ctor-type)
+      (throw (ex-info "variant-match's schema must be identical to its variant-new operand's schema"
+                      {:phase :x86-64 :expected type :actual ctor-type})))
+    (when (nil? ordinal)
+      (throw (ex-info "variant-new references an undeclared case"
+                      {:phase :x86-64 :type type :tag tag})))
+    (when-not (= (count cases) (count branches))
+      (throw (ex-info "variant-match does not supply exactly one branch per declared case"
+                      {:phase :x86-64 :type type})))
+    (let [branch-specs (mapv (fn [[_ binder body]] {:binder binder :body body}) branches)]
+      (emit-variant-dispatch ordinal payload-expr branch-specs env ctx))))
+
 (defn emit-expr [form env {:keys [param-count pad? temp-depth] :as ctx}]
   (cond
     ;; `integer?` alone does not reliably recognize a cljs `bigint` (see
@@ -395,6 +526,14 @@
 
         (= op 'record-new)
         (throw (ex-info "record-new is only supported as the direct operand of a matching record-get on the native backend"
+                        {:phase :x86-64}))
+
+        (= op 'variant-match)
+        (let [[type value-form branches] args]
+          (emit-variant-match-of-new type value-form branches env ctx))
+
+        (= op 'variant-new)
+        (throw (ex-info "variant-new is only supported as the direct operand of a matching variant-match on the native backend"
                         {:phase :x86-64}))
 
         (contains? '#{pair pair-first pair-second

@@ -60,6 +60,20 @@
                (nth type 2))
        (= (count (nth type 2)) (count (distinct (map first (nth type 2)))))))
 
+;; Independently re-derived from `kotoba.compiler.ir/native-scalar-variant-
+;; type?` ON PURPOSE, same reasoning as `native-scalar-record-type?`'s own
+;; comment immediately above (ADR 0063).
+(def ^:private max-variant-cases 32)
+(defn- native-scalar-variant-type? [type]
+  (and (vector? type) (= 3 (count type)) (= :variant (first type))
+       (keyword? (second type)) (some? (namespace (second type)))
+       (vector? (nth type 2)) (seq (nth type 2)) (<= (count (nth type 2)) max-variant-cases)
+       (every? (fn [case-entry]
+                 (and (vector? case-entry) (= 2 (count case-entry)) (keyword? (first case-entry))
+                      (contains? #{:i64 :bool} (second case-entry))))
+               (nth type 2))
+       (= (count (nth type 2)) (count (distinct (map first (nth type 2)))))))
+
 ;; Mirrors `kotoba.compiler.backend.wasm`'s `utf8` -- `.getBytes` is
 ;; JVM-only, cljs has no `String`/`Charset`; `TextEncoder` is the
 ;; UTF-8-safe equivalent.
@@ -107,6 +121,20 @@
     (and (seq? form) (= 'record-get (first form)))
     (let [[_ _type value _field] form]
       (bounded-sum [1 (lowered-cost value env)]))
+    ;; `variant-new`/`variant-match`'s FIRST argument is likewise a compile-
+    ;; time type descriptor, not a KIR expression -- same reasoning as
+    ;; `record-new`/`record-get` immediately above (ADR 0063). `variant-
+    ;; match`'s branches are `[tag binder body]` triples; only `body` costs
+    ;; anything (mirrors `let`'s own env-threading just above), each binder
+    ;; is scoped to its own branch only (they do not see each other).
+    (and (seq? form) (= 'variant-new (first form)))
+    (let [[_ _type _tag payload] form]
+      (bounded-sum [1 (lowered-cost payload env)]))
+    (and (seq? form) (= 'variant-match (first form)))
+    (let [[_ _type value branches] form]
+      (bounded-sum (list* 1 (lowered-cost value env)
+                          (map (fn [[_tag binder body]] (lowered-cost body (assoc env binder 1)))
+                               branches))))
     (and (seq? form) (= 'typed-cap-call (first form)))
     (let [[_ _cap-id _request-type _result-type request] form]
       (bounded-sum [1 (lowered-cost request env)]))
@@ -247,6 +275,38 @@
                         (seq? value) (= 'record-new (first value)) (= type (second value)))
             (reject! "runtime KIR record projection rejected" {:operation op}))
           (verify-expr! value locals signatures (inc depth) nodes facts))
+
+        ;; ADR 0063, mirroring `record-new` immediately above: the tag must
+        ;; be one of the type's own declared cases.
+        (= op 'variant-new)
+        (let [[type tag payload] args
+              case-type (when (native-scalar-variant-type? type)
+                          (some (fn [[case-tag payload-type]]
+                                  (when (= case-tag tag) payload-type))
+                                (nth type 2)))]
+          (when-not (and (= 3 (count args)) case-type)
+            (reject! "runtime KIR variant construction rejected" {:operation op}))
+          (verify-expr! payload locals signatures (inc depth) nodes facts))
+
+        ;; ADR 0063, mirroring `record-get` immediately above: the codegen
+        ;; backends (`emit-variant-match-of-new` in both `backend/x86-
+        ;; 64.cljc` and `backend/aarch64.cljc`) require `value` to be a
+        ;; directly-nested, same-schema `variant-new` -- this independent
+        ;; re-check enforces the EXACT same narrow shape. `branches` must
+        ;; exhaustively cover every declared case, in the SAME order (the
+        ;; ordinal each branch corresponds to is its position).
+        (= op 'variant-match)
+        (let [[type value branches] args
+              cases (when (native-scalar-variant-type? type) (nth type 2))]
+          (when-not (and (= 3 (count args)) cases
+                        (vector? branches) (= (mapv first cases) (mapv first branches))
+                        (every? #(and (vector? %) (= 3 (count %)) (valid-name? (second %))) branches)
+                        (seq? value) (= 'variant-new (first value)) (= type (second value))
+                        (some #(= (nth value 2) (first %)) cases))
+            (reject! "runtime KIR variant dispatch rejected" {:operation op}))
+          (verify-expr! value locals signatures (inc depth) nodes facts)
+          (doseq [[_ binder body] branches]
+            (verify-expr! body (conj locals binder) signatures (inc depth) nodes facts)))
 
         (contains? heap-operations op)
         (do
