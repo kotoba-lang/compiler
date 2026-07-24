@@ -88,6 +88,21 @@
         (lib/ensure! (= "{:status :ok :result 42 :fuel {:initial 512 :remaining 509} :heap {:capacity 4096 :used 0}}"
                         (.trim (.-stdout structured)))
                      "windows-profile: structured supervisor report mismatch"))
+      (.writeFileSync
+       fs (artifact "typed-capability.kotoba")
+       "(defn main [] :i64\n  (+ (string-byte-length (typed-cap-call 4 :string :string \"hello😀\"))\n     (option-value (typed-cap-call 4 :option-i64 :option-i64 (some 41)) 0)\n     (option-value (typed-cap-call 4 :option-i64 :option-i64 nil) 5)\n     (result-value (typed-cap-call 4 :result-i64 :result-i64 (result-ok 7)) 0)\n     (result-error (typed-cap-call 4 :result-i64 :result-i64 (result-err 9)) 0)))\n")
+      (.writeFileSync fs (artifact "typed-policy.edn") "{:allow #{[:cap/call 4]}}\n")
+      (run-k! ["compile" (artifact "typed-capability.kotoba")
+               "--target" target "--policy" (artifact "typed-policy.edn")
+               "--output" (artifact "typed-capability.kexe")])
+      (let [[typed-offset typed-arity]
+            (extract! (artifact "typed-capability.kexe") "main"
+                      (artifact "typed-capability.bin"))
+            typed-result
+            (run-external loader [(artifact "typed-capability.bin")
+                                  typed-offset typed-arity isa "4"])]
+        (lib/ensure! (= "71" (.trim (.-stdout typed-result)))
+                     "windows-profile: typed string/option/result callback mismatch"))
       (doseq [[probe reason] [[:KEXE_FILESYSTEM_PROBE "filesystem-denied"]
                               [:KEXE_PROCESS_PROBE "process-denied"]
                               [:KEXE_NETWORK_PROBE "network-denied"]

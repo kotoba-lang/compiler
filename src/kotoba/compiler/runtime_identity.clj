@@ -11,9 +11,9 @@
 
 (def windows-loader-source-sha256
   "Pinned identity of the reviewed Windows native loader source.
-  Updated for the zero-capability AppContainer execution boundary and its
-  filesystem, process, outbound-network, and listen denial probes."
-  "da10256734943e82a8c786839b6dd2ada2a1e99e38ca8463ba4ad5dd63232961")
+  Includes the AppContainer denial boundary plus pair-backed string,
+  option-i64, and result-i64 typed capability validation."
+  "504de28c6ba3835318a0788402885a492857fe9a674df0ae88eb541bcfb111bb")
 
 (defn loader-source-for-profile [profile]
   (case (:os profile)

@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
 
 #if !defined(__clang__)
 #error "Kotoba Windows loader requires Clang"
@@ -30,6 +31,7 @@
 #endif
 #define KEXE_MAX_CODE (1024u * 1024u)
 #define KEXE_PAIR_CAPACITY 4096u
+#define KEXE_STRING_POOL_BYTES 65536u
 
 struct pair_cell { int64_t first; int64_t second; };
 struct kexe_context {
@@ -40,8 +42,19 @@ struct kexe_context {
   void *pair_new;
   void *pair_first;
   void *pair_second;
+  void *kgraph_assert;
+  void *kgraph_get;
+  void *kgraph_count;
+  void *kgraph_entity_at;
+  void *string_equal;
+  void *string_concat;
+  void *typed_cap_call;
   uint64_t pair_used;
   struct pair_cell pairs[KEXE_PAIR_CAPACITY];
+  uint64_t string_pool_used;
+  uint8_t string_pool[KEXE_STRING_POOL_BYTES];
+  const uint8_t *code_base;
+  uint64_t code_length;
 };
 
 _Static_assert(offsetof(struct kexe_context, fuel) == 8, "fuel ABI");
@@ -50,6 +63,9 @@ _Static_assert(offsetof(struct kexe_context, cap_call) == 48, "cap ABI");
 _Static_assert(offsetof(struct kexe_context, pair_new) == 56, "pair ABI");
 _Static_assert(offsetof(struct kexe_context, pair_first) == 64, "first ABI");
 _Static_assert(offsetof(struct kexe_context, pair_second) == 72, "second ABI");
+_Static_assert(offsetof(struct kexe_context, string_equal) == 112, "string ABI");
+_Static_assert(offsetof(struct kexe_context, string_concat) == 120, "string ABI");
+_Static_assert(offsetof(struct kexe_context, typed_cap_call) == 128, "typed cap ABI");
 
 static void fail_win(const char *message) {
   fprintf(stderr, "kexe-loader-windows: %s: win32=%lu\n", message, (unsigned long)GetLastError());
@@ -100,6 +116,115 @@ static int64_t SYSV pair_first(struct kexe_context *ctx, int64_t handle) {
 
 static int64_t SYSV pair_second(struct kexe_context *ctx, int64_t handle) {
   return checked_pair(ctx, handle)->second;
+}
+
+static const uint8_t *resolve_string_bytes(struct kexe_context *ctx,
+                                           int64_t offset, int64_t length) {
+  uint64_t pool_offset;
+  if (ctx == NULL || ctx->version != 2 || length < 0) __builtin_trap();
+  if (offset >= 0) {
+    if ((uint64_t)offset + (uint64_t)length > ctx->code_length ||
+        (uint64_t)offset + (uint64_t)length < (uint64_t)offset)
+      __builtin_trap();
+    return ctx->code_base + offset;
+  }
+  pool_offset = (uint64_t)(-offset - 1);
+  if (pool_offset + (uint64_t)length > KEXE_STRING_POOL_BYTES ||
+      pool_offset + (uint64_t)length < pool_offset)
+    __builtin_trap();
+  return ctx->string_pool + pool_offset;
+}
+
+static int valid_utf8(const uint8_t *bytes, uint64_t length) {
+  uint64_t i = 0;
+  while (i < length) {
+    uint8_t a = bytes[i++];
+    if (a <= 0x7f) continue;
+    if (a >= 0xc2 && a <= 0xdf) {
+      if (i >= length || (bytes[i++] & 0xc0) != 0x80) return 0;
+      continue;
+    }
+    if (a >= 0xe0 && a <= 0xef) {
+      uint8_t b, c;
+      if (i + 1 >= length) return 0;
+      b = bytes[i++]; c = bytes[i++];
+      if ((b & 0xc0) != 0x80 || (c & 0xc0) != 0x80 ||
+          (a == 0xe0 && b < 0xa0) || (a == 0xed && b >= 0xa0)) return 0;
+      continue;
+    }
+    if (a >= 0xf0 && a <= 0xf4) {
+      uint8_t b, c, d;
+      if (i + 2 >= length) return 0;
+      b = bytes[i++]; c = bytes[i++]; d = bytes[i++];
+      if ((b & 0xc0) != 0x80 || (c & 0xc0) != 0x80 ||
+          (d & 0xc0) != 0x80 || (a == 0xf0 && b < 0x90) ||
+          (a == 0xf4 && b >= 0x90)) return 0;
+      continue;
+    }
+    return 0;
+  }
+  return 1;
+}
+
+static int64_t SYSV string_equal(struct kexe_context *ctx,
+                                 int64_t left, int64_t right) {
+  struct pair_cell *a = checked_pair(ctx, left);
+  struct pair_cell *b = checked_pair(ctx, right);
+  const uint8_t *a_bytes, *b_bytes;
+  if (a->second != b->second) return 0;
+  a_bytes = resolve_string_bytes(ctx, a->first, a->second);
+  b_bytes = resolve_string_bytes(ctx, b->first, b->second);
+  return memcmp(a_bytes, b_bytes, (size_t)a->second) == 0 ? 1 : 0;
+}
+
+static int64_t SYSV string_concat(struct kexe_context *ctx,
+                                  int64_t left, int64_t right) {
+  struct pair_cell *a = checked_pair(ctx, left);
+  struct pair_cell *b = checked_pair(ctx, right);
+  int64_t total;
+  uint64_t start;
+  const uint8_t *a_bytes, *b_bytes;
+  if (a->second < 0 || b->second < 0 || a->second > INT64_MAX - b->second)
+    __builtin_trap();
+  total = a->second + b->second;
+  if (ctx->string_pool_used + (uint64_t)total > KEXE_STRING_POOL_BYTES ||
+      ctx->string_pool_used + (uint64_t)total < ctx->string_pool_used)
+    __builtin_trap();
+  a_bytes = resolve_string_bytes(ctx, a->first, a->second);
+  b_bytes = resolve_string_bytes(ctx, b->first, b->second);
+  start = ctx->string_pool_used;
+  memcpy(ctx->string_pool + start, a_bytes, (size_t)a->second);
+  memcpy(ctx->string_pool + start + (uint64_t)a->second,
+         b_bytes, (size_t)b->second);
+  ctx->string_pool_used += (uint64_t)total;
+  return pair_new(ctx, -((int64_t)start) - 1, total);
+}
+
+static int valid_typed_value(struct kexe_context *ctx,
+                             uint64_t kind, int64_t value) {
+  struct pair_cell *pair = checked_pair(ctx, value);
+  if (kind == 1) {
+    const uint8_t *bytes = resolve_string_bytes(ctx, pair->first, pair->second);
+    return valid_utf8(bytes, (uint64_t)pair->second);
+  }
+  if (kind == 2 || kind == 3) {
+    if (pair->first != 0 && pair->first != 1) return 0;
+    return kind != 2 || pair->first != 0 || pair->second == 0;
+  }
+  return 0;
+}
+
+static int64_t SYSV typed_cap_call(struct kexe_context *ctx, uint64_t id,
+                                   uint64_t request_kind, uint64_t result_kind,
+                                   int64_t request) {
+  int64_t result = request;
+  if (ctx == NULL || ctx->version != 2 || id > 255 ||
+      !(ctx->allow[id / 8] & (1u << (id % 8))) ||
+      request_kind != result_kind ||
+      !valid_typed_value(ctx, request_kind, request) ||
+      !valid_typed_value(ctx, result_kind, result))
+    __builtin_trap();
+  return result;
 }
 
 static uint64_t parse_u64(const char *text, const char *name) {
@@ -802,6 +927,11 @@ int main(int argc, char **argv) {
   ctx->pair_new = (void *)&pair_new;
   ctx->pair_first = (void *)&pair_first;
   ctx->pair_second = (void *)&pair_second;
+  ctx->string_equal = (void *)&string_equal;
+  ctx->string_concat = (void *)&string_concat;
+  ctx->typed_cap_call = (void *)&typed_cap_call;
+  ctx->code_base = code;
+  ctx->code_length = (uint64_t)length;
   parse_allow(ctx, argv[5]);
 
   token = restricted_token();
