@@ -85,10 +85,9 @@ This repository is the CLJC-native successor of `kotoba-lang/kotoba`'s
 historical Rust "safe Kotoba" three-gate design (`policy.rs`/`subset.rs`/
 `effects.rs`, removed from that repo `604896171b` 2026-07-01 — see
 `kotoba-lang/kotoba`'s README, "Language — kotoba-lang & kotoba wasm"
-section) — not `kotoba-lang/kotoba-lang`, which that README currently
-(mis)states as where the successor "lives entirely." `kotoba-lang/kotoba-lang`
-owns the source-extension/CLI/package *contract* only; it does not implement
-compile-time admission gates. The three gates map onto this repo's
+section, which now states this attribution correctly) — not
+`kotoba-lang/kotoba-lang`, which owns the source-extension/CLI/package
+*contract* only and does not implement compile-time admission gates. The three gates map onto this repo's
 `src/kotoba/compiler/frontend.clj` as follows:
 
 | safe-Kotoba gate | Theorem | This repo |
