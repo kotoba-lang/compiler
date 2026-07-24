@@ -1,4 +1,4 @@
-# ADR 0066: Structural `option<T>`/`result<T, E>` Canonical ABI layout plan
+# ADR 0068: Structural `option<T>`/`result<T, E>` Canonical ABI layout plan
 
 Status: accepted; layout-plan slice implemented (type-level plan only, no
 codegen)

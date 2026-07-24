@@ -117,7 +117,7 @@ rewrite:
   scope for ADR 0065.
 - **Item 1's remaining `options`/`results` sub-slice now also has Canonical
   ABI layout plans** — `kotoba.compiler.canonical-abi`'s `option-layout`/
-  `result-layout` (ADR 0066) — closing another narrow slice of this
+  `result-layout` (ADR 0068) — closing another narrow slice of this
   ledger's own item 1, at the same layout-plan level ADR 0065 closed for
   `list`. `layout*` now admits five aggregate/union schema shapes
   (`:record`/`:variant`/`:list`/`:option`/`:result`); `option`/`result` are
@@ -127,17 +127,17 @@ rewrite:
   existing admitted descriptor including nested options/results/lists —
   unlike ADR 0065's deliberate list-of-list rejection, option-of-option and
   result-of-result are not rejected, since neither has list's
-  second-independent-stride problem (see ADR 0066 for the reasoning).
+  second-independent-stride problem (see ADR 0068 for the reasoning).
   Tuples/vectors/maps/sets named in this same ledger item are UNCHANGED by
-  ADR 0066 and remain entirely unimplemented in `layout*`. ADR 0066 adds no
+  ADR 0068 and remain entirely unimplemented in `layout*`. ADR 0068 adds no
   `component-core.clj` codegen (no `.kotoba` export, capability call, or
   provider Component can take or return an option/result value yet) and no
   instance-level option/result-value validator — both explicit remaining
-  gaps in ADR 0066 itself, matching this ledger's own "plans... plus
+  gaps in ADR 0068 itself, matching this ledger's own "plans... plus
   pre-call and post-return validation" phrasing only at the
   declarative-metadata level (a new `:bounded-discriminant` tag), not as an
   executable check. `layout-leaves` also gains no dedicated leaf shape for
   an option/result-typed record field, mirroring `variant`-typed record
-  fields' own pre-existing, still-open gap (named explicitly in ADR 0066,
+  fields' own pre-existing, still-open gap (named explicitly in ADR 0068,
   not silently left implicit). Recursive schema identity itself (this
   ledger's own item 2) is unchanged and out of scope for ADR 0066.
