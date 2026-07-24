@@ -1,4 +1,4 @@
-# ADR 0065: Native parametric option/result values
+# ADR 0069: Native parametric option/result values
 
 Status: accepted; recursive one-word option/result slice implemented
 
