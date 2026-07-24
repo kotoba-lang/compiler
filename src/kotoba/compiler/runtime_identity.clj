@@ -7,7 +7,7 @@
   Includes string_equal/string_concat and the typed string capability
   callback, which validates pair-backed pointer/length handles and canonical
   UTF-8 before and after the provider boundary."
-  "355cc8f78c0e526d7c0f865ec55be0396e4ba78df597c804b0e9c543e6a8294c")
+  "7f7950e9764e108986fd5050241a8588061ae869ab56f06ffe292b3f7c08f55f")
 
 (def windows-loader-source-sha256
   "Pinned identity of the reviewed Windows native loader source.

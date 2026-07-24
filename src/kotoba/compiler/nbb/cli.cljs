@@ -157,7 +157,7 @@
   (when (and (= :kotoba.hir/v3 (:format hir))
              (not (and (contains? #{:x86_64-kotoba-v1 :aarch64-kotoba-v1} backend)
                        (ir/only-string-and-scalar-record-typed-features? hir))))
-    (throw (ex-info "typed values currently require the kotoba-script web target, typed Wasm target, or (native targets) string-only or sealed-scalar-record typed features"
+    (throw (ex-info "typed values currently require the kotoba-script web target, typed Wasm target, or qualified native string/scalar-record/option-i64/result-i64 features"
                     {:phase :target :target target :backend backend
                      :value-profile :kotoba.value/typed-v1})))
   (when (nil? (:entry hir))
@@ -195,6 +195,7 @@
                         :kgraph-count-offset 96 :kgraph-entity-at-offset 104
                         :kgraph-capacity 4096
                         :string-equal-offset 112 :string-concat-offset 120
+                        :typed-cap-call-offset 128
                         :string-pool-capacity 65536}
           :effects (:effects hir)
           :compatibility compat

@@ -162,7 +162,7 @@
           (when align? [0x48 0x83 0xc4 0x08])
           [0x41 0x59]))))                         ; pop r9
 
-(defn- emit-typed-string-cap-call [cap-id value env {:keys [temp-depth] :as ctx}]
+(defn- emit-typed-cap-call [cap-id kind value env {:keys [temp-depth] :as ctx}]
   (let [cap-id #?(:clj cap-id :cljs (js/Number cap-id))
         byte-offset (+ 16 (quot cap-id 8))
         mask (bit-shift-left 1 (mod cap-id 8))
@@ -173,8 +173,8 @@
           [0x49 0x89 0xc0 0x41 0x51]             ; r8=request; push r9
           (when align? [0x50])
           [0xbe] (le32 cap-id)                    ; esi=cap-id
-          [0xba] (le32 1)                         ; edx=request kind string
-          [0xb9] (le32 1)                         ; ecx=result kind string
+          [0xba] (le32 kind)                      ; edx=request kind
+          [0xb9] (le32 kind)                      ; ecx=result kind
           [0x4c 0x89 0xcf 0x41 0xff 0x91] (le32 128)
           (when align? [0x48 0x83 0xc4 0x08])
           [0x41 0x59]))))
@@ -535,11 +535,53 @@
             (= :i64 request-type result-type)
             (emit-cap-call cap-id request env ctx)
             (= :string request-type result-type)
-            (emit-typed-string-cap-call cap-id request env ctx)
+            (emit-typed-cap-call cap-id 1 request env ctx)
+            (= :option-i64 request-type result-type)
+            (emit-typed-cap-call cap-id 2 request env ctx)
+            (= :result-i64 request-type result-type)
+            (emit-typed-cap-call cap-id 3 request env ctx)
             :else
             (throw (ex-info "native typed capability ABI does not support this boundary"
                             {:phase :x86-64 :request-type request-type
                              :result-type result-type}))))
+
+        (= op 'option-some)
+        (emit-heap-call 'pair [1 (first args)] env ctx)
+
+        (= op 'option-none)
+        (emit-heap-call 'pair [0 0] env ctx)
+
+        (= op 'option-some?)
+        (emit-heap-call 'pair-first [(first args)] env ctx)
+
+        (= op 'option-value)
+        (let [[value fallback] args
+              tagged-value '__native_option_value]
+          (emit-let [tagged-value value]
+                    (list 'if (list 'pair-first tagged-value)
+                          (list 'pair-second tagged-value)
+                          fallback)
+                    env ctx))
+
+        (= op 'result-ok)
+        (emit-heap-call 'pair [1 (first args)] env ctx)
+
+        (= op 'result-err)
+        (emit-heap-call 'pair [0 (first args)] env ctx)
+
+        (= op 'result-ok?)
+        (emit-heap-call 'pair-first [(first args)] env ctx)
+
+        (contains? '#{result-value result-error} op)
+        (let [[value fallback] args
+              tagged-value '__native_result_value
+              ok? (list 'pair-first tagged-value)
+              payload (list 'pair-second tagged-value)]
+          (emit-let [tagged-value value]
+                    (if (= op 'result-value)
+                      (list 'if ok? payload fallback)
+                      (list 'if ok? fallback payload))
+                    env ctx))
 
         (= op 'record-get)
         (let [[type value-form field] args]
