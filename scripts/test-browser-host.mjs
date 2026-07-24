@@ -78,6 +78,6 @@ await assert.rejects(
 assert.equal(browserProfile.format, "kotoba.browser-host/v1");
 assert.equal(browserProfile.maxModuleBytes, 1048576);
 assert.equal(browserProfile.pairCapacity, 4096);
-assert.equal(browserProfile.typedAbiVersion, 11);
+assert.equal(browserProfile.typedAbiVersion, 12);
 assert.ok(Object.isFrozen(browserProfile));
 console.log("browser-host: admission, identity, execution, and denial vectors passed");
