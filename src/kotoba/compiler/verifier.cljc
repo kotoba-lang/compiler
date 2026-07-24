@@ -234,7 +234,8 @@
                          #?(:clj (integer? cap-id)
                             :cljs (or (i64/bigint-value? cap-id) (integer? cap-id)))
                          (<= 0 cap-id 255)
-                         (= :i64 request-type result-type))
+                         (contains? #{[:i64 :i64] [:string :string]}
+                                    [request-type result-type]))
             (reject! "runtime KIR typed capability call rejected" {}))
           (vswap! facts update :effects conj [:cap/call cap-id])
           (verify-expr! request locals signatures (inc depth) nodes facts))
@@ -491,6 +492,7 @@
                             :kgraph-count-offset 96 :kgraph-entity-at-offset 104
                             :kgraph-capacity 4096
                             :string-equal-offset 112 :string-concat-offset 120
+                            :typed-cap-call-offset 128
                             :string-pool-capacity 65536}]
       (when-not (= expected-fuel-abi fuel-abi)
         (reject! "fuel ABI is not admitted" {:target target :fuel-abi fuel-abi}))

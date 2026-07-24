@@ -66,12 +66,23 @@
            (select-keys (:evidence result) [:status :result])))
     (is (= #{[:cap/call 4]} (get-in envelope [:artifact :effects])))
     (is (= '(typed-cap-call 4 :i64 :i64 41)
+           (get-in envelope [:artifact :program :functions 0 :body])))))
+
+(deftest typed-string-capability-call-validates-native-pointer-length-boundary
+  (let [source "(defn main [] :i64
+                  (string-byte-length
+                    (typed-cap-call 4 :string :string \"hello😀\")))"
+        policy {:allow #{[:cap/call 4]}}
+        {:keys [envelope trust]} (signed source policy)
+        {:keys [trust options]} (execution-options trust)
+        result (executor/execute envelope trust policy {:args []} options)]
+    (is (= {:status :ok :result 9}
+           (select-keys (:evidence result) [:status :result])))
+    (is (= '(string-byte-length
+              (typed-cap-call 4 :string :string "hello😀"))
            (get-in envelope [:artifact :program :functions 0 :body])))
-    (is (thrown-with-msg?
-         clojure.lang.ExceptionInfo #"typed values currently require"
-         (compiler/compile-source
-          "(defn main [] :string (typed-cap-call 4 :string :string \"request\"))"
-          (target) policy)))))
+    (is (= 128 (get-in envelope [:artifact :context-abi
+                                 :typed-cap-call-offset])))))
 
 (deftest execution-rejects-before-entering-untrusted-or-unauthorized-code
   (let [{:keys [envelope trust]} (signed "(defn main [] 42)" {:allow #{}})
@@ -533,7 +544,7 @@
                    (record-get " schema " (record-new " schema " \"x\") :s))
                  (defn main [] 0)")]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                          #"qualified native string/scalar-record/i64-capability slice"
+                          #"qualified native"
                           (compiler/compile-source source (target))))
     ;; Confirms the rejection is native-specific admission, not a generic
     ;; type error: the identical source compiles fine on the Wasm target,
@@ -634,7 +645,7 @@
                    (variant-match " schema " (variant-new " schema " :s \"x\") [[:s v v]]))
                  (defn main [] 0)")]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                          #"typed values currently require the kotoba-script web target, typed Wasm/CLJS target, or \(native targets\) string-only or sealed-scalar-record typed features"
+                          #"qualified native"
                           (compiler/compile-source source (target))))
     (is (= :wasm/v1 (:format (compiler/compile-source source :wasm32-kotoba-v1))))))
 

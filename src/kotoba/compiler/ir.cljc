@@ -219,7 +219,8 @@
                          #?(:clj (integer? cap-id)
                             :cljs (or (i64/bigint-value? cap-id) (integer? cap-id)))
                          (<= 0 cap-id 255)
-                         (= :i64 request-type result-type)
+                         (contains? #{[:i64 :i64] [:string :string]}
+                                    [request-type result-type])
                          (walk request)))
                   :else
                   (and (not (contains? non-string-typed-ops op))
