@@ -182,3 +182,40 @@ rewrite:
   fields' own pre-existing, still-open gap (named explicitly in ADR 0068,
   not silently left implicit). Recursive schema identity itself (this
   ledger's own item 2) is unchanged and out of scope for ADR 0068.
+- **Item 1's remaining "tuples/vectors" sub-slice is now resolved into
+  exactly one still-open half, and that half now also has a Canonical ABI
+  layout plan** — `kotoba.compiler.canonical-abi`'s `tuple-layout` (ADR
+  0070) — at the same layout-plan level ADR 0065/0068 closed for
+  `list`/`option`/`result`. Before writing any code, ADR 0070 first settled
+  whether this ledger's slash-joined "tuples/vectors" phrase names one gap
+  or two, by reading this codebase's own pre-existing, untouched
+  `kotoba.compiler.value` (`[:vector item-types]`, a heterogeneous
+  fixed-length domain-value shape) and `kotoba.compiler.component-wit`
+  (which already renders that exact shape as WIT `tuple<...>`, and
+  separately renders `vector-i64`/`vector-f64` as WIT `list<s64>`/`list<f64>`)
+  — concluding that "vector" (homogeneous, variable-length) was already
+  fully closed by ADR 0065's `:list`, and only "tuple" (fixed-length,
+  possibly-heterogeneous product) remained open. `layout*` now admits seven
+  aggregate/union schema shapes (`:record`/`:variant`/`:list`/`:option`/
+  `:result`/`:tuple`); `tuple` is structural (no schema-table identity),
+  sugar over the same sequential offset/alignment fold `record-layout`
+  already computes for a sealed record's fields (via a new shared
+  `structural-product-layout` helper, the `record`/`tuple` counterpart to
+  ADR 0068's own `structural-union-layout` for `variant`/`option`/`result`),
+  and its own item types may recursively be any existing admitted descriptor
+  including nested tuples/lists/options/results — tuple-of-tuple is not
+  rejected, for the same reason ADR 0068 already gave for option-of-option/
+  result-of-result. Deliberately, `structural-product-layout` reuses the key
+  name `:fields` for its own positional entries, so a tuple-typed record
+  field is recursed into by `layout-leaves`'s pre-existing nested-record
+  clause with **zero changes to `layout-leaves`** — the one respect in which
+  `tuple` gets a more complete `layout-leaves` treatment today than
+  `variant`/`option`/`result`-typed record fields do (that pre-existing gap,
+  named in ADR 0068, is unchanged and not touched by ADR 0070). Maps and sets
+  named in this same ledger item are UNCHANGED by ADR 0070 and remain
+  entirely unimplemented in `layout*`. ADR 0070 adds no `component-core.clj`
+  codegen (no `.kotoba` export, capability call, or provider Component can
+  take or return a tuple value yet) and no instance-level tuple-value
+  validator — both explicit remaining gaps in ADR 0070 itself. Recursive
+  schema identity itself (this ledger's own item 2) is unchanged and out of
+  scope for ADR 0070.

@@ -498,6 +498,162 @@
                                            [:record :demo/attempt-wrapper
                                             [[:attempt [:result [:ref :demo/attempt-wrapper] :bool]]]]}))))
 
+(deftest tuple-of-one-scalar-layout-is-not-rejected-and-is-a-single-flat-value
+  ;; This slice requires at least one item type (see
+  ;; `tuple-descriptor-must-have-at-least-one-item-type`), but does not
+  ;; require two -- a 1-tuple is a degenerate but legal fixed-length product,
+  ;; the same way a sealed record is allowed exactly one field.
+  (let [descriptor [:tuple :i64]
+        value (canonical/layout descriptor)]
+    (is (= descriptor (:descriptor value)))
+    (is (= :tuple (:kind value)))
+    (is (= 8 (:size value)))
+    (is (= 8 (:alignment value)))
+    (is (= [:i64] (:flat value)))
+    (is (= [{:descriptor :i64 :size 8 :alignment 8 :flat [:i64]}] (:item-layouts value)))
+    (is (= [:i64]
+           (:core-results
+            (canonical/export-plan
+             {:name 'echo :params ['value] :param-types [descriptor] :result descriptor}))))))
+
+(deftest tuple-of-two-differently-typed-scalars-layout-is-a-fixed-offset-product
+  (let [descriptor [:tuple :i64 :bool]
+        value (canonical/layout descriptor)]
+    (is (= descriptor (:descriptor value)))
+    (is (= :tuple (:kind value)))
+    (is (= [{:descriptor :i64 :size 8 :alignment 8 :flat [:i64]}
+            {:descriptor :bool :size 1 :alignment 1 :flat [:i32]
+             :validation [:canonical-bool]}]
+           (:item-layouts value)))
+    ;; element 0 (:i64, size 8 alignment 8) sits at offset 0; element 1
+    ;; (:bool, size 1 alignment 1) needs no padding after an 8-byte-aligned
+    ;; predecessor, so it sits immediately at offset 8; the whole product is
+    ;; then padded up to its own widest element's alignment (8).
+    (is (= [0 8] (mapv :offset (:fields value))))
+    (is (= 16 (:size value)))
+    (is (= 8 (:alignment value)))
+    (is (= [:i64 :i32] (:flat value)))
+    (is (= [:i32]
+           (:core-results
+            (canonical/export-plan
+             {:name 'echo :params ['value] :param-types [descriptor] :result descriptor}))))
+    (is (= [:i64 :i32]
+           (:core-params
+            (canonical/export-plan
+             {:name 'echo :params ['value] :param-types [descriptor] :result descriptor}))))))
+
+(deftest tuple-descriptor-must-have-at-least-one-item-type
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                        #"tuple descriptor must have at least one item type"
+                        (canonical/layout [:tuple]))))
+
+(deftest tuple-item-count-exceeding-the-bound-is-rejected
+  (let [item-descriptors (repeat (inc value/canonical-tuple-item-limit) :i64)]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"tuple item count exceeds bound"
+                          (canonical/layout (into [:tuple] item-descriptors)))))
+  ;; The bound itself is admitted (not off-by-one rejected).
+  (let [item-descriptors (repeat value/canonical-tuple-item-limit :i64)]
+    (is (= value/canonical-tuple-item-limit
+           (count (:item-layouts (canonical/layout (into [:tuple] item-descriptors))))))))
+
+(deftest tuple-of-nested-sealed-record-and-scalar-carries-both-item-layouts
+  (let [item-descriptor [:ref :demo/point]
+        schemas {:demo/point [:record :demo/point [[:x :i64] [:weight :f64] [:visible :bool]]]}
+        descriptor [:tuple item-descriptor :bool]
+        value (canonical/layout descriptor schemas)
+        record-value (canonical/layout item-descriptor schemas)]
+    (is (= record-value (first (:item-layouts value))))
+    (is (= {:descriptor :bool :size 1 :alignment 1 :flat [:i32] :validation [:canonical-bool]}
+           (second (:item-layouts value))))
+    (is (= [0 24] (mapv :offset (:fields value))))
+    (is (= 32 (:size value)))
+    (is (= 8 (:alignment value)))))
+
+(deftest tuple-field-inside-a-record-is-recursed-into-by-the-shared-fields-clause
+  ;; A tuple's own layout reuses the key name `:fields` precisely so
+  ;; `layout-leaves`'s pre-existing nested-record recursion clause,
+  ;; `(contains? layout :fields)`, recurses into it with zero code changes --
+  ;; this test pins that a tuple-typed record field flattens all the way down
+  ;; to per-element leaves, not a single opaque leaf the way a bounded
+  ;; `list`/`option`/`result` field does.
+  (let [descriptor [:ref :demo/wrapped-tuple]
+        schemas {:demo/wrapped-tuple
+                 [:record :demo/wrapped-tuple
+                  [[:id :i64] [:pair [:tuple :i64 :bool]] [:closed :bool]]]}
+        outer-layout (canonical/layout descriptor schemas)]
+    (is (= 32 (:size outer-layout)))
+    (is (= 8 (:alignment outer-layout)))
+    (is (= [:i64 :i64 :i32 :i32] (:flat outer-layout)))
+    (is (= [0 8 24] (mapv :offset (:fields outer-layout))))
+    (is (= [{:offset 0 :descriptor :i64}
+            {:offset 8 :descriptor :i64}
+            {:offset 16 :descriptor :bool}
+            {:offset 24 :descriptor :bool}]
+           (canonical/layout-leaves outer-layout)))))
+
+(deftest tuple-inside-a-variant-case-joins-with-the-other-cases-flat-core-types
+  (let [descriptor [:ref :demo/pair-or-flag]
+        schemas {:demo/pair-or-flag [:variant :demo/pair-or-flag
+                                      [[:pair [:tuple :i64 :bool]] [:flag :bool]]]}
+        value (canonical/layout descriptor schemas)]
+    (is (= :variant (:kind value)))
+    (is (= [:pair :flag] (mapv :tag (:cases value))))
+    ;; :pair's own flat is [:i64 :i32] (the tuple's own product flat);
+    ;; :flag's own flat is [:i32] and only touches position 0, joining
+    ;; i32/i64 -> i64 there (widening, since neither side is the special-cased
+    ;; i32/f32 pair) and leaving position 1 exactly as :pair's own tuple
+    ;; layout already produced it. The leading discriminant i32 is prepended.
+    (is (= [:i32 :i64 :i32] (:flat value)))
+    (is (= [:i32 :i64 :i32]
+           (:core-params
+            (canonical/export-plan
+             {:name 'echo :params ['value] :param-types [descriptor] :result descriptor}
+             schemas))))))
+
+(deftest tuple-of-tuple-is-not-rejected
+  ;; Contrast ADR 0065's deliberate list-of-list rejection: nesting a tuple
+  ;; inside another tuple's own element position is not a genuinely harder
+  ;; shape (both sides are still a single fixed-size, fixed-offset product
+  ;; with no independent runtime-variable length/stride of its own), so no
+  ;; analogous rejection applies -- the same reasoning ADR 0068 already gave
+  ;; for not rejecting option-of-option/result-of-result.
+  (is (= :tuple (get-in (canonical/layout [:tuple [:tuple :i64 :bool] :f32])
+                        [:item-layouts 0 :kind]))))
+
+(deftest tuple-item-type-must-be-a-qualified-canonical-abi-descriptor
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no qualified Canonical ABI layout"
+                        (canonical/layout [:tuple :not-a-real-descriptor]))))
+
+(deftest tuple-item-type-recursive-schema-through-the-tuple-is-still-rejected
+  ;; A tuple does not itself carry a sealed identity (it is structural, not
+  ;; nominal), so it cannot be self-referential the way a record/variant is
+  ;; -- but an item type reaching back to an *enclosing* record's own
+  ;; identity is still a genuinely unbounded recursive schema, and is still
+  ;; caught by `record-layout`'s existing `visited` guard, since `visited` is
+  ;; threaded through `tuple-layout` unchanged.
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"recursive schema has no bounded"
+                        (canonical/layout [:ref :demo/tuple-wrapper]
+                                          {:demo/tuple-wrapper
+                                           [:record :demo/tuple-wrapper
+                                            [[:pair [:tuple [:ref :demo/tuple-wrapper] :bool]]]]}))))
+
+(deftest tuple-composes-freely-with-list-option-and-result
+  ;; Neither `list-layout`/`option-layout`/`result-layout` nor `tuple-layout`
+  ;; restricts what the other may nest as an item/element type -- exactly the
+  ;; same "compose freely in either nesting direction" behavior ADR 0068
+  ;; already showed for list/option, demonstrated here with zero changes
+  ;; needed to `list-layout`, `option-layout`, or `result-layout` for a
+  ;; tuple-typed item, and zero changes to `tuple-layout` for a
+  ;; list/option/result-typed element.
+  (is (= [:i64 :bool]
+         (mapv :descriptor (:item-layouts (get-in (canonical/layout [:list [:tuple :i64 :bool]])
+                                                   [:item-layout])))))
+  (is (= [:list :i64]
+         (get-in (canonical/layout [:tuple [:list :i64] :bool]) [:item-layouts 0 :descriptor])))
+  (is (= :tuple (get-in (canonical/layout [:option [:tuple :i64 :bool]]) [:item-layout :kind])))
+  (is (= :option (get-in (canonical/layout [:tuple [:option :i64] :bool]) [:item-layouts 0 :kind])))
+  (is (= :tuple (get-in (canonical/layout [:result [:tuple :i64 :bool] :bool]) [:ok-layout :kind]))))
+
 (deftest record-field-of-option-or-result-type-still-flattens-the-whole-record-correctly
   ;; `layout-leaves` does not yet expose a bespoke per-leaf breakdown for an
   ;; option/result-typed record field (it falls through to the same plain
